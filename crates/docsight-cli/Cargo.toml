@@ -1,0 +1,23 @@
+[package]
+name = "docsight-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "docsight"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+docsight-agent = { path = "../docsight-agent" }
+docsight-core = { path = "../docsight-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
