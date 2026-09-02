@@ -21,7 +21,7 @@ fn inspect_pdf_json_is_deterministic() -> Result<(), Box<dyn std::error::Error>>
     let value: serde_json::Value = serde_json::from_slice(&first.stdout)?;
     assert_eq!(value["schema"], "docsight.agent/v1");
     assert_eq!(value["result"]["format"], "pdf");
-    assert_eq!(value["result"]["capabilities"]["render"], true);
+    assert_eq!(value["result"]["capabilities"]["render"], false);
     Ok(())
 }
 

@@ -41,12 +41,16 @@ where
     T: Serialize,
 {
     pub fn complete(source: &DocumentSource, result: T) -> Self {
+        Self::with_warnings(source, result, Vec::new())
+    }
+
+    pub fn with_warnings(source: &DocumentSource, result: T, warnings: Vec<Diagnostic>) -> Self {
         Self {
             schema: AGENT_SCHEMA,
             engine: env!("CARGO_PKG_VERSION"),
             document: source.into(),
             result,
-            warnings: Vec::new(),
+            warnings,
             limits: OutputLimits { truncated: false },
         }
     }

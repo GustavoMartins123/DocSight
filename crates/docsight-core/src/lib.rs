@@ -49,15 +49,26 @@ pub enum DocsightError {
     },
     #[error("document format is not supported or cannot be identified from its bytes")]
     UnsupportedFormat,
-    #[error("document exceeds the inspection limit of {limit_bytes} bytes")]
-    ResourceLimit { limit_bytes: u64 },
+    #[error("resource limit exceeded for {resource}: maximum {limit}")]
+    ResourceLimit { resource: String, limit: u64 },
+    #[error("malformed document: {message}")]
+    MalformedDocument { message: String },
+    #[error("{operation} is not supported for {format} documents")]
+    UnsupportedOperation {
+        operation: String,
+        format: DocumentFormat,
+    },
+    #[error("object was not found: {object}")]
+    ObjectNotFound { object: String },
 }
 
 impl DocsightError {
     pub fn exit_code(&self) -> u8 {
         match self {
-            Self::UnsupportedFormat => 10,
+            Self::UnsupportedFormat | Self::UnsupportedOperation { .. } => 10,
+            Self::MalformedDocument { .. } => 11,
             Self::ResourceLimit { .. } => 13,
+            Self::ObjectNotFound { .. } => 21,
             Self::Io { .. } => 40,
         }
     }
@@ -65,9 +76,18 @@ impl DocsightError {
     pub fn diagnostic(&self) -> Diagnostic {
         let (code, effect) = match self {
             Self::UnsupportedFormat => ("UNSUPPORTED_FORMAT", "the document was not inspected"),
+            Self::UnsupportedOperation { .. } => (
+                "UNSUPPORTED_FORMAT",
+                "the requested operation was not performed",
+            ),
+            Self::MalformedDocument { .. } => (
+                "MALFORMED_DOCUMENT",
+                "the document was rejected during parsing",
+            ),
             Self::ResourceLimit { .. } => {
                 ("RESOURCE_LIMIT", "the document was rejected before parsing")
             }
+            Self::ObjectNotFound { .. } => ("OBJECT_NOT_FOUND", "no document object was returned"),
             Self::Io { .. } => ("IO_ERROR", "the requested file could not be read"),
         };
         Diagnostic {
@@ -102,7 +122,8 @@ impl DocumentSource {
             })?;
         if bytes.len() as u64 > MAX_INSPECT_BYTES {
             return Err(DocsightError::ResourceLimit {
-                limit_bytes: MAX_INSPECT_BYTES,
+                resource: "document bytes".to_owned(),
+                limit: MAX_INSPECT_BYTES,
             });
         }
         Self::from_bytes(bytes)
@@ -136,6 +157,39 @@ impl DocumentSource {
 
     pub fn size_bytes(&self) -> u64 {
         self.bytes.len() as u64
+    }
+
+    pub fn object_id(&self, prefix: &str, source_path: &str) -> ObjectId {
+        ObjectId::new(prefix, &self.digest, source_path)
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct ObjectId(String);
+
+impl ObjectId {
+    fn new(prefix: &str, document_digest: &str, source_path: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(document_digest.as_bytes());
+        hasher.update([0]);
+        hasher.update(source_path.as_bytes());
+        let digest = hasher.finalize();
+        let suffix: String = digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Self(format!("{prefix}_{suffix}"))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for ObjectId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
