@@ -4,6 +4,8 @@ members = [
     "crates/docsight-cli",
     "crates/docsight-core",
     "crates/docsight-ooxml",
+    "crates/docsight-pdf",
+    "crates/docsight-render",
 ]
 resolver = "3"
 

@@ -200,6 +200,8 @@ dependencies = [
  "docsight-agent",
  "docsight-core",
  "docsight-ooxml",
+ "docsight-pdf",
+ "docsight-render",
  "serde",
  "serde_json",
  "tempfile",
@@ -222,6 +224,24 @@ dependencies = [
  "roxmltree",
  "serde",
  "zip",
+]
+
+[[package]]
+name = "docsight-pdf"
+version = "0.1.0"
+dependencies = [
+ "docsight-core",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
+name = "docsight-render"
+version = "0.1.0"
+dependencies = [
+ "docsight-core",
+ "docsight-pdf",
+ "serde",
 ]
 
 [[package]]

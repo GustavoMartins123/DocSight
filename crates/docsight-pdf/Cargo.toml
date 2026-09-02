@@ -1,0 +1,16 @@
+[package]
+name = "docsight-pdf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+docsight-core = { path = "../docsight-core" }
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

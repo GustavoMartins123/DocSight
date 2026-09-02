@@ -38,7 +38,7 @@ Use um workspace Rust com responsabilidades separadas, sem dependências circula
 - `docsight-core`: IDs, geometria, `Document IR`, proveniência e diagnósticos.
 - `docsight-ooxml`: leitura OPC/ZIP e parsing OOXML limitado por recursos.
 - `docsight-layout`: paginação e layout determinístico de DOCX.
-- `docsight-pdf`: abstração do backend PDF e fronteira FFI com MuPDF fixado.
+- `docsight-pdf`: parser PDF próprio, page tree, recursos, content streams e normalização para a IR.
 - `docsight-render`: display lists, rasterização, crop e contact sheets.
 - `docsight-fonts`: descoberta, shaping e resolução determinística de fontes.
 - `docsight-tables`: modelo canônico, inferência de tabelas PDF e exportadores.
@@ -46,7 +46,6 @@ Use um workspace Rust com responsabilidades separadas, sem dependências circula
 - `docsight-diff`: comparação de pacote, semântica e visual.
 - `docsight-cache`: cache endereçado por conteúdo e fingerprint de reprodução.
 - `docsight-worker`: isolamento de parsers e backends nativos.
-- `native`: integração reproduzível do MuPDF fixado.
 - `fixtures`: documentos mínimos, adversariais e goldens.
 - `schemas`: snapshots versionados dos contratos públicos.
 - `xtask`: automação de build, release e atualização explícita de goldens.
@@ -80,7 +79,8 @@ Não crie todos os crates vazios antecipadamente. Introduza cada crate quando ho
 - Adicione dependências apenas quando houver necessidade concreta e verifique manutenção, licença, superfície de ataque e suporte multiplataforma.
 - Fixe backends nativos e componentes cujo comportamento afete renderização ou determinismo. Versione `Cargo.lock` para o binário.
 - Não introduza Word, LibreOffice, Excel, COM, `unoconv`, conversores remotos ou chamadas de rede como dependência de execução.
-- Mantenha MuPDF atrás de uma fronteira pequena e substituível. A geometria e a rasterização PDF autoritativas devem vir de uma única versão fixada do backend.
+- Não adicione MuPDF nem outro interpretador ou renderizador de documentos como dependência de runtime. O engine PDF e o renderer autoritativos são implementações próprias do DOCSIGHT.
+- MuPDF pode ser usado somente como oracle externo, opcional e explícito em testes de desenvolvimento, sem integrar o workspace, o binário ou o fluxo normal de testes.
 - Fontes substitutas devem ser determinísticas e declaradas em diagnóstico. Nunca selecione silenciosamente uma fonte arbitrária do sistema.
 - O build e os testes devem funcionar em Windows, Linux e macOS, respeitando diferenças de filesystem sem alterar contratos observáveis.
 

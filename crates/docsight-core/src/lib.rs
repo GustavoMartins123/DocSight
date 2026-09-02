@@ -41,6 +41,8 @@ pub struct Diagnostic {
 
 #[derive(Debug, Error)]
 pub enum DocsightError {
+    #[error("invalid argument: {message}")]
+    InvalidArgument { message: String },
     #[error("I/O operation failed for {path}: {source}")]
     Io {
         path: PathBuf,
@@ -53,11 +55,17 @@ pub enum DocsightError {
     ResourceLimit { resource: String, limit: u64 },
     #[error("malformed document: {message}")]
     MalformedDocument { message: String },
+    #[error("encrypted documents require a password and are not supported")]
+    EncryptedDocument,
+    #[error("{backend} backend failed: {message}")]
+    BackendFailure { backend: String, message: String },
     #[error("{operation} is not supported for {format} documents")]
     UnsupportedOperation {
         operation: String,
         format: DocumentFormat,
     },
+    #[error("feature is not supported: {feature}")]
+    UnsupportedFeature { feature: String },
     #[error("object was not found: {object}")]
     ObjectNotFound { object: String },
 }
@@ -65,29 +73,46 @@ pub enum DocsightError {
 impl DocsightError {
     pub fn exit_code(&self) -> u8 {
         match self {
+            Self::InvalidArgument { .. } => 2,
             Self::UnsupportedFormat | Self::UnsupportedOperation { .. } => 10,
             Self::MalformedDocument { .. } => 11,
+            Self::EncryptedDocument => 12,
             Self::ResourceLimit { .. } => 13,
+            Self::UnsupportedFeature { .. } => 20,
             Self::ObjectNotFound { .. } => 21,
+            Self::BackendFailure { .. } => 30,
             Self::Io { .. } => 40,
         }
     }
 
     pub fn diagnostic(&self) -> Diagnostic {
         let (code, effect) = match self {
+            Self::InvalidArgument { .. } => ("USAGE", "the requested operation was not performed"),
             Self::UnsupportedFormat => ("UNSUPPORTED_FORMAT", "the document was not inspected"),
             Self::UnsupportedOperation { .. } => (
                 "UNSUPPORTED_FORMAT",
+                "the requested operation was not performed",
+            ),
+            Self::UnsupportedFeature { .. } => (
+                "UNSUPPORTED_FEATURE",
                 "the requested operation was not performed",
             ),
             Self::MalformedDocument { .. } => (
                 "MALFORMED_DOCUMENT",
                 "the document was rejected during parsing",
             ),
+            Self::EncryptedDocument => (
+                "ENCRYPTED_DOCUMENT",
+                "the document was rejected before inspection",
+            ),
             Self::ResourceLimit { .. } => {
                 ("RESOURCE_LIMIT", "the document was rejected before parsing")
             }
             Self::ObjectNotFound { .. } => ("OBJECT_NOT_FOUND", "no document object was returned"),
+            Self::BackendFailure { .. } => (
+                "BACKEND_FAILURE",
+                "the requested operation could not be completed",
+            ),
             Self::Io { .. } => ("IO_ERROR", "the requested file could not be read"),
         };
         Diagnostic {
@@ -193,6 +218,50 @@ impl Display for ObjectId {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Rect {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+impl Rect {
+    pub fn new(x0: f32, y0: f32, x1: f32, y1: f32) -> Result<Self, DocsightError> {
+        if !x0.is_finite() || !y0.is_finite() || !x1.is_finite() || !y1.is_finite() {
+            return Err(DocsightError::InvalidArgument {
+                message: "rectangle coordinates must be finite".to_owned(),
+            });
+        }
+        if x0 >= x1 || y0 >= y1 {
+            return Err(DocsightError::InvalidArgument {
+                message: "rectangle must have positive width and height".to_owned(),
+            });
+        }
+        Ok(Self { x0, y0, x1, y1 })
+    }
+
+    pub fn width(self) -> f32 {
+        self.x1 - self.x0
+    }
+
+    pub fn height(self) -> f32 {
+        self.y1 - self.y0
+    }
+
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        let x0 = self.x0.max(other.x0);
+        let y0 = self.y0.max(other.y0);
+        let x1 = self.x1.min(other.x1);
+        let y1 = self.y1.min(other.y1);
+        if x0 < x1 && y0 < y1 {
+            Some(Self { x0, y0, x1, y1 })
+        } else {
+            None
+        }
+    }
+}
+
 pub fn write_all(path: &Path, bytes: &[u8]) -> Result<(), DocsightError> {
     let mut file = File::create(path).map_err(|source| DocsightError::Io {
         path: path.to_path_buf(),
@@ -233,7 +302,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DocsightError, DocumentFormat, DocumentSource};
+    use super::{DocsightError, DocumentFormat, DocumentSource, Rect};
 
     fn docx_signature() -> Vec<u8> {
         let mut bytes = b"PK\x03\x04".to_vec();
@@ -269,5 +338,45 @@ mod tests {
         assert_eq!(first.id(), second.id());
         assert_eq!(first.sha256(), second.sha256());
         Ok(())
+    }
+
+    #[test]
+    fn validates_rectangles_and_intersections() -> Result<(), DocsightError> {
+        let first = Rect::new(0.0, 0.0, 20.0, 10.0)?;
+        let second = Rect::new(10.0, 5.0, 30.0, 15.0)?;
+        assert_eq!(first.width(), 20.0);
+        assert_eq!(first.height(), 10.0);
+        let expected = Rect::new(10.0, 5.0, 20.0, 10.0)?;
+        assert_eq!(first.intersection(second), Some(expected));
+        assert!(Rect::new(0.0, 0.0, 0.0, 1.0).is_err());
+        assert!(Rect::new(f32::NAN, 0.0, 1.0, 1.0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn maps_m2_errors_to_stable_exit_codes() {
+        assert_eq!(
+            DocsightError::InvalidArgument {
+                message: "invalid".to_owned()
+            }
+            .exit_code(),
+            2
+        );
+        assert_eq!(DocsightError::EncryptedDocument.exit_code(), 12);
+        assert_eq!(
+            DocsightError::UnsupportedFeature {
+                feature: "feature".to_owned()
+            }
+            .exit_code(),
+            20
+        );
+        assert_eq!(
+            DocsightError::BackendFailure {
+                backend: "backend".to_owned(),
+                message: "failure".to_owned()
+            }
+            .exit_code(),
+            30
+        );
     }
 }

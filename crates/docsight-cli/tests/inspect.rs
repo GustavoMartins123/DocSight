@@ -1,6 +1,9 @@
 use std::fs;
 use std::process::Command;
 
+#[path = "../../../fixtures/pdf_fixture.rs"]
+mod pdf_fixture;
+
 fn docsight() -> Command {
     Command::new(env!("CARGO_BIN_EXE_docsight"))
 }
@@ -9,7 +12,7 @@ fn docsight() -> Command {
 fn inspect_pdf_json_is_deterministic() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("sample.bin");
-    fs::write(&path, b"%PDF-1.7\n")?;
+    fs::write(&path, pdf_fixture::sample_pdf())?;
     let first = docsight()
         .args(["inspect", path.to_str().ok_or("invalid path")?, "--json"])
         .output()?;
@@ -21,7 +24,9 @@ fn inspect_pdf_json_is_deterministic() -> Result<(), Box<dyn std::error::Error>>
     let value: serde_json::Value = serde_json::from_slice(&first.stdout)?;
     assert_eq!(value["schema"], "docsight.agent/v1");
     assert_eq!(value["result"]["format"], "pdf");
-    assert_eq!(value["result"]["capabilities"]["render"], false);
+    assert_eq!(value["result"]["capabilities"]["render"], true);
+    assert_eq!(value["result"]["pages"], 1);
+    assert_eq!(value["result"]["engine"], "docsight-pdf-native");
     Ok(())
 }
 

@@ -1,10 +1,12 @@
 use clap::{Parser, Subcommand};
 use docsight_agent::AgentEnvelope;
-use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource};
+use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect};
 use docsight_ooxml::{DocxBlock, DocxDocument, Heading, Table, parse_docx};
+use docsight_pdf::{ENGINE_NAME, PdfDocument};
+use docsight_render::{RenderRequest, RenderTarget, render_pdf};
 use serde::Serialize;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
@@ -48,6 +50,34 @@ enum Command {
         #[arg(long, value_enum, default_value_t = TableFormat::Markdown)]
         format: TableFormat,
     },
+    Page {
+        path: PathBuf,
+        page: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    Render {
+        path: PathBuf,
+        #[arg(long)]
+        page: u32,
+        #[arg(long, default_value_t = 144)]
+        dpi: u16,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    Crop {
+        path: PathBuf,
+        #[arg(long)]
+        page: Option<u32>,
+        #[arg(long, value_parser = parse_bbox)]
+        bbox: Option<Rect>,
+        #[arg(long)]
+        object: Option<String>,
+        #[arg(long, default_value_t = 144)]
+        dpi: u16,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -71,6 +101,8 @@ struct InspectResult {
     paragraphs: Option<usize>,
     headings: Option<usize>,
     tables: Option<usize>,
+    pages: Option<u32>,
+    engine: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,13 +160,33 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             object,
             format,
         } => table(path, object, *format),
+        Command::Page { path, page, json } => pdf_page(path, *page, *json),
+        Command::Render {
+            path,
+            page,
+            dpi,
+            out,
+        } => render(path, RenderTarget::Page { page: *page }, *dpi, out),
+        Command::Crop {
+            path,
+            page,
+            bbox,
+            object,
+            dpi,
+            out,
+        } => crop(path, *page, *bbox, object.as_deref(), *dpi, out),
     }
 }
 
 fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let parsed = if source.format() == DocumentFormat::Docx {
+    let parsed_docx = if source.format() == DocumentFormat::Docx {
         Some(parse_docx(&source)?)
+    } else {
+        None
+    };
+    let parsed_pdf = if source.format() == DocumentFormat::Pdf {
+        Some(PdfDocument::open(&source)?.info()?)
     } else {
         None
     };
@@ -142,17 +194,23 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         format: source.format(),
         size_bytes: source.size_bytes(),
         capabilities: InspectCapabilities {
-            structure: source.format() == DocumentFormat::Docx,
-            text: source.format() == DocumentFormat::Docx,
-            render: false,
+            structure: true,
+            text: true,
+            render: source.format() == DocumentFormat::Pdf,
         },
-        paragraphs: parsed
+        paragraphs: parsed_docx
             .as_ref()
             .map(|document| document.paragraphs().count()),
-        headings: parsed.as_ref().map(|document| document.headings().count()),
-        tables: parsed.as_ref().map(|document| document.tables().count()),
+        headings: parsed_docx
+            .as_ref()
+            .map(|document| document.headings().count()),
+        tables: parsed_docx
+            .as_ref()
+            .map(|document| document.tables().count()),
+        pages: parsed_pdf.as_ref().map(|document| document.page_count),
+        engine: parsed_pdf.as_ref().map(|_| ENGINE_NAME),
     };
-    let warnings = parsed
+    let warnings = parsed_docx
         .as_ref()
         .map_or_else(Vec::new, |document| document.warnings.clone());
     if json {
@@ -169,7 +227,7 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         .map_err(stdout_error)?;
         writeln!(writer, "Digest  sha256:{}", source.sha256()).map_err(stdout_error)?;
         writeln!(writer, "Bytes   {}", source.size_bytes()).map_err(stdout_error)?;
-        if let Some(document) = parsed {
+        if let Some(document) = parsed_docx {
             writeln!(writer, "Paragraphs  {}", document.paragraphs().count())
                 .map_err(stdout_error)?;
             writeln!(writer, "Headings    {}", document.headings().count())
@@ -177,8 +235,80 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
             writeln!(writer, "Tables      {}", document.tables().count()).map_err(stdout_error)?;
             emit_warnings(&document.warnings)?;
         }
+        if let Some(document) = parsed_pdf {
+            writeln!(writer, "Pages       {}", document.page_count).map_err(stdout_error)?;
+            writeln!(writer, "PDF engine  {}", document.engine).map_err(stdout_error)?;
+        }
         Ok(())
     }
+}
+
+fn pdf_page(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = PdfDocument::open(&source)?;
+    let page = document.page(number)?;
+    if json {
+        return write_json(&source, &page, page.warnings.clone());
+    }
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Page {}  {}x{} pt  {} spans",
+        page.number,
+        page.width_pt,
+        page.height_pt,
+        page.spans.len()
+    )
+    .map_err(stdout_error)?;
+    for span in &page.spans {
+        writeln!(
+            writer,
+            "[{}] [{},{},{},{}] {}",
+            span.id, span.bbox.x0, span.bbox.y0, span.bbox.x1, span.bbox.y1, span.text
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&page.warnings)
+}
+
+fn render(path: &PathBuf, target: RenderTarget, dpi: u16, out: &Path) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let rendered = render_pdf(&source, &RenderRequest { target, dpi })?;
+    rendered.write(out)?;
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Rendered page {} at {} DPI to {} ({}x{} px)",
+        rendered.metadata.page,
+        rendered.metadata.dpi,
+        out.display(),
+        rendered.metadata.width_px,
+        rendered.metadata.height_px
+    )
+    .map_err(stdout_error)?;
+    emit_warnings(&rendered.warnings)
+}
+
+fn crop(
+    path: &PathBuf,
+    page: Option<u32>,
+    bbox: Option<Rect>,
+    object: Option<&str>,
+    dpi: u16,
+    out: &Path,
+) -> Result<(), DocsightError> {
+    let target = match (page, bbox, object) {
+        (Some(page), Some(bbox), None) => RenderTarget::Region { page, bbox },
+        (None, None, Some(id)) => RenderTarget::Object { id: id.to_owned() },
+        _ => {
+            return Err(DocsightError::InvalidArgument {
+                message: "crop requires either --page with --bbox or only --object".to_owned(),
+            });
+        }
+    };
+    render(path, target, dpi, out)
 }
 
 fn outline(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
@@ -421,4 +551,25 @@ fn stderr_error(source: io::Error) -> DocsightError {
         path: PathBuf::from("<stderr>"),
         source,
     }
+}
+
+fn parse_bbox(value: &str) -> Result<Rect, String> {
+    let parts = value.split(',').collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return Err("bbox must contain x0,y0,x1,y1".to_owned());
+    }
+    let coordinates = parts
+        .iter()
+        .map(|part| {
+            part.parse::<f32>()
+                .map_err(|_| "bbox coordinates must be finite numbers".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Rect::new(
+        coordinates[0],
+        coordinates[1],
+        coordinates[2],
+        coordinates[3],
+    )
+    .map_err(|error| error.to_string())
 }
