@@ -1,5 +1,5 @@
-use docsight_core::{DocsightError, DocumentSource};
-use docsight_ooxml::{DocxBlock, ParagraphKind, parse_docx};
+use docsight_core::{BlockKind, DocsightError, DocumentSource};
+use docsight_ooxml::parse_docx;
 use std::io::{Cursor, Write};
 use zip::CompressionMethod;
 use zip::ZipWriter;
@@ -73,26 +73,26 @@ fn parses_headings_lists_and_merged_tables() -> Result<(), Box<dyn std::error::E
     );
     let source = DocumentSource::from_bytes(package(&document, Some(&styles), Some(&numbering))?)?;
     let parsed = parse_docx(&source)?;
-    let paragraphs: Vec<_> = parsed.paragraphs().collect();
-    assert_eq!(paragraphs.len(), 2);
-    assert_eq!(paragraphs[0].heading_level, Some(1));
-    assert_eq!(paragraphs[1].kind, ParagraphKind::ListItem);
-    assert_eq!(
-        paragraphs[1]
-            .list
-            .as_ref()
-            .and_then(|list| list.format.as_deref()),
-        Some("decimal")
-    );
-    let table = parsed.tables().next().ok_or("table missing")?;
+    let headings: Vec<_> = parsed.headings().collect();
+    assert_eq!(headings.len(), 1);
+    assert_eq!(headings[0].1.level, 1);
+    let list_items: Vec<_> = parsed.list_items().collect();
+    assert_eq!(list_items.len(), 1);
+    assert_eq!(list_items[0].1.format.as_deref(), Some("decimal"));
+    let (_, table) = parsed.tables().next().ok_or("table missing")?;
     assert_eq!(table.rows, 2);
     assert_eq!(table.columns, 2);
     assert_eq!(table.cells.len(), 1);
     assert_eq!(table.cells[0].row_span, 2);
     assert_eq!(table.cells[0].column_span, 2);
-    assert_eq!(table.cells[0].nested_tables.len(), 1);
-    assert_eq!(table.cells[0].nested_tables[0].cells[0].text, "Nested");
-    assert!(matches!(parsed.blocks[0], DocxBlock::Paragraph(_)));
+    assert_eq!(table.cells[0].nested_tables().count(), 1);
+    let (_, nested_table) = table.cells[0]
+        .nested_tables()
+        .next()
+        .ok_or("nested table missing")?;
+    assert_eq!(nested_table.cells[0].text, "Nested");
+    assert_eq!(parsed.blocks[0].kind, BlockKind::Heading);
+    assert_eq!(parsed.sections.len(), 1);
     Ok(())
 }
 
@@ -121,6 +121,7 @@ fn excludes_deleted_text_and_keeps_insertions() -> Result<(), Box<dyn std::error
         .paragraphs()
         .next()
         .ok_or("paragraph missing")?
+        .1
         .text
         .as_str();
     assert_eq!(text, "new");

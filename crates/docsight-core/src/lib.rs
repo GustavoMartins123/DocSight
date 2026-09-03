@@ -1,4 +1,7 @@
-use serde::Serialize;
+pub mod ir;
+
+pub use ir::*;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
@@ -8,7 +11,7 @@ use thiserror::Error;
 
 pub const MAX_INSPECT_BYTES: u64 = 64 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DocumentFormat {
     Docx,
@@ -24,14 +27,14 @@ impl Display for DocumentFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: String,
     pub severity: DiagnosticSeverity,
@@ -189,12 +192,12 @@ impl DocumentSource {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ObjectId(String);
 
 impl ObjectId {
-    fn new(prefix: &str, document_digest: &str, source_path: &str) -> Self {
+    pub fn new(prefix: &str, document_digest: &str, source_path: &str) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(document_digest.as_bytes());
         hasher.update([0]);
@@ -205,6 +208,10 @@ impl ObjectId {
             .map(|byte| format!("{byte:02x}"))
             .collect();
         Self(format!("{prefix}_{suffix}"))
+    }
+
+    pub fn from_raw(raw: impl Into<String>) -> Self {
+        Self(raw.into())
     }
 
     pub fn as_str(&self) -> &str {
@@ -218,7 +225,7 @@ impl Display for ObjectId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub x0: f32,
     pub y0: f32,

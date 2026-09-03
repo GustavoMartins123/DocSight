@@ -1,9 +1,8 @@
-use crate::model::{
-    DocxBlock, DocxDocument, ListMarker, Paragraph, ParagraphKind, Table, TableCell,
-};
 use crate::package::read_parts;
 use docsight_core::{
-    Diagnostic, DiagnosticSeverity, DocsightError, DocumentFormat, DocumentSource,
+    Block, BlockContent, BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document,
+    DocumentFormat, DocumentMetadata, DocumentSource, HeadingBlock, ListItemBlock, ObjectId,
+    ParagraphBlock, Section, SourceSpan, Style, TableBlock, TableCell,
 };
 use roxmltree::{Document as XmlDocument, Node};
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,7 +37,15 @@ struct NumberingDefinitions {
     levels: BTreeMap<(String, u8), NumberingLevel>,
 }
 
-pub fn parse_docx(source: &DocumentSource) -> Result<DocxDocument, DocsightError> {
+#[derive(Clone, Debug)]
+struct ListMarker {
+    level: u8,
+    format: Option<String>,
+    pattern: Option<String>,
+    ordered: Option<bool>,
+}
+
+pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     if source.format() != DocumentFormat::Docx {
         return Err(DocsightError::UnsupportedOperation {
             operation: "DOCX structural parsing".to_owned(),
@@ -56,26 +63,36 @@ pub fn parse_docx(source: &DocumentSource) -> Result<DocxDocument, DocsightError
             message: "word/document.xml has no w:body".to_owned(),
         })?;
     let mut blocks = Vec::new();
+    let mut sections = Vec::new();
     let mut warnings = Vec::new();
     let mut paragraph_index = 0_u32;
     let mut table_index = 0_u32;
+    let mut section_index = 0_u32;
+    let mut reading_order = 0_u32;
+
     for child in body.children().filter(Node::is_element) {
         if child.has_tag_name((W_NS, "p")) {
             paragraph_index = paragraph_index
                 .checked_add(1)
                 .ok_or_else(block_count_error)?;
-            blocks.push(DocxBlock::Paragraph(parse_paragraph(
+            reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
+            blocks.push(parse_paragraph(
                 child,
                 paragraph_index,
                 source,
                 &styles,
                 &numbering,
+                reading_order,
                 &mut warnings,
-            )?));
+            )?);
         } else if child.has_tag_name((W_NS, "tbl")) {
             table_index = table_index.checked_add(1).ok_or_else(block_count_error)?;
-            blocks.push(DocxBlock::Table(parse_table(child, table_index, source)?));
-        } else if !child.has_tag_name((W_NS, "sectPr")) {
+            reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
+            blocks.push(parse_table(child, table_index, source, reading_order)?);
+        } else if child.has_tag_name((W_NS, "sectPr")) {
+            section_index = section_index.checked_add(1).ok_or_else(block_count_error)?;
+            sections.push(parse_section(child, section_index, source));
+        } else {
             warnings.push(Diagnostic {
                 code: "DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned(),
                 severity: DiagnosticSeverity::Warning,
@@ -84,7 +101,95 @@ pub fn parse_docx(source: &DocumentSource) -> Result<DocxDocument, DocsightError
             });
         }
     }
-    Ok(DocxDocument { blocks, warnings })
+
+    let converted_styles: Vec<Style> = styles
+        .into_iter()
+        .map(|(style_id, style_def)| Style {
+            id: style_id,
+            name: style_def.name,
+            based_on: style_def.based_on,
+            font_family: None,
+            font_size_pt: None,
+            bold: None,
+            italic: None,
+        })
+        .collect();
+
+    Ok(Document {
+        id: source.id(),
+        sha256: source.sha256().to_owned(),
+        format: DocumentFormat::Docx,
+        size_bytes: source.size_bytes(),
+        metadata: DocumentMetadata::default(),
+        styles: converted_styles,
+        sections,
+        pages: Vec::new(),
+        blocks,
+        resources: Vec::new(),
+        warnings,
+    })
+}
+
+fn parse_section(node: Node<'_, '_>, index: u32, source: &DocumentSource) -> Section {
+    let source_path = format!("/word/document.xml::body/sectPr[{index}]");
+    let mut page_width_pt = None;
+    let mut page_height_pt = None;
+    let mut margin_top_pt = None;
+    let mut margin_right_pt = None;
+    let mut margin_bottom_pt = None;
+    let mut margin_left_pt = None;
+
+    if let Some(pg_sz) = child_element(node, "pgSz") {
+        if let Some(w) = pg_sz
+            .attribute((W_NS, "w"))
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            page_width_pt = Some(w / 20.0);
+        }
+        if let Some(h) = pg_sz
+            .attribute((W_NS, "h"))
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            page_height_pt = Some(h / 20.0);
+        }
+    }
+    if let Some(pg_mar) = child_element(node, "pgMar") {
+        if let Some(top) = pg_mar
+            .attribute((W_NS, "top"))
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            margin_top_pt = Some(top / 20.0);
+        }
+        if let Some(right) = pg_mar
+            .attribute((W_NS, "right"))
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            margin_right_pt = Some(right / 20.0);
+        }
+        if let Some(bottom) = pg_mar
+            .attribute((W_NS, "bottom"))
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            margin_bottom_pt = Some(bottom / 20.0);
+        }
+        if let Some(left) = pg_mar
+            .attribute((W_NS, "left"))
+            .and_then(|v| v.parse::<f32>().ok())
+        {
+            margin_left_pt = Some(left / 20.0);
+        }
+    }
+
+    Section {
+        id: source.object_id("sect", &source_path),
+        section_index: index,
+        page_width_pt,
+        page_height_pt,
+        margin_top_pt,
+        margin_right_pt,
+        margin_bottom_pt,
+        margin_left_pt,
+    }
 }
 
 fn parse_paragraph(
@@ -93,8 +198,9 @@ fn parse_paragraph(
     source: &DocumentSource,
     styles: &BTreeMap<String, StyleDefinition>,
     numbering: &NumberingDefinitions,
+    reading_order: u32,
     warnings: &mut Vec<Diagnostic>,
-) -> Result<Paragraph, DocsightError> {
+) -> Result<Block, DocsightError> {
     let source_path = format!("/word/document.xml::body/p[{index}]");
     let style_id = paragraph_property(node, "pStyle").and_then(|property| word_value(property));
     let direct_outline = child_element(node, "pPr")
@@ -109,26 +215,50 @@ fn parse_paragraph(
     let inherited_numbering = resolve_style_numbering(style_id.as_deref(), styles)?;
     let list_reference = merge_numbering(direct_numbering, inherited_numbering);
     let list = resolve_list_marker(list_reference, numbering, warnings);
-    let kind = if heading_level.is_some() {
-        ParagraphKind::Heading
-    } else if list.is_some() {
-        ParagraphKind::ListItem
+    let text = paragraph_text(node);
+
+    let (kind, prefix, content) = if let Some(level) = heading_level {
+        (
+            BlockKind::Heading,
+            "h",
+            BlockContent::Heading(HeadingBlock {
+                level,
+                text,
+                style_id,
+            }),
+        )
+    } else if let Some(list) = list {
+        (
+            BlockKind::ListItem,
+            "li",
+            BlockContent::ListItem(ListItemBlock {
+                level: list.level,
+                marker: list.pattern.clone(),
+                format: list.format,
+                pattern: list.pattern,
+                ordered: list.ordered,
+                text,
+                style_id,
+            }),
+        )
     } else {
-        ParagraphKind::Paragraph
+        (
+            BlockKind::Paragraph,
+            "p",
+            BlockContent::Paragraph(ParagraphBlock { text, style_id }),
+        )
     };
-    let prefix = match kind {
-        ParagraphKind::Heading => "h",
-        ParagraphKind::ListItem => "li",
-        ParagraphKind::Paragraph => "p",
-    };
-    Ok(Paragraph {
+
+    Ok(Block {
         id: source.object_id(prefix, &source_path),
-        text: paragraph_text(node),
         kind,
-        style_id,
-        heading_level,
-        list,
-        source: source_path,
+        page: None,
+        bbox: None,
+        z_index: 0,
+        reading_order,
+        source: SourceSpan::new(source_path),
+        confidence: 1.0,
+        content,
     })
 }
 
@@ -136,9 +266,21 @@ fn parse_table(
     node: Node<'_, '_>,
     index: u32,
     source: &DocumentSource,
-) -> Result<Table, DocsightError> {
+    reading_order: u32,
+) -> Result<Block, DocsightError> {
     let source_path = format!("/word/document.xml::body/tbl[{index}]");
-    parse_table_at(node, source_path, source, 0)
+    let (id, table_block, span) = parse_table_at(node, source_path, source, 0)?;
+    Ok(Block {
+        id,
+        kind: BlockKind::Table,
+        page: None,
+        bbox: None,
+        z_index: 0,
+        reading_order,
+        source: span,
+        confidence: 1.0,
+        content: BlockContent::Table(table_block),
+    })
 }
 
 fn parse_table_at(
@@ -146,7 +288,7 @@ fn parse_table_at(
     source_path: String,
     source: &DocumentSource,
     depth: usize,
-) -> Result<Table, DocsightError> {
+) -> Result<(ObjectId, TableBlock, SourceSpan), DocsightError> {
     if depth > MAX_TABLE_DEPTH {
         return Err(DocsightError::ResourceLimit {
             resource: "nested table depth".to_owned(),
@@ -187,7 +329,19 @@ fn parse_table_at(
                 .map(|(nested_index, nested)| {
                     let nested_number = nested_index.checked_add(1).ok_or_else(table_size_error)?;
                     let nested_source = format!("{cell_source}/tbl[{nested_number}]");
-                    parse_table_at(nested, nested_source, source, depth + 1)
+                    let (nested_id, nested_table, nested_span) =
+                        parse_table_at(nested, nested_source, source, depth + 1)?;
+                    Ok(Block {
+                        id: nested_id,
+                        kind: BlockKind::Table,
+                        page: None,
+                        bbox: None,
+                        z_index: 0,
+                        reading_order: 0,
+                        source: nested_span,
+                        confidence: 1.0,
+                        content: BlockContent::Table(nested_table),
+                    })
                 })
                 .collect::<Result<Vec<_>, DocsightError>>()?;
             match merge.as_deref() {
@@ -208,7 +362,7 @@ fn parse_table_at(
                             }
                             cells[cell_index].text.push_str(&text);
                         }
-                        cells[cell_index].nested_tables.extend(nested_tables);
+                        cells[cell_index].blocks.extend(nested_tables);
                     }
                     for merged_column in column..column_end {
                         next_merges.insert(merged_column, cell_index);
@@ -222,9 +376,10 @@ fn parse_table_at(
                         column,
                         row_span: 1,
                         column_span,
+                        bbox: None,
                         text,
-                        nested_tables,
-                        source: cell_source,
+                        blocks: nested_tables,
+                        source: SourceSpan::new(cell_source),
                     });
                     if merge.as_deref() == Some("restart") {
                         for merged_column in column..column_end {
@@ -243,13 +398,18 @@ fn parse_table_at(
         columns = columns.max(column);
         active_merges = next_merges;
     }
-    Ok(Table {
-        id: source.object_id("tbl", &source_path),
-        rows,
-        columns,
-        cells,
-        source: source_path,
-    })
+    let id = source.object_id("tbl", &source_path);
+    let span = SourceSpan::new(source_path);
+    Ok((
+        id,
+        TableBlock {
+            rows,
+            columns,
+            header_rows: 1,
+            cells,
+        },
+        span,
+    ))
 }
 
 fn paragraph_text(node: Node<'_, '_>) -> String {
@@ -350,40 +510,15 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
     Ok(styles)
 }
 
-fn resolve_style_numbering(
-    style_id: Option<&str>,
-    styles: &BTreeMap<String, StyleDefinition>,
-) -> Result<Option<NumberingProperties>, DocsightError> {
-    let Some(mut current) = style_id else {
-        return Ok(None);
-    };
-    let mut visited = BTreeSet::new();
-    let mut resolved = NumberingProperties::default();
-    for _ in 0..MAX_STYLE_DEPTH {
-        if !visited.insert(current.to_owned()) {
-            return Err(DocsightError::MalformedDocument {
-                message: format!("cycle detected in paragraph style inheritance: {current}"),
-            });
-        }
-        let Some(style) = styles.get(current) else {
-            return Ok(None);
-        };
-        if let Some(numbering) = &style.numbering {
-            if resolved.num_id.is_none() {
-                resolved.num_id.clone_from(&numbering.num_id);
-            }
-            if resolved.level.is_none() {
-                resolved.level = numbering.level;
-            }
-        }
-        let Some(parent) = style.based_on.as_deref() else {
-            return Ok((resolved.num_id.is_some() || resolved.level.is_some()).then_some(resolved));
-        };
-        current = parent;
-    }
-    Err(DocsightError::MalformedDocument {
-        message: format!("paragraph style inheritance exceeds {MAX_STYLE_DEPTH} levels"),
-    })
+fn heading_level_from_label(label: &str) -> Option<u8> {
+    let normalized: String = label
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    let suffix = normalized.strip_prefix("heading")?;
+    let level = suffix.parse::<u8>().ok()?;
+    (1..=9).contains(&level).then_some(level)
 }
 
 fn resolve_heading_level(
@@ -422,15 +557,35 @@ fn resolve_heading_level(
     })
 }
 
-fn heading_level_from_label(label: &str) -> Option<u8> {
-    let normalized: String = label
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect();
-    let suffix = normalized.strip_prefix("heading")?;
-    let level = suffix.parse::<u8>().ok()?;
-    (1..=9).contains(&level).then_some(level)
+fn resolve_style_numbering(
+    style_id: Option<&str>,
+    styles: &BTreeMap<String, StyleDefinition>,
+) -> Result<Option<NumberingProperties>, DocsightError> {
+    let mut current = style_id;
+    let mut depth = 0_usize;
+    let mut visited = BTreeSet::new();
+    while let Some(id) = current {
+        if !visited.insert(id) {
+            return Err(DocsightError::MalformedDocument {
+                message: format!("cycle detected in style inheritance: {id}"),
+            });
+        }
+        depth = depth.checked_add(1).ok_or_else(block_count_error)?;
+        if depth > MAX_STYLE_DEPTH {
+            return Err(DocsightError::ResourceLimit {
+                resource: "style inheritance depth".to_owned(),
+                limit: MAX_STYLE_DEPTH as u64,
+            });
+        }
+        let Some(definition) = styles.get(id) else {
+            return Ok(None);
+        };
+        if definition.numbering.is_some() {
+            return Ok(definition.numbering.clone());
+        }
+        current = definition.based_on.as_deref();
+    }
+    Ok(None)
 }
 
 fn parse_numbering(xml: Option<&str>) -> Result<NumberingDefinitions, DocsightError> {
@@ -438,56 +593,55 @@ fn parse_numbering(xml: Option<&str>) -> Result<NumberingDefinitions, DocsightEr
         return Ok(NumberingDefinitions::default());
     };
     let document = XmlDocument::parse(xml).map_err(xml_error)?;
-    let mut definitions = NumberingDefinitions::default();
-    for abstract_node in document
+    let mut abstract_numbers = BTreeMap::new();
+    for node in document
         .descendants()
         .filter(|node| node.has_tag_name((W_NS, "abstractNum")))
     {
-        let abstract_id = abstract_node
-            .attribute((W_NS, "abstractNumId"))
-            .ok_or_else(|| DocsightError::MalformedDocument {
-                message: "abstract numbering definition has no abstractNumId".to_owned(),
-            })?;
-        for level_node in abstract_node
+        let abstract_id = node.attribute((W_NS, "abstractNumId")).ok_or_else(|| {
+            DocsightError::MalformedDocument {
+                message: "abstractNum has no abstractNumId".to_owned(),
+            }
+        })?;
+        let mut levels = BTreeMap::new();
+        for level_node in node
             .children()
-            .filter(|node| node.has_tag_name((W_NS, "lvl")))
+            .filter(|child| child.has_tag_name((W_NS, "lvl")))
         {
-            let level_value = level_node.attribute((W_NS, "ilvl")).ok_or_else(|| {
-                DocsightError::MalformedDocument {
+            let level = level_node
+                .attribute((W_NS, "ilvl"))
+                .and_then(|value| value.parse::<u8>().ok())
+                .ok_or_else(|| DocsightError::MalformedDocument {
                     message: "numbering level has no ilvl".to_owned(),
-                }
-            })?;
-            let level =
-                level_value
-                    .parse::<u8>()
-                    .map_err(|error| DocsightError::MalformedDocument {
-                        message: format!("invalid numbering level: {error}"),
-                    })?;
+                })?;
             let format = child_element(level_node, "numFmt").and_then(word_value);
             let pattern = child_element(level_node, "lvlText").and_then(word_value);
-            definitions.levels.insert(
-                (abstract_id.to_owned(), level),
-                NumberingLevel { format, pattern },
-            );
+            levels.insert(level, NumberingLevel { format, pattern });
         }
+        abstract_numbers.insert(abstract_id.to_owned(), levels);
     }
-    for number_node in document
+    let mut numbers = BTreeMap::new();
+    let mut levels = BTreeMap::new();
+    for node in document
         .descendants()
         .filter(|node| node.has_tag_name((W_NS, "num")))
     {
-        let num_id = number_node.attribute((W_NS, "numId")).ok_or_else(|| {
-            DocsightError::MalformedDocument {
-                message: "numbering instance has no numId".to_owned(),
+        let num_id =
+            node.attribute((W_NS, "numId"))
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: "num has no numId".to_owned(),
+                })?;
+        let Some(abstract_id) = child_element(node, "abstractNumId").and_then(word_value) else {
+            continue;
+        };
+        numbers.insert(num_id.to_owned(), abstract_id.clone());
+        if let Some(abstract_levels) = abstract_numbers.get(&abstract_id) {
+            for (level, definition) in abstract_levels {
+                levels.insert((abstract_id.clone(), *level), definition.clone());
             }
-        })?;
-        let abstract_id = child_element(number_node, "abstractNumId")
-            .and_then(word_value)
-            .ok_or_else(|| DocsightError::MalformedDocument {
-                message: format!("numbering instance {num_id} has no abstractNumId"),
-            })?;
-        definitions.numbers.insert(num_id.to_owned(), abstract_id);
+        }
     }
-    Ok(definitions)
+    Ok(NumberingDefinitions { numbers, levels })
 }
 
 fn resolve_list_marker(
@@ -531,7 +685,6 @@ fn resolve_list_marker(
         }
     };
     Some(ListMarker {
-        num_id,
         level,
         format,
         pattern,

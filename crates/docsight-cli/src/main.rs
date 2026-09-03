@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 use docsight_agent::AgentEnvelope;
-use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect};
-use docsight_ooxml::{DocxBlock, DocxDocument, Heading, Table, parse_docx};
+use docsight_core::{
+    BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
+    Rect, table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
+};
+use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{RenderRequest, RenderTarget, render_pdf};
 use serde::Serialize;
@@ -84,6 +87,9 @@ enum Command {
 enum TableFormat {
     Json,
     Markdown,
+    Csv,
+    Html,
+    Tsv,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,8 +112,16 @@ struct InspectResult {
 }
 
 #[derive(Debug, Serialize)]
+struct HeadingRecord {
+    id: ObjectId,
+    level: u8,
+    text: String,
+    source: String,
+}
+
+#[derive(Debug, Serialize)]
 struct OutlineResult {
-    headings: Vec<Heading>,
+    headings: Vec<HeadingRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,6 +149,24 @@ struct TablesResult {
     tables: Vec<TableSummary>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct PageSpanRecord {
+    id: ObjectId,
+    text: String,
+    bbox: Rect,
+    reading_order: u32,
+    confidence: f32,
+    source: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct PageResult {
+    number: u32,
+    width_pt: f32,
+    height_pt: f32,
+    spans: Vec<PageSpanRecord>,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match execute(&cli) {
@@ -160,7 +192,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             object,
             format,
         } => table(path, object, *format),
-        Command::Page { path, page, json } => pdf_page(path, *page, *json),
+        Command::Page { path, page, json } => page_command(path, *page, *json),
         Command::Render {
             path,
             page,
@@ -178,17 +210,27 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
     }
 }
 
+fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
+    match source.format() {
+        DocumentFormat::Docx => parse_docx(source),
+        DocumentFormat::Pdf => {
+            let pdf = PdfDocument::open(source)?;
+            pdf.to_document()
+        }
+    }
+}
+
 fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let parsed_docx = if source.format() == DocumentFormat::Docx {
-        Some(parse_docx(&source)?)
-    } else {
+    let document = load_document(&source)?;
+    let is_pdf = source.format() == DocumentFormat::Pdf;
+    let paragraphs = document.paragraphs().count() + document.list_items().count();
+    let headings = document.headings().count();
+    let tables = document.tables().count();
+    let pages = if document.pages.is_empty() {
         None
-    };
-    let parsed_pdf = if source.format() == DocumentFormat::Pdf {
-        Some(PdfDocument::open(&source)?.info()?)
     } else {
-        None
+        Some(document.pages.len() as u32)
     };
     let result = InspectResult {
         format: source.format(),
@@ -196,25 +238,16 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         capabilities: InspectCapabilities {
             structure: true,
             text: true,
-            render: source.format() == DocumentFormat::Pdf,
+            render: is_pdf,
         },
-        paragraphs: parsed_docx
-            .as_ref()
-            .map(|document| document.paragraphs().count()),
-        headings: parsed_docx
-            .as_ref()
-            .map(|document| document.headings().count()),
-        tables: parsed_docx
-            .as_ref()
-            .map(|document| document.tables().count()),
-        pages: parsed_pdf.as_ref().map(|document| document.page_count),
-        engine: parsed_pdf.as_ref().map(|_| ENGINE_NAME),
+        paragraphs: if is_pdf { None } else { Some(paragraphs) },
+        headings: if is_pdf { None } else { Some(headings) },
+        tables: if is_pdf { None } else { Some(tables) },
+        pages,
+        engine: if is_pdf { Some(ENGINE_NAME) } else { None },
     };
-    let warnings = parsed_docx
-        .as_ref()
-        .map_or_else(Vec::new, |document| document.warnings.clone());
     if json {
-        write_json(&source, result, warnings)
+        write_json(&source, result, document.warnings)
     } else {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
@@ -227,41 +260,73 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         .map_err(stdout_error)?;
         writeln!(writer, "Digest  sha256:{}", source.sha256()).map_err(stdout_error)?;
         writeln!(writer, "Bytes   {}", source.size_bytes()).map_err(stdout_error)?;
-        if let Some(document) = parsed_docx {
-            writeln!(writer, "Paragraphs  {}", document.paragraphs().count())
-                .map_err(stdout_error)?;
-            writeln!(writer, "Headings    {}", document.headings().count())
-                .map_err(stdout_error)?;
-            writeln!(writer, "Tables      {}", document.tables().count()).map_err(stdout_error)?;
-            emit_warnings(&document.warnings)?;
+        if let Some(paragraphs) = result.paragraphs {
+            writeln!(writer, "Paragraphs  {paragraphs}").map_err(stdout_error)?;
         }
-        if let Some(document) = parsed_pdf {
-            writeln!(writer, "Pages       {}", document.page_count).map_err(stdout_error)?;
-            writeln!(writer, "PDF engine  {}", document.engine).map_err(stdout_error)?;
+        if let Some(headings) = result.headings {
+            writeln!(writer, "Headings    {headings}").map_err(stdout_error)?;
         }
-        Ok(())
+        if let Some(tables) = result.tables {
+            writeln!(writer, "Tables      {tables}").map_err(stdout_error)?;
+        }
+        if let Some(pages) = result.pages {
+            writeln!(writer, "Pages       {pages}").map_err(stdout_error)?;
+        }
+        if let Some(engine) = result.engine {
+            writeln!(writer, "PDF engine  {engine}").map_err(stdout_error)?;
+        }
+        emit_warnings(&document.warnings)
     }
 }
 
-fn pdf_page(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightError> {
+fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = PdfDocument::open(&source)?;
-    let page = document.page(number)?;
+    let document = load_document(&source)?;
+    if document.pages.is_empty() {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "unpaginated document layout required for page inspection".to_owned(),
+        });
+    }
+    let target_page = document
+        .page(number)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: format!("page {number}"),
+        })?;
+    let spans: Vec<PageSpanRecord> = document
+        .page_blocks(number)
+        .filter_map(|block| {
+            let bbox = block.bbox?;
+            Some(PageSpanRecord {
+                id: block.id.clone(),
+                text: block.text(),
+                bbox,
+                reading_order: block.reading_order,
+                confidence: block.confidence,
+                source: block.source.path.clone(),
+            })
+        })
+        .collect();
+    let page_result = PageResult {
+        number: target_page.number,
+        width_pt: target_page.width_pt,
+        height_pt: target_page.height_pt,
+        spans,
+    };
     if json {
-        return write_json(&source, &page, page.warnings.clone());
+        return write_json(&source, &page_result, document.warnings);
     }
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     writeln!(
         writer,
         "Page {}  {}x{} pt  {} spans",
-        page.number,
-        page.width_pt,
-        page.height_pt,
-        page.spans.len()
+        page_result.number,
+        page_result.width_pt,
+        page_result.height_pt,
+        page_result.spans.len()
     )
     .map_err(stdout_error)?;
-    for span in &page.spans {
+    for span in &page_result.spans {
         writeln!(
             writer,
             "[{}] [{},{},{},{}] {}",
@@ -269,7 +334,7 @@ fn pdf_page(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightError
         )
         .map_err(stdout_error)?;
     }
-    emit_warnings(&page.warnings)
+    emit_warnings(&document.warnings)
 }
 
 fn render(path: &PathBuf, target: RenderTarget, dpi: u16, out: &Path) -> Result<(), DocsightError> {
@@ -312,14 +377,23 @@ fn crop(
 }
 
 fn outline(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
-    let (source, document) = load_docx(path, "outline")?;
-    let headings: Vec<_> = document.headings().collect();
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let headings: Vec<HeadingRecord> = document
+        .headings()
+        .map(|(block, heading)| HeadingRecord {
+            id: block.id.clone(),
+            level: heading.level,
+            text: heading.text.clone(),
+            source: block.source.path.clone(),
+        })
+        .collect();
     if json {
         return write_json(&source, OutlineResult { headings }, document.warnings);
     }
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    for heading in headings {
+    for heading in &headings {
         let indentation = "  ".repeat(usize::from(heading.level.saturating_sub(1)));
         writeln!(writer, "{indentation}[{}] {}", heading.id, heading.text).map_err(stdout_error)?;
     }
@@ -327,28 +401,55 @@ fn outline(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
 }
 
 fn document_text(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
-    let (source, document) = load_docx(path, "text")?;
-    let blocks = text_records(&document);
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let blocks: Vec<TextRecord> = document
+        .blocks
+        .iter()
+        .map(|block| {
+            let (kind, text) = match &block.content {
+                BlockContent::Heading(h) => ("heading", h.text.clone()),
+                BlockContent::ListItem(li) => ("list_item", li.text.clone()),
+                BlockContent::Paragraph(p) => ("paragraph", p.text.clone()),
+                BlockContent::Table(t) => ("table", table_to_tsv_string(t)),
+                BlockContent::Figure(f) => (
+                    "figure",
+                    f.caption
+                        .clone()
+                        .or_else(|| f.alt_text.clone())
+                        .unwrap_or_default(),
+                ),
+                BlockContent::Shape(s) => ("shape", s.label.clone().unwrap_or_default()),
+                BlockContent::Unknown(u) => ("unknown", u.details.clone().unwrap_or_default()),
+            };
+            TextRecord {
+                id: block.id.to_string(),
+                kind,
+                text,
+            }
+        })
+        .collect();
     if json {
         return write_json(&source, TextResult { blocks }, document.warnings);
     }
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    for block in blocks {
+    for block in &blocks {
         writeln!(writer, "[{}] {} {}", block.id, block.kind, block.text).map_err(stdout_error)?;
     }
     emit_warnings(&document.warnings)
 }
 
 fn tables(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
-    let (source, document) = load_docx(path, "tables")?;
-    let tables: Vec<_> = document
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let tables: Vec<TableSummary> = document
         .tables()
-        .map(|table| TableSummary {
-            id: table.id.to_string(),
+        .map(|(block, table)| TableSummary {
+            id: block.id.to_string(),
             rows: table.rows,
             columns: table.columns,
-            source: table.source.clone(),
+            source: block.source.path.clone(),
         })
         .collect();
     if json {
@@ -356,7 +457,7 @@ fn tables(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
     }
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    for table in tables {
+    for table in &tables {
         writeln!(
             writer,
             "{}  {}x{}  {}",
@@ -368,18 +469,18 @@ fn tables(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
 }
 
 fn table(path: &PathBuf, object: &str, format: TableFormat) -> Result<(), DocsightError> {
-    let (source, document) = load_docx(path, "table")?;
-    let selected = document
-        .tables()
-        .find(|table| table.id.as_str() == object)
-        .cloned()
-        .ok_or_else(|| DocsightError::ObjectNotFound {
-            object: object.to_owned(),
-        })?;
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let (_block, selected) =
+        document
+            .find_table(object)
+            .ok_or_else(|| DocsightError::ObjectNotFound {
+                object: object.to_owned(),
+            })?;
     match format {
-        TableFormat::Json => write_json(&source, selected, document.warnings),
+        TableFormat::Json => write_json(&source, selected, document.warnings.clone()),
         TableFormat::Markdown => {
-            let markdown = table_to_markdown(&selected)?;
+            let markdown = table_to_markdown(selected)?;
             let stdout = io::stdout();
             let mut writer = stdout.lock();
             writer
@@ -387,112 +488,27 @@ fn table(path: &PathBuf, object: &str, format: TableFormat) -> Result<(), Docsig
                 .map_err(stdout_error)?;
             emit_warnings(&document.warnings)
         }
-    }
-}
-
-fn load_docx(
-    path: &PathBuf,
-    operation: &str,
-) -> Result<(DocumentSource, DocxDocument), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    if source.format() != DocumentFormat::Docx {
-        return Err(DocsightError::UnsupportedOperation {
-            operation: operation.to_owned(),
-            format: source.format(),
-        });
-    }
-    let document = parse_docx(&source)?;
-    Ok((source, document))
-}
-
-fn text_records(document: &DocxDocument) -> Vec<TextRecord> {
-    document
-        .blocks
-        .iter()
-        .map(|block| match block {
-            DocxBlock::Paragraph(paragraph) => TextRecord {
-                id: paragraph.id.to_string(),
-                kind: match paragraph.kind {
-                    docsight_ooxml::ParagraphKind::Heading => "heading",
-                    docsight_ooxml::ParagraphKind::ListItem => "list_item",
-                    docsight_ooxml::ParagraphKind::Paragraph => "paragraph",
-                },
-                text: paragraph.text.clone(),
-            },
-            DocxBlock::Table(table) => TextRecord {
-                id: table.id.to_string(),
-                kind: "table",
-                text: table_text(table),
-            },
-        })
-        .collect()
-}
-
-fn table_text(table: &Table) -> String {
-    let mut rows = vec![Vec::new(); table.rows as usize];
-    for cell in &table.cells {
-        if let Some(row) = rows.get_mut(cell.row as usize) {
-            row.push(cell.text.clone());
+        TableFormat::Csv => {
+            let csv = table_to_csv(selected)?;
+            let stdout = io::stdout();
+            let mut writer = stdout.lock();
+            writer.write_all(csv.as_bytes()).map_err(stdout_error)?;
+            emit_warnings(&document.warnings)
         }
-    }
-    rows.into_iter()
-        .map(|row| row.join("\t"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn table_to_markdown(table: &Table) -> Result<String, DocsightError> {
-    let columns = usize::try_from(table.columns).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table columns".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    let rows = usize::try_from(table.rows).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table rows".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    if columns == 0 {
-        return Ok(String::new());
-    }
-    let mut grid = vec![vec![String::new(); columns]; rows];
-    for cell in &table.cells {
-        let row = usize::try_from(cell.row).map_err(|_| table_geometry_error())?;
-        let column = usize::try_from(cell.column).map_err(|_| table_geometry_error())?;
-        let target = grid
-            .get_mut(row)
-            .and_then(|values| values.get_mut(column))
-            .ok_or_else(table_geometry_error)?;
-        let mut value = cell.text.replace('|', "\\|").replace('\n', "<br>");
-        if cell.row_span > 1 || cell.column_span > 1 {
-            value.push_str(&format!(" [span {}x{}]", cell.row_span, cell.column_span));
+        TableFormat::Tsv => {
+            let tsv = table_to_tsv(selected)?;
+            let stdout = io::stdout();
+            let mut writer = stdout.lock();
+            writer.write_all(tsv.as_bytes()).map_err(stdout_error)?;
+            emit_warnings(&document.warnings)
         }
-        *target = value;
-    }
-    let mut markdown = String::new();
-    markdown.push('|');
-    for column in 1..=columns {
-        markdown.push_str(&format!(" Column {column} |"));
-    }
-    markdown.push('\n');
-    markdown.push('|');
-    for _ in 0..columns {
-        markdown.push_str(" --- |");
-    }
-    markdown.push('\n');
-    for row in grid {
-        markdown.push('|');
-        for value in row {
-            markdown.push(' ');
-            markdown.push_str(&value);
-            markdown.push_str(" |");
+        TableFormat::Html => {
+            let html = table_to_html(selected)?;
+            let stdout = io::stdout();
+            let mut writer = stdout.lock();
+            writer.write_all(html.as_bytes()).map_err(stdout_error)?;
+            emit_warnings(&document.warnings)
         }
-        markdown.push('\n');
-    }
-    Ok(markdown)
-}
-
-fn table_geometry_error() -> DocsightError {
-    DocsightError::MalformedDocument {
-        message: "table cell coordinates exceed the declared table grid".to_owned(),
     }
 }
 

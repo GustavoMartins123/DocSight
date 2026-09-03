@@ -54,7 +54,20 @@ pub fn render_pdf(
             document.rasterize(*page, request.dpi, Some(*bbox))?
         }
         RenderTarget::Object { id } => {
-            let (page, bbox) = document.locate_span(id)?;
+            let doc = document.to_document()?;
+            let block = doc
+                .find_block(id)
+                .ok_or_else(|| DocsightError::ObjectNotFound { object: id.clone() })?;
+            let page = block
+                .page
+                .ok_or_else(|| DocsightError::UnsupportedFeature {
+                    feature: "object has no page layout".to_owned(),
+                })?;
+            let bbox = block
+                .bbox
+                .ok_or_else(|| DocsightError::UnsupportedFeature {
+                    feature: "object has no geometry".to_owned(),
+                })?;
             document.rasterize(page, request.dpi, Some(bbox))?
         }
     };

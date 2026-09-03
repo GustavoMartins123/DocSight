@@ -4,7 +4,9 @@ mod syntax;
 
 use content::{DisplayCommand, TextRun, fonts_from_resources, parse_content};
 use docsight_core::{
-    Diagnostic, DiagnosticSeverity, DocsightError, DocumentFormat, DocumentSource, ObjectId, Rect,
+    Block, BlockContent, BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document,
+    DocumentFormat, DocumentMetadata, DocumentSource, ObjectId, Page, ParagraphBlock, Rect,
+    SourceSpan,
 };
 use raster::{MAX_DPI, MIN_DPI};
 use serde::Serialize;
@@ -183,6 +185,72 @@ impl<'a> PdfDocument<'a> {
         }
         Err(DocsightError::ObjectNotFound {
             object: object.to_owned(),
+        })
+    }
+
+    pub fn to_document(&self) -> Result<Document, DocsightError> {
+        let mut blocks = Vec::new();
+        let mut pages = Vec::new();
+        let mut all_warnings = Vec::new();
+        let mut global_reading_order = 0_u32;
+
+        for page_num in 1..=self.page_count() {
+            let page_record = self.page_record(page_num)?;
+            let parsed = self.parse_page(page_num)?;
+            let mut page_block_ids = Vec::new();
+
+            if parsed.approximated_base14_font {
+                all_warnings.push(base14_warning(page_num));
+            }
+
+            for (index, run) in parsed.text_runs.into_iter().enumerate() {
+                global_reading_order =
+                    global_reading_order.checked_add(1).ok_or_else(page_limit)?;
+                let span = self.make_span(page_num, index, run, parsed.approximated_base14_font)?;
+                let block = Block {
+                    id: span.id.clone(),
+                    kind: BlockKind::Paragraph,
+                    page: Some(page_num),
+                    bbox: Some(span.bbox),
+                    z_index: 0,
+                    reading_order: global_reading_order,
+                    source: SourceSpan::new(span.source),
+                    confidence: span.confidence,
+                    content: BlockContent::Paragraph(ParagraphBlock {
+                        text: span.text,
+                        style_id: None,
+                    }),
+                };
+                page_block_ids.push(block.id.clone());
+                blocks.push(block);
+            }
+
+            pages.push(Page {
+                number: page_num,
+                width_pt: page_record.media_box.width(),
+                height_pt: page_record.media_box.height(),
+                block_ids: page_block_ids,
+                overlays: Vec::new(),
+            });
+        }
+
+        Ok(Document {
+            id: self.source.id(),
+            sha256: self.source.sha256().to_owned(),
+            format: DocumentFormat::Pdf,
+            size_bytes: self.source.size_bytes(),
+            metadata: DocumentMetadata {
+                title: None,
+                author: None,
+                subject: None,
+                producer: Some(ENGINE_NAME.to_owned()),
+            },
+            styles: Vec::new(),
+            sections: Vec::new(),
+            pages,
+            blocks,
+            resources: Vec::new(),
+            warnings: all_warnings,
         })
     }
 
@@ -432,18 +500,17 @@ fn collect_pages(
             let media_box = current
                 .media_box
                 .ok_or_else(|| malformed("Page has no inherited MediaBox"))?;
-            if dict.contains_key("CropBox") {
-                return Err(DocsightError::UnsupportedFeature {
-                    feature: "PDF CropBox".to_owned(),
-                });
-            }
+            let effective_box = match dict.get("CropBox") {
+                Some(value) => parse_box(store, value)?,
+                None => media_box,
+            };
             let contents = match dict.get("Contents") {
                 None => Vec::new(),
                 Some(Value::Array(values)) => values.clone(),
                 Some(value) => vec![value.clone()],
             };
             pages.push(PageRecord {
-                media_box,
+                media_box: effective_box,
                 resources: current.resources,
                 contents,
             });
@@ -529,4 +596,9 @@ fn content_limit() -> DocsightError {
         resource: "decoded PDF content bytes".to_owned(),
         limit: docsight_core::MAX_INSPECT_BYTES,
     }
+}
+
+pub fn parse_pdf(source: &DocumentSource) -> Result<Document, DocsightError> {
+    let pdf = PdfDocument::open(source)?;
+    pdf.to_document()
 }
