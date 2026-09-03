@@ -199,6 +199,7 @@ dependencies = [
  "clap",
  "docsight-agent",
  "docsight-core",
+ "docsight-diff",
  "docsight-layout",
  "docsight-ooxml",
  "docsight-pdf",
@@ -217,6 +218,22 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "docsight-diff"
+version = "0.1.0"
+dependencies = [
+ "docsight-core",
+ "docsight-layout",
+ "docsight-ooxml",
+ "docsight-pdf",
+ "docsight-render",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]

@@ -31,16 +31,23 @@ pub struct RenderMetadata {
     pub media_type: &'static str,
 }
 
+pub use docx_raster::encode_png;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedImage {
     pub metadata: RenderMetadata,
     pub warnings: Vec<Diagnostic>,
     png: Vec<u8>,
+    pixels: Vec<u8>,
 }
 
 impl RenderedImage {
     pub fn png(&self) -> &[u8] {
         &self.png
+    }
+
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
     }
 
     pub fn write(&self, path: &Path) -> Result<(), DocsightError> {
@@ -143,5 +150,6 @@ fn from_raster(raster: RasterizedPage) -> RenderedImage {
         },
         warnings: raster.warnings,
         png: raster.png,
+        pixels: raster.pixels,
     }
 }

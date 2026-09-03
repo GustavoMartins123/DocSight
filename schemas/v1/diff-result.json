@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DocumentDiffResult",
+  "type": "object",
+  "required": [
+    "format_before",
+    "format_after",
+    "package",
+    "semantic",
+    "summary",
+    "warnings"
+  ],
+  "properties": {
+    "format_before": { "type": "string" },
+    "format_after": { "type": "string" },
+    "package": {
+      "type": "object",
+      "required": ["added_parts", "removed_parts", "modified_parts"],
+      "properties": {
+        "added_parts": { "type": "array", "items": { "type": "string" } },
+        "removed_parts": { "type": "array", "items": { "type": "string" } },
+        "modified_parts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "semantic": {
+      "type": "object",
+      "required": ["total_changes", "headings", "paragraphs", "tables", "images", "records"],
+      "properties": {
+        "total_changes": { "type": "integer" },
+        "records": { "type": "array" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "pages_before",
+        "pages_after",
+        "semantic_changes",
+        "layout_changed_pages",
+        "images",
+        "tables",
+        "warnings"
+      ]
+    },
+    "warnings": {
+      "type": "array"
+    }
+  }
+}

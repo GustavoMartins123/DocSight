@@ -9,6 +9,7 @@ pub(crate) struct Raster {
     pub width: u32,
     pub height: u32,
     pub png: Vec<u8>,
+    pub pixels: Vec<u8>,
 }
 
 pub(crate) fn rasterize(
@@ -59,6 +60,7 @@ pub(crate) fn rasterize(
         width,
         height,
         png: encode_png(width, height, &canvas.pixels)?,
+        pixels: canvas.pixels,
     })
 }
 

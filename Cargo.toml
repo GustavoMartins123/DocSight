@@ -8,6 +8,7 @@ members = [
     "crates/docsight-pdf",
     "crates/docsight-render",
     "crates/docsight-tables",
+    "crates/docsight-diff",
 ]
 resolver = "3"
 

@@ -7,6 +7,7 @@ use docsight_core::{
     BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
     Rect, table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
+use docsight_diff::{DiffOptions, diff_documents};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
@@ -137,6 +138,22 @@ enum Command {
         path: PathBuf,
         #[arg(long)]
         json: bool,
+    },
+    Diff {
+        before: PathBuf,
+        after: PathBuf,
+        #[arg(long)]
+        summary: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        visual: bool,
+        #[arg(long, default_value_t = 144)]
+        dpi: u16,
+        #[arg(long, default_value_t = 8)]
+        threshold: u8,
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
     },
 }
 
@@ -391,6 +408,31 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             cli.quiet,
             cli.json_errors,
         ),
+        Command::Diff {
+            before,
+            after,
+            summary,
+            json,
+            visual,
+            dpi,
+            threshold,
+            out_dir,
+        } => diff(DiffCommandArgs {
+            before,
+            after,
+            summary: *summary,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            options: DiffOptions {
+                visual: *visual || out_dir.is_some(),
+                dpi: *dpi,
+                threshold: *threshold,
+                out_dir: out_dir.clone(),
+            },
+            limits: &limits,
+            quiet: cli.quiet,
+            json_errors: cli.json_errors,
+        }),
     }
 }
 
@@ -1249,4 +1291,75 @@ fn parse_bbox(raw: &str) -> Result<Rect, String> {
         ));
     }
     Rect::new(values[0], values[1], values[2], values[3]).map_err(|error| error.to_string())
+}
+
+struct DiffCommandArgs<'a> {
+    before: &'a Path,
+    after: &'a Path,
+    summary: bool,
+    json: bool,
+    ndjson: bool,
+    options: DiffOptions,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
+    let source_before = DocumentSource::open(args.before)?;
+    let source_after = DocumentSource::open(args.after)?;
+    let diff_result = diff_documents(&source_before, &source_after, &args.options)?;
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            args.limits.clone(),
+            "diff".into(),
+            source_after.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source_after).into())?;
+        let summary_val =
+            serde_json::to_value(&diff_result.summary).map_err(output_serialization_error)?;
+        writer.write_item("diff.summary", &summary_val)?;
+        for record in &diff_result.semantic.records {
+            let record_val = serde_json::to_value(record).map_err(output_serialization_error)?;
+            if !writer.write_item("diff.semantic", &record_val)? {
+                break;
+            }
+        }
+        for warning in &diff_result.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(1 + diff_result.semantic.records.len())?;
+        return Ok(());
+    }
+
+    if args.json {
+        return write_single_json(
+            &source_after,
+            &diff_result,
+            diff_result.warnings.clone(),
+            args.limits,
+        );
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "{}", diff_result.summary.format_summary()).map_err(stdout_error)?;
+    if !args.summary {
+        for record in &diff_result.semantic.records {
+            let page_str = record.page.map(|p| format!(" [p.{p}]")).unwrap_or_default();
+            writeln!(
+                writer,
+                "  * {:<8} {}{}: {}",
+                record.kind, record.target_type, page_str, record.description
+            )
+            .map_err(stdout_error)?;
+        }
+    }
+    if let Some(ref dir) = args.options.out_dir {
+        writeln!(writer, "Visual diffs written to {}", dir.display()).map_err(stdout_error)?;
+    }
+    emit_warnings(&diff_result.warnings, args.quiet, args.json_errors)
 }

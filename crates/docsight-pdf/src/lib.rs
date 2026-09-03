@@ -67,6 +67,7 @@ pub struct RasterizedPage {
     pub width_px: u32,
     pub height_px: u32,
     pub png: Vec<u8>,
+    pub pixels: Vec<u8>,
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -274,6 +275,7 @@ impl<'a> PdfDocument<'a> {
             width_px: raster.width,
             height_px: raster.height,
             png: raster.png,
+            pixels: raster.pixels,
             warnings,
         })
     }

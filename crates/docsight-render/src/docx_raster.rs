@@ -119,6 +119,7 @@ pub(crate) fn rasterize_docx_page(
         },
         warnings,
         png,
+        pixels: canvas.pixels,
     })
 }
 
@@ -179,7 +180,7 @@ fn raster_limit() -> DocsightError {
     }
 }
 
-fn encode_png(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>, DocsightError> {
+pub fn encode_png(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>, DocsightError> {
     let pixel_width = usize::try_from(width).map_err(|_| raster_limit())?;
     let row_bytes = pixel_width.checked_mul(3).ok_or_else(raster_limit)?;
     let raw_capacity = row_bytes
