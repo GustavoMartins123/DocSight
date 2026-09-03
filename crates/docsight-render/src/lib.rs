@@ -1,10 +1,12 @@
 mod docx_raster;
+pub mod hit;
 
 use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect, write_all};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{PdfDocument, RasterizedPage};
 use docx_raster::rasterize_docx_page;
+pub use hit::*;
 use serde::Serialize;
 use std::path::Path;
 

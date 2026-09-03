@@ -12,7 +12,7 @@ use docsight_diff::{DiffOptions, diff_documents};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
-use docsight_render::{RenderRequest, RenderTarget, render_document};
+use docsight_render::{HitQuery, RenderRequest, RenderTarget, render_document};
 use serde::Serialize;
 use sha2::Digest;
 use std::io::{self, Write};
@@ -177,6 +177,17 @@ enum Command {
         page: Option<u32>,
         #[arg(long)]
         regions: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Hit {
+        path: PathBuf,
+        #[arg(long)]
+        page: u32,
+        #[arg(long)]
+        point: Option<String>,
+        #[arg(long)]
+        bbox: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -508,6 +519,22 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             regions: *regions,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
+            limits: &limits,
+            quiet: cli.quiet,
+            json_errors: cli.json_errors,
+        }),
+        Command::Hit {
+            path,
+            page,
+            point,
+            bbox,
+            json,
+        } => hit(HitArgs {
+            path,
+            page: *page,
+            point: point.as_deref(),
+            bbox: bbox.as_deref(),
+            json: cli.is_agent_json(*json),
             limits: &limits,
             quiet: cli.quiet,
             json_errors: cli.json_errors,
@@ -1735,5 +1762,122 @@ fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
             }
         }
     }
+    emit_warnings(&doc.warnings, args.quiet, args.json_errors)
+}
+
+struct HitArgs<'a> {
+    path: &'a Path,
+    page: u32,
+    point: Option<&'a str>,
+    bbox: Option<&'a str>,
+    json: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn parse_point(input: &str) -> Result<(f32, f32), DocsightError> {
+    let parts: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
+    if parts.len() != 2 {
+        return Err(DocsightError::InvalidArgument {
+            message: "point must be formatted as x,y".to_owned(),
+        });
+    }
+    let x: f32 = parts[0]
+        .parse()
+        .map_err(|_| DocsightError::InvalidArgument {
+            message: format!("invalid x coordinate: {}", parts[0]),
+        })?;
+    let y: f32 = parts[1]
+        .parse()
+        .map_err(|_| DocsightError::InvalidArgument {
+            message: format!("invalid y coordinate: {}", parts[1]),
+        })?;
+    Ok((x, y))
+}
+
+fn hit(args: HitArgs<'_>) -> Result<(), DocsightError> {
+    let query = match (args.point, args.bbox) {
+        (Some(pt), None) => {
+            let (x, y) = parse_point(pt)?;
+            HitQuery::Point(x, y)
+        }
+        (None, Some(bb)) => {
+            let rect =
+                parse_bbox(bb).map_err(|msg| DocsightError::InvalidArgument { message: msg })?;
+            HitQuery::BBox(rect)
+        }
+        (Some(_), Some(_)) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "cannot provide both --point and --bbox".to_owned(),
+            });
+        }
+        (None, None) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "either --point <x,y> or --bbox <x0,y0,x1,y1> must be provided".to_owned(),
+            });
+        }
+    };
+
+    let source = DocumentSource::open(args.path)?;
+    let doc = load_document(&source)?;
+    let result = docsight_render::hit_test(&doc, args.page, &query)?;
+
+    if args.json {
+        return write_single_json(&source, &result, doc.warnings, args.limits);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    match query {
+        HitQuery::Point(x, y) => {
+            writeln!(
+                writer,
+                "Hit Test on Page {} at point ({:.1}, {:.1}):",
+                args.page, x, y
+            )
+            .map_err(stdout_error)?;
+        }
+        HitQuery::BBox(rect) => {
+            writeln!(
+                writer,
+                "Hit Test on Page {} in bbox [{:.1}, {:.1}, {:.1}, {:.1}]:",
+                args.page, rect.x0, rect.y0, rect.x1, rect.y1
+            )
+            .map_err(stdout_error)?;
+        }
+    }
+    writeln!(writer, "  Hits: {}", result.total_hits).map_err(stdout_error)?;
+    for (idx, target) in result.targets.iter().enumerate() {
+        writeln!(
+            writer,
+            "  {}. [{}] {:?} (z: {}, order: {})",
+            idx + 1,
+            target.object_id,
+            target.kind,
+            target.z_index,
+            target.reading_order
+        )
+        .map_err(stdout_error)?;
+        writeln!(writer, "     Source:   {}", target.source_path).map_err(stdout_error)?;
+        writeln!(
+            writer,
+            "     BBox:     [{:.1}, {:.1}, {:.1}, {:.1}]",
+            target.bbox.x0, target.bbox.y0, target.bbox.x1, target.bbox.y1
+        )
+        .map_err(stdout_error)?;
+        if let Some(ref cell) = target.cell {
+            writeln!(
+                writer,
+                "     Cell:     row {}, col {} (span {}x{})",
+                cell.row, cell.column, cell.row_span, cell.column_span
+            )
+            .map_err(stdout_error)?;
+        }
+        if !target.text_snippet.is_empty() {
+            writeln!(writer, "     Snippet:  {:?}", target.text_snippet).map_err(stdout_error)?;
+        }
+    }
+
     emit_warnings(&doc.warnings, args.quiet, args.json_errors)
 }

@@ -269,6 +269,14 @@ impl Rect {
             None
         }
     }
+
+    pub fn contains_point(self, x: f32, y: f32) -> bool {
+        x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
+    }
+
+    pub fn intersects(self, other: Self) -> bool {
+        self.intersection(other).is_some()
+    }
 }
 
 pub fn write_all(path: &Path, bytes: &[u8]) -> Result<(), DocsightError> {
