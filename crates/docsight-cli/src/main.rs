@@ -5,7 +5,8 @@ use docsight_agent::{
 };
 use docsight_core::{
     BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
-    Rect, table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
+    Rect, compute_coverage, compute_evidence, table_to_csv, table_to_html, table_to_markdown,
+    table_to_tsv, table_to_tsv_string,
 };
 use docsight_diff::{DiffOptions, diff_documents};
 use docsight_layout::layout_docx;
@@ -161,6 +162,21 @@ enum Command {
     },
     Fingerprint {
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Evidence {
+        path: PathBuf,
+        object: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Coverage {
+        path: PathBuf,
+        #[arg(long)]
+        page: Option<u32>,
+        #[arg(long)]
+        regions: bool,
         #[arg(long)]
         json: bool,
     },
@@ -473,6 +489,29 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             cli.quiet,
             cli.json_errors,
         ),
+        Command::Evidence { path, object, json } => evidence(
+            path,
+            object,
+            cli.is_agent_json(*json),
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
+        Command::Coverage {
+            path,
+            page,
+            regions,
+            json,
+        } => coverage(CoverageArgs {
+            path,
+            page: *page,
+            regions: *regions,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet: cli.quiet,
+            json_errors: cli.json_errors,
+        }),
     }
 }
 
@@ -1483,4 +1522,218 @@ fn fingerprint(
     )
     .map_err(stdout_error)?;
     emit_warnings(&[], quiet, json_errors)
+}
+
+fn evidence(
+    path: &Path,
+    object: &str,
+    json: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let doc = load_document(&source)?;
+    let obj_id = ObjectId::from_raw(object);
+
+    let render_fingerprint = {
+        let req = RenderRequest {
+            target: RenderTarget::Object {
+                id: object.to_owned(),
+            },
+            dpi: 144,
+        };
+        if let Ok(rendered) = render_document(&source, &req) {
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(rendered.png());
+            let hash = hasher.finalize();
+            let mut s = String::with_capacity(64);
+            for b in hash {
+                use std::fmt::Write as _;
+                let _ = write!(&mut s, "{b:02x}");
+            }
+            Some(s)
+        } else {
+            None
+        }
+    };
+
+    let record = compute_evidence(&doc, &source, &obj_id, render_fingerprint)?;
+
+    if json {
+        return write_single_json(&source, &record, doc.warnings, limits);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Evidence for {}:", record.object_id).map_err(stdout_error)?;
+    writeln!(writer, "  Kind:              {:?}", record.kind).map_err(stdout_error)?;
+    writeln!(writer, "  Source Path:       {}", record.source_path).map_err(stdout_error)?;
+    if let Some(page) = record.page {
+        writeln!(writer, "  Page:              {}", page).map_err(stdout_error)?;
+    }
+    if let Some(bbox) = record.bbox {
+        writeln!(
+            writer,
+            "  Bounding Box:      [{:.1}, {:.1}, {:.1}, {:.1}]",
+            bbox.x0, bbox.y0, bbox.x1, bbox.y1
+        )
+        .map_err(stdout_error)?;
+    }
+    if let Some(conf) = record.confidence {
+        writeln!(writer, "  Confidence:        {:.3}", conf).map_err(stdout_error)?;
+    }
+    writeln!(writer, "  Fidelity Profile:").map_err(stdout_error)?;
+    writeln!(writer, "    Text:            {:.3}", record.fidelity.text).map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "    Structure:       {:.3}",
+        record.fidelity.structure
+    )
+    .map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "    Geometry:        {:.3}",
+        record.fidelity.geometry
+    )
+    .map_err(stdout_error)?;
+    writeln!(writer, "    Visual:          {:.3}", record.fidelity.visual).map_err(stdout_error)?;
+    if !record.fidelity.reasons.is_empty() {
+        writeln!(
+            writer,
+            "    Reasons:         {}",
+            record.fidelity.reasons.join(", ")
+        )
+        .map_err(stdout_error)?;
+    }
+    if let Some(ref fp) = record.render_fingerprint {
+        writeln!(writer, "  Render Hash:       {}", fp).map_err(stdout_error)?;
+    }
+    if !record.safe_source_fragment.is_empty() {
+        writeln!(
+            writer,
+            "  Source Fragment:   {:?}",
+            record.safe_source_fragment
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&doc.warnings, quiet, json_errors)
+}
+
+struct CoverageArgs<'a> {
+    path: &'a Path,
+    page: Option<u32>,
+    regions: bool,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let doc = load_document(&source)?;
+    let report = compute_coverage(&doc, &source, args.page, args.regions)?;
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            args.limits.clone(),
+            "coverage".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let global_val =
+            serde_json::to_value(&report.global).map_err(output_serialization_error)?;
+        writer.write_item("coverage.global", &global_val)?;
+        for page_cov in &report.pages {
+            let page_val = serde_json::to_value(page_cov).map_err(output_serialization_error)?;
+            if !writer.write_item("coverage.page", &page_val)? {
+                break;
+            }
+        }
+        for warning in &doc.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(1 + report.pages.len())?;
+        return Ok(());
+    }
+
+    if args.json {
+        return write_single_json(&source, &report, doc.warnings, args.limits);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Coverage Report:").map_err(stdout_error)?;
+    writeln!(writer, "  Format:              {}", report.format).map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "  Overall Fidelity:    {:.3}",
+        report.global.overall_fidelity
+    )
+    .map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "  Text Fidelity:       {:.3} ({})",
+        report.global.text.score,
+        report.global.text.status.as_str()
+    )
+    .map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "  Structure Fidelity:  {:.3} ({})",
+        report.global.structure.score,
+        report.global.structure.status.as_str()
+    )
+    .map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "  Geometry Fidelity:   {:.3} ({})",
+        report.global.geometry.score,
+        report.global.geometry.status.as_str()
+    )
+    .map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "  Visual Fidelity:     {:.3} ({})",
+        report.global.visual.score,
+        report.global.visual.status.as_str()
+    )
+    .map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "  Affected Objects:    {}",
+        report.affected_objects_count
+    )
+    .map_err(stdout_error)?;
+    if !report.reason_codes.is_empty() {
+        writeln!(
+            writer,
+            "  Reason Codes:        {}",
+            report.reason_codes.join(", ")
+        )
+        .map_err(stdout_error)?;
+    }
+    if args.regions {
+        writeln!(writer, "\nAddressable Regions:").map_err(stdout_error)?;
+        for page_cov in &report.pages {
+            for reg in &page_cov.regions {
+                let obj_str = reg
+                    .object_id
+                    .as_ref()
+                    .map(|o| o.as_str())
+                    .unwrap_or("<page>");
+                writeln!(
+                    writer,
+                    "  * Page {:>2} [{}] {}: {}",
+                    reg.page, obj_str, reg.reason_code, reg.description
+                )
+                .map_err(stdout_error)?;
+            }
+        }
+    }
+    emit_warnings(&doc.warnings, args.quiet, args.json_errors)
 }

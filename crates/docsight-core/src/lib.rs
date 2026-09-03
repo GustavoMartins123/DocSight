@@ -1,5 +1,7 @@
+pub mod evidence;
 pub mod ir;
 
+pub use evidence::*;
 pub use ir::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
