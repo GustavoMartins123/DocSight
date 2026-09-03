@@ -1,0 +1,72 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 1003 >>
+stream
+0 0 0 RG
+1 w
+50 640 m 350 640 l S
+50 670 m 350 670 l S
+50 700 m 350 700 l S
+50 730 m 350 730 l S
+50 640 m 50 730 l S
+150 640 m 150 730 l S
+250 640 m 250 730 l S
+350 640 m 350 730 l S
+50 400 m 350 400 l S
+50 430 m 350 430 l S
+50 460 m 350 460 l S
+50 490 m 350 490 l S
+50 400 m 50 490 l S
+150 400 m 150 490 l S
+250 400 m 250 490 l S
+350 400 m 350 490 l S
+0 0 0 rg
+BT /F2 10 Tf 60 710 Td (Region) Tj ET
+BT /F2 10 Tf 160 710 Td (Plan) Tj ET
+BT /F2 10 Tf 260 710 Td (Fact) Tj ET
+BT /F1 10 Tf 60 680 Td (North) Tj ET
+BT /F1 10 Tf 160 680 Td (10) Tj ET
+BT /F1 10 Tf 260 680 Td (12) Tj ET
+BT /F1 10 Tf 60 650 Td (South) Tj ET
+BT /F1 10 Tf 160 650 Td (8) Tj ET
+BT /F1 10 Tf 260 650 Td (7) Tj ET
+BT /F2 10 Tf 60 470 Td (Team) Tj ET
+BT /F2 10 Tf 160 470 Td (Old) Tj ET
+BT /F2 10 Tf 260 470 Td (New) Tj ET
+BT /F1 10 Tf 60 440 Td (Alpha) Tj ET
+BT /F1 10 Tf 160 440 Td (5) Tj ET
+BT /F1 10 Tf 260 440 Td (6) Tj ET
+BT /F1 10 Tf 60 410 Td (Beta) Tj ET
+BT /F1 10 Tf 160 410 Td (9) Tj ET
+BT /F1 10 Tf 260 410 Td (9) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000000321 00000 n 
+0000001375 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1450
+%%EOF

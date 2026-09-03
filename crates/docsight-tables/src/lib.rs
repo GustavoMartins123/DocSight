@@ -2,6 +2,7 @@ use docsight_core::{
     Block, BlockContent, BlockKind, LayoutFlags, ObjectId, Rect, SourceSpan, TableBlock, TableCell,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -13,10 +14,16 @@ pub enum TableDetectorKind {
 
 impl std::fmt::Display for TableDetectorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl TableDetectorKind {
+    pub fn label(&self) -> &'static str {
         match self {
-            Self::Ruled => write!(f, "ruled"),
-            Self::Alignment => write!(f, "alignment"),
-            Self::Structural => write!(f, "structural"),
+            Self::Ruled => "ruled",
+            Self::Alignment => "alignment",
+            Self::Structural => "structural",
         }
     }
 }
@@ -96,6 +103,7 @@ impl InferredTable {
             header_rows: self.header_rows,
             cells,
             column_widths_pt: None,
+            detector: Some(self.detector.label().to_owned()),
         }
     }
 
@@ -173,15 +181,88 @@ pub fn detect_tables(
     detected
 }
 
+const RULING_CONNECT_GAP_PT: f32 = 6.0;
+
 fn detect_ruled_tables(
     page: u32,
     spans: &[TextSpanItem],
     rulings: &[RulingSegment],
 ) -> Vec<InferredTable> {
+    segment_rulings(rulings)
+        .into_iter()
+        .filter_map(|component| build_ruled_table(page, spans, &component))
+        .collect()
+}
+
+fn segment_rulings(rulings: &[RulingSegment]) -> Vec<Vec<RulingSegment>> {
+    let count = rulings.len();
+    let mut parent: Vec<usize> = (0..count).collect();
+    fn find(parent: &mut [usize], index: usize) -> usize {
+        let mut current = index;
+        while parent[current] != current {
+            parent[current] = parent[parent[current]];
+            current = parent[current];
+        }
+        current
+    }
+    fn union(parent: &mut [usize], left: usize, right: usize) {
+        let left_root = find(parent, left);
+        let right_root = find(parent, right);
+        if left_root != right_root {
+            parent[left_root] = right_root;
+        }
+    }
+    for left in 0..count {
+        for right in (left + 1)..count {
+            if rulings_near(&rulings[left], &rulings[right]) {
+                union(&mut parent, left, right);
+            }
+        }
+    }
+    let mut components: BTreeMap<usize, Vec<RulingSegment>> = BTreeMap::new();
+    for (index, ruling) in rulings.iter().enumerate() {
+        let root = find(&mut parent, index);
+        components.entry(root).or_default().push(ruling.clone());
+    }
+    let mut grouped: Vec<Vec<RulingSegment>> = components.into_values().collect();
+    grouped.sort_by(|a, b| {
+        let a_key = a
+            .iter()
+            .map(|r| r.y0.min(r.y1))
+            .fold(f32::INFINITY, f32::min);
+        let b_key = b
+            .iter()
+            .map(|r| r.y0.min(r.y1))
+            .fold(f32::INFINITY, f32::min);
+        a_key
+            .partial_cmp(&b_key)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    grouped
+}
+
+fn rulings_near(left: &RulingSegment, right: &RulingSegment) -> bool {
+    let gap = RULING_CONNECT_GAP_PT;
+    let left_x0 = left.x0.min(left.x1) - gap;
+    let left_x1 = left.x0.max(left.x1) + gap;
+    let left_y0 = left.y0.min(left.y1) - gap;
+    let left_y1 = left.y0.max(left.y1) + gap;
+    let right_x0 = right.x0.min(right.x1);
+    let right_x1 = right.x0.max(right.x1);
+    let right_y0 = right.y0.min(right.y1);
+    let right_y1 = right.y0.max(right.y1);
+    left_x0 <= right_x1 && right_x0 <= left_x1 && left_y0 <= right_y1 && right_y0 <= left_y1
+}
+
+fn build_ruled_table(
+    page: u32,
+    spans: &[TextSpanItem],
+    component: &[RulingSegment],
+) -> Option<InferredTable> {
     let mut h_lines: Vec<(f32, f32, f32)> = Vec::new();
     let mut v_lines: Vec<(f32, f32, f32)> = Vec::new();
 
-    for r in rulings {
+    for r in component {
         let dx = (r.x1 - r.x0).abs();
         let dy = (r.y1 - r.y0).abs();
         if dy <= 2.0 && dx >= 15.0 {
@@ -198,7 +279,7 @@ fn detect_ruled_tables(
     }
 
     if h_lines.len() < 2 || v_lines.len() < 2 {
-        return Vec::new();
+        return None;
     }
 
     h_lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -227,21 +308,18 @@ fn detect_ruled_tables(
     }
 
     if clustered_y.len() < 2 || clustered_x.len() < 2 {
-        return Vec::new();
+        return None;
     }
 
     let rows = (clustered_y.len() - 1) as u32;
     let cols = (clustered_x.len() - 1) as u32;
 
-    let x0 = *clustered_x.first().unwrap_or(&0.0);
-    let x1 = *clustered_x.last().unwrap_or(&0.0);
-    let y0 = *clustered_y.first().unwrap_or(&0.0);
-    let y1 = *clustered_y.last().unwrap_or(&0.0);
+    let x0 = *clustered_x.first()?;
+    let x1 = *clustered_x.last()?;
+    let y0 = *clustered_y.first()?;
+    let y1 = *clustered_y.last()?;
 
-    let bbox = match Rect::new(x0, y0, x1, y1) {
-        Ok(rect) => rect,
-        Err(_) => return Vec::new(),
-    };
+    let bbox = Rect::new(x0, y0, x1, y1).ok()?;
 
     let mut cells = Vec::new();
     for r in 0..rows {
@@ -295,7 +373,7 @@ fn detect_ruled_tables(
     let non_empty_cells = cells.iter().filter(|c| !c.text.trim().is_empty()).count();
     let total_cells = (rows * cols) as usize;
     if total_cells == 0 || non_empty_cells == 0 {
-        return Vec::new();
+        return None;
     }
 
     let confidence = if non_empty_cells >= total_cells / 3 {
@@ -304,7 +382,7 @@ fn detect_ruled_tables(
         0.940
     };
 
-    vec![InferredTable {
+    Some(InferredTable {
         page,
         bbox,
         rows,
@@ -313,7 +391,7 @@ fn detect_ruled_tables(
         cells,
         confidence,
         detector: TableDetectorKind::Ruled,
-    }]
+    })
 }
 
 #[derive(Clone, Debug)]

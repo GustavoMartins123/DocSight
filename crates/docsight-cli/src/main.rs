@@ -263,6 +263,7 @@ struct TableSummary {
     confidence: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     detector: Option<String>,
+    review: bool,
     source: String,
 }
 
@@ -959,21 +960,14 @@ fn tables(
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
-    let is_pdf = source.format() == DocumentFormat::Pdf;
     let tables: Vec<TableSummary> = document
         .tables()
         .map(|(block, table)| {
-            let detector = if is_pdf {
-                if block.source.path.ends_with("ruled") {
-                    Some("ruled".to_owned())
-                } else if block.source.path.ends_with("alignment") {
-                    Some("alignment".to_owned())
-                } else {
-                    Some("inferred".to_owned())
-                }
-            } else {
-                Some("structural".to_owned())
-            };
+            let detector = table.detector.clone().or_else(|| {
+                (source.format() == DocumentFormat::Pdf).then(|| "inferred".to_owned())
+            });
+            let review = detector.as_deref().is_some_and(|name| name != "structural")
+                && block.confidence < 0.70;
             TableSummary {
                 id: block.id.to_string(),
                 page: block.page,
@@ -981,6 +975,7 @@ fn tables(
                 columns: table.columns,
                 confidence: Some(block.confidence),
                 detector,
+                review,
                 source: block.source.path.clone(),
             }
         })
@@ -1044,12 +1039,7 @@ fn tables(
                 .map(|c| format!("{c:.3}"))
                 .unwrap_or_else(|| "1.000".to_owned());
             let det_str = table.detector.as_deref().unwrap_or("structural");
-            let review_suffix =
-                if table.confidence.map(|c| c < 0.70).unwrap_or(false) && det_str != "structural" {
-                    "  [review]"
-                } else {
-                    ""
-                };
+            let review_suffix = if table.review { "  [review]" } else { "" };
             writeln!(
                 writer,
                 "{:<12} {:>5}  {:>6}   {:>10}  {}{}",

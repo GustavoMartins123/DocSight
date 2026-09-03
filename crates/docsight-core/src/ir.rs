@@ -93,6 +93,8 @@ pub struct TableBlock {
     pub cells: Vec<TableCell>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_widths_pt: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

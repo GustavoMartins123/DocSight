@@ -228,3 +228,48 @@ fn pdf_reconstruction_is_byte_for_byte_deterministic() -> Result<(), Box<dyn std
 
     Ok(())
 }
+
+#[test]
+fn detects_multiple_ruled_tables_on_one_page() -> Result<(), Box<dyn std::error::Error>> {
+    let pdf_path = fixture("sample_table_two_ruled.pdf");
+    let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
+
+    let tables_out = docsight().args(["tables", pdf_str, "--json"]).output()?;
+    assert!(tables_out.status.success());
+
+    let val: serde_json::Value = serde_json::from_slice(&tables_out.stdout)?;
+    let tables = val["result"]["tables"]
+        .as_array()
+        .ok_or("tables array missing")?;
+    assert_eq!(tables.len(), 2);
+    for table in tables {
+        assert_eq!(table["rows"], 3);
+        assert_eq!(table["columns"], 3);
+        assert_eq!(table["detector"], "ruled");
+        assert_eq!(table["review"], false);
+    }
+
+    let first_text = tables[0]["source"]
+        .as_str()
+        .ok_or("source missing")?
+        .to_owned();
+    let second_text = tables[1]["source"]
+        .as_str()
+        .ok_or("source missing")?
+        .to_owned();
+    assert_ne!(first_text, second_text);
+
+    Ok(())
+}
+
+#[test]
+fn review_flag_is_exposed_in_agent_json() -> Result<(), Box<dyn std::error::Error>> {
+    let pdf_path = fixture("sample_table_ruled.pdf");
+    let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
+    let tables_out = docsight().args(["tables", pdf_str, "--json"]).output()?;
+    assert!(tables_out.status.success());
+    let val: serde_json::Value = serde_json::from_slice(&tables_out.stdout)?;
+    let table = &val["result"]["tables"][0];
+    assert_eq!(table["review"], false);
+    Ok(())
+}

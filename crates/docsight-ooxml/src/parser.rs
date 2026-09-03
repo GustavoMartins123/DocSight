@@ -1210,6 +1210,7 @@ fn parse_table_at(
             header_rows,
             cells,
             column_widths_pt,
+            detector: None,
         },
         span,
     ))
