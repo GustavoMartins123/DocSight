@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
-use docsight_agent::AgentEnvelope;
+use docsight_agent::{
+    AgentEnvelope, NdjsonWriter, OutputLimits, QueryLimits, apply_bounded_collection, project_json,
+    truncate_json_strings,
+};
 use docsight_core::{
     BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
     Rect, table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
@@ -22,8 +25,51 @@ use std::process::ExitCode;
 struct Cli {
     #[arg(long, global = true)]
     json_errors: bool,
+
+    #[arg(long, global = true)]
+    ndjson: bool,
+
+    #[arg(long, global = true)]
+    max_bytes: Option<usize>,
+
+    #[arg(long, global = true)]
+    max_items: Option<usize>,
+
+    #[arg(long, global = true)]
+    text_limit: Option<usize>,
+
+    #[arg(long = "continue", global = true)]
+    continue_token: Option<String>,
+
+    #[arg(long, global = true, value_delimiter = ',')]
+    select: Option<Vec<String>>,
+
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    fn query_limits(&self) -> QueryLimits {
+        QueryLimits {
+            max_bytes: self.max_bytes,
+            max_items: self.max_items,
+            text_limit: self.text_limit,
+            continue_token: self.continue_token.clone(),
+            select: self.select.clone(),
+        }
+    }
+
+    fn is_agent_json(&self, subcommand_json: bool) -> bool {
+        subcommand_json
+            || self.max_bytes.is_some()
+            || self.max_items.is_some()
+            || self.text_limit.is_some()
+            || self.continue_token.is_some()
+            || self.select.is_some()
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -103,14 +149,14 @@ enum TableFormat {
     Tsv,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct InspectCapabilities {
     structure: bool,
     text: bool,
     render: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct InspectResult {
     format: DocumentFormat,
     size_bytes: u64,
@@ -128,7 +174,7 @@ struct InspectResult {
     engine: Option<&'static str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct HeadingRecord {
     id: ObjectId,
     level: u8,
@@ -136,24 +182,24 @@ struct HeadingRecord {
     source: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct OutlineResult {
     headings: Vec<HeadingRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct TextRecord {
     id: String,
     kind: &'static str,
     text: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct TextResult {
     blocks: Vec<TextRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct TableSummary {
     id: String,
     rows: u32,
@@ -161,7 +207,7 @@ struct TableSummary {
     source: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct TablesResult {
     tables: Vec<TableSummary>,
 }
@@ -194,7 +240,7 @@ struct PageResult {
     overlays: Vec<PageOverlayRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct ImageRecord {
     id: ObjectId,
     alt_text: Option<String>,
@@ -205,12 +251,12 @@ struct ImageRecord {
     resource: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct ImagesResult {
     images: Vec<ImageRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct LinkRecord {
     id: ObjectId,
     text: String,
@@ -219,7 +265,7 @@ struct LinkRecord {
     page: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct LinksResult {
     links: Vec<LinkRecord>,
 }
@@ -239,23 +285,67 @@ fn main() -> ExitCode {
 }
 
 fn execute(cli: &Cli) -> Result<(), DocsightError> {
+    let limits = cli.query_limits();
     match &cli.command {
-        Command::Inspect { path, json } => inspect(path, *json),
-        Command::Outline { path, json } => outline(path, *json),
-        Command::Text { path, json } => document_text(path, *json),
-        Command::Tables { path, json } => tables(path, *json),
+        Command::Inspect { path, json } => inspect(
+            path,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
+        Command::Outline { path, json } => outline(
+            path,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
+        Command::Text { path, json } => document_text(
+            path,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
+        Command::Tables { path, json } => tables(
+            path,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
         Command::Table {
             path,
             object,
             format,
-        } => table(path, object, *format),
-        Command::Page { path, page, json } => page_command(path, *page, *json),
+        } => table(path, object, *format, cli.quiet, cli.json_errors),
+        Command::Page { path, page, json } => page_command(
+            path,
+            *page,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
         Command::Render {
             path,
             page,
             dpi,
             out,
-        } => render(path, RenderTarget::Page { page: *page }, *dpi, out),
+        } => render(
+            path,
+            RenderTarget::Page { page: *page },
+            *dpi,
+            out,
+            cli.quiet,
+            cli.json_errors,
+        ),
         Command::Crop {
             path,
             page,
@@ -263,9 +353,38 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             object,
             dpi,
             out,
-        } => crop(path, *page, *bbox, object.as_deref(), *dpi, out),
-        Command::Images { path, json } => images(path, *json),
-        Command::Links { path, json } => links(path, *json),
+        } => {
+            let target = match (page, bbox, object) {
+                (Some(page), Some(bbox), None) => RenderTarget::Region {
+                    page: *page,
+                    bbox: *bbox,
+                },
+                (None, None, Some(id)) => RenderTarget::Object { id: id.clone() },
+                _ => {
+                    return Err(DocsightError::InvalidArgument {
+                        message: "crop requires either --page with --bbox or only --object"
+                            .to_owned(),
+                    });
+                }
+            };
+            render(path, target, *dpi, out, cli.quiet, cli.json_errors)
+        }
+        Command::Images { path, json } => images(
+            path,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
+        Command::Links { path, json } => links(
+            path,
+            cli.is_agent_json(*json),
+            cli.ndjson,
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
     }
 }
 
@@ -283,7 +402,14 @@ fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
     }
 }
 
-fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
+fn inspect(
+    path: &PathBuf,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
     let is_pdf = source.format() == DocumentFormat::Pdf;
@@ -320,63 +446,154 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         pages,
         engine: if is_pdf { Some(ENGINE_NAME) } else { None },
     };
-    if json {
-        write_json(&source, result, document.warnings)
-    } else {
+
+    if ndjson {
         let stdout = io::stdout();
-        let mut writer = stdout.lock();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "inspect".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let val = serde_json::to_value(&result).map_err(output_serialization_error)?;
+        writer.write_item("inspect", &val)?;
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(1)?;
+        return Ok(());
+    }
+
+    if json {
+        return write_single_json(&source, &result, document.warnings, limits);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "DOCSIGHT {} | {}",
+        env!("CARGO_PKG_VERSION"),
+        result.format
+    )
+    .map_err(stdout_error)?;
+    writeln!(writer, "Digest  sha256:{}", source.sha256()).map_err(stdout_error)?;
+    writeln!(writer, "Bytes   {}", result.size_bytes).map_err(stdout_error)?;
+    if let Some(paragraphs) = result.paragraphs {
+        writeln!(writer, "Paragraphs  {paragraphs}").map_err(stdout_error)?;
+    }
+    if let Some(headings) = result.headings {
+        writeln!(writer, "Headings    {headings}").map_err(stdout_error)?;
+    }
+    if let Some(tables) = result.tables {
+        writeln!(writer, "Tables      {tables}").map_err(stdout_error)?;
+    }
+    if let Some(figures) = result.figures {
+        if figures > 0 {
+            writeln!(writer, "Figures     {figures}").map_err(stdout_error)?;
+        }
+    }
+    if let Some(comments) = result.comments {
+        if comments > 0 {
+            writeln!(writer, "Comments    {comments}").map_err(stdout_error)?;
+        }
+    }
+    if let Some(tracked) = result.tracked {
         writeln!(
             writer,
-            "DOCSIGHT {} | {}",
-            env!("CARGO_PKG_VERSION"),
-            source.format()
+            "Tracked     {} insertions / {} deletions",
+            tracked.insertions, tracked.deletions
         )
         .map_err(stdout_error)?;
-        writeln!(writer, "Digest  sha256:{}", source.sha256()).map_err(stdout_error)?;
-        writeln!(writer, "Bytes   {}", source.size_bytes()).map_err(stdout_error)?;
-        if let Some(paragraphs) = result.paragraphs {
-            writeln!(writer, "Paragraphs  {paragraphs}").map_err(stdout_error)?;
-        }
-        if let Some(headings) = result.headings {
-            writeln!(writer, "Headings    {headings}").map_err(stdout_error)?;
-        }
-        if let Some(tables) = result.tables {
-            writeln!(writer, "Tables      {tables}").map_err(stdout_error)?;
-        }
-        if let Some(figures) = result.figures {
-            if figures > 0 {
-                writeln!(writer, "Figures     {figures}").map_err(stdout_error)?;
-            }
-        }
-        if let Some(comments) = result.comments {
-            if comments > 0 {
-                writeln!(writer, "Comments    {comments}").map_err(stdout_error)?;
-            }
-        }
-        if let Some(tracked) = result.tracked {
-            writeln!(
-                writer,
-                "Tracked     {} insertions / {} deletions",
-                tracked.insertions, tracked.deletions
-            )
-            .map_err(stdout_error)?;
-        }
-        if let Some(pages) = result.pages {
-            writeln!(writer, "Pages       {pages}").map_err(stdout_error)?;
-        }
-        if let Some(engine) = result.engine {
-            writeln!(writer, "PDF engine  {engine}").map_err(stdout_error)?;
-        }
-        emit_warnings(&document.warnings)
     }
+    if let Some(pages) = result.pages {
+        writeln!(writer, "Pages       {pages}").map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightError> {
+fn outline(
+    path: &PathBuf,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
-    if document.pages.is_empty() {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "unpaginated document layout required for page inspection".to_owned(),
+    let headings: Vec<HeadingRecord> = document
+        .headings()
+        .map(|(block, heading)| HeadingRecord {
+            id: block.id.clone(),
+            level: heading.level,
+            text: heading.text.clone(),
+            source: block.source.path.clone(),
+        })
+        .collect();
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "outline".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let offset = writer.continuation_offset();
+        for heading in headings.iter().skip(offset) {
+            let val = serde_json::to_value(heading).map_err(output_serialization_error)?;
+            if !writer.write_item("heading", &val)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(headings.len())?;
+        return Ok(());
+    }
+
+    if json {
+        let envelope = apply_bounded_collection(
+            &headings,
+            limits,
+            "outline",
+            &source,
+            document.warnings,
+            |h| {
+                serde_json::to_value(OutlineResult { headings: h })
+                    .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    for heading in &headings {
+        let indentation = "  ".repeat(usize::from(heading.level.saturating_sub(1)));
+        writeln!(writer, "{indentation}[{}] {}", heading.id, heading.text).map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, quiet, json_errors)
+}
+
+fn page_command(
+    path: &PathBuf,
+    number: u32,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    if number == 0 {
+        return Err(DocsightError::InvalidArgument {
+            message: "page numbers are 1-based".to_owned(),
         });
     }
     let target_page = document
@@ -384,6 +601,9 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: format!("page {number}"),
         })?;
+    let target_page_number = target_page.number;
+    let target_page_width = target_page.width_pt;
+    let target_page_height = target_page.height_pt;
     let spans: Vec<PageSpanRecord> = document
         .page_blocks(number)
         .filter_map(|block| {
@@ -408,29 +628,74 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
             bbox: o.bbox,
         })
         .collect();
-    let page_result = PageResult {
-        number: target_page.number,
-        width_pt: target_page.width_pt,
-        height_pt: target_page.height_pt,
-        spans,
-        overlays,
-    };
-    if json {
-        return write_json(&source, &page_result, document.warnings);
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "page".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        writer.write_page_begin(number)?;
+        let offset = writer.continuation_offset();
+        let total_items = spans.len() + overlays.len();
+        let mut idx = 0;
+        for span in &spans {
+            if idx >= offset {
+                let val = serde_json::to_value(span).map_err(output_serialization_error)?;
+                if !writer.write_item("span", &val)? {
+                    break;
+                }
+            }
+            idx += 1;
+        }
+        for overlay in &overlays {
+            if idx >= offset {
+                let val = serde_json::to_value(overlay).map_err(output_serialization_error)?;
+                if !writer.write_item("overlay", &val)? {
+                    break;
+                }
+            }
+            idx += 1;
+        }
+        writer.write_page_end(number)?;
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(total_items)?;
+        return Ok(());
     }
+
+    if json {
+        let envelope =
+            apply_bounded_collection(&spans, limits, "page", &source, document.warnings, |s| {
+                serde_json::to_value(PageResult {
+                    number: target_page_number,
+                    width_pt: target_page_width,
+                    height_pt: target_page_height,
+                    spans: s,
+                    overlays: overlays.clone(),
+                })
+                .map_err(output_serialization_error)
+            })?;
+        return write_envelope(&envelope);
+    }
+
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     writeln!(
         writer,
         "Page {}  {}x{} pt  {} spans  {} overlays",
-        page_result.number,
-        page_result.width_pt,
-        page_result.height_pt,
-        page_result.spans.len(),
-        page_result.overlays.len()
+        target_page_number,
+        target_page_width,
+        target_page_height,
+        spans.len(),
+        overlays.len()
     )
     .map_err(stdout_error)?;
-    for span in &page_result.spans {
+    for span in &spans {
         writeln!(
             writer,
             "[{}] [{},{},{},{}] {}",
@@ -438,7 +703,7 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
         )
         .map_err(stdout_error)?;
     }
-    for overlay in &page_result.overlays {
+    for overlay in &overlays {
         let bbox_str = overlay
             .bbox
             .map(|b| format!("[{},{},{},{}]", b.x0, b.y0, b.x1, b.y1))
@@ -450,73 +715,17 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
         )
         .map_err(stdout_error)?;
     }
-    emit_warnings(&document.warnings)
+    emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn render(path: &PathBuf, target: RenderTarget, dpi: u16, out: &Path) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    let rendered = render_document(&source, &RenderRequest { target, dpi })?;
-    rendered.write(out)?;
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    writeln!(
-        writer,
-        "Rendered page {} at {} DPI to {} ({}x{} px)",
-        rendered.metadata.page,
-        rendered.metadata.dpi,
-        out.display(),
-        rendered.metadata.width_px,
-        rendered.metadata.height_px
-    )
-    .map_err(stdout_error)?;
-    emit_warnings(&rendered.warnings)
-}
-
-fn crop(
+fn document_text(
     path: &PathBuf,
-    page: Option<u32>,
-    bbox: Option<Rect>,
-    object: Option<&str>,
-    dpi: u16,
-    out: &Path,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let target = match (page, bbox, object) {
-        (Some(page), Some(bbox), None) => RenderTarget::Region { page, bbox },
-        (None, None, Some(id)) => RenderTarget::Object { id: id.to_owned() },
-        _ => {
-            return Err(DocsightError::InvalidArgument {
-                message: "crop requires either --page with --bbox or only --object".to_owned(),
-            });
-        }
-    };
-    render(path, target, dpi, out)
-}
-
-fn outline(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
-    let headings: Vec<HeadingRecord> = document
-        .headings()
-        .map(|(block, heading)| HeadingRecord {
-            id: block.id.clone(),
-            level: heading.level,
-            text: heading.text.clone(),
-            source: block.source.path.clone(),
-        })
-        .collect();
-    if json {
-        return write_json(&source, OutlineResult { headings }, document.warnings);
-    }
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    for heading in &headings {
-        let indentation = "  ".repeat(usize::from(heading.level.saturating_sub(1)));
-        writeln!(writer, "{indentation}[{}] {}", heading.id, heading.text).map_err(stdout_error)?;
-    }
-    emit_warnings(&document.warnings)
-}
-
-fn document_text(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
     let blocks: Vec<TextRecord> = document
@@ -546,18 +755,54 @@ fn document_text(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
             }
         })
         .collect();
-    if json {
-        return write_json(&source, TextResult { blocks }, document.warnings);
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "text".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let offset = writer.continuation_offset();
+        for block in blocks.iter().skip(offset) {
+            let val = serde_json::to_value(block).map_err(output_serialization_error)?;
+            if !writer.write_item("block", &val)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(blocks.len())?;
+        return Ok(());
     }
+
+    if json {
+        let envelope =
+            apply_bounded_collection(&blocks, limits, "text", &source, document.warnings, |b| {
+                serde_json::to_value(TextResult { blocks: b }).map_err(output_serialization_error)
+            })?;
+        return write_envelope(&envelope);
+    }
+
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     for block in &blocks {
         writeln!(writer, "[{}] {} {}", block.id, block.kind, block.text).map_err(stdout_error)?;
     }
-    emit_warnings(&document.warnings)
+    emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn tables(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
+fn tables(
+    path: &PathBuf,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
     let tables: Vec<TableSummary> = document
@@ -569,86 +814,340 @@ fn tables(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
             source: block.source.path.clone(),
         })
         .collect();
-    if json {
-        return write_json(&source, TablesResult { tables }, document.warnings);
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "tables".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let offset = writer.continuation_offset();
+        for tbl in tables.iter().skip(offset) {
+            let val = serde_json::to_value(tbl).map_err(output_serialization_error)?;
+            if !writer.write_item("table", &val)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(tables.len())?;
+        return Ok(());
     }
+
+    if json {
+        let envelope = apply_bounded_collection(
+            &tables,
+            limits,
+            "tables",
+            &source,
+            document.warnings,
+            |tbls| {
+                serde_json::to_value(TablesResult { tables: tbls })
+                    .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     for table in &tables {
         writeln!(
             writer,
-            "{}  {}x{}  {}",
+            "[{}] {} rows x {} cols ({})",
             table.id, table.rows, table.columns, table.source
         )
         .map_err(stdout_error)?;
     }
-    emit_warnings(&document.warnings)
+    emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn table(path: &PathBuf, object: &str, format: TableFormat) -> Result<(), DocsightError> {
+fn table(
+    path: &PathBuf,
+    object: &str,
+    format: TableFormat,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
-    let (_block, selected) =
-        document
-            .find_table(object)
-            .ok_or_else(|| DocsightError::ObjectNotFound {
-                object: object.to_owned(),
-            })?;
-    match format {
-        TableFormat::Json => write_json(&source, selected, document.warnings.clone()),
-        TableFormat::Markdown => {
-            let markdown = table_to_markdown(selected)?;
-            let stdout = io::stdout();
-            let mut writer = stdout.lock();
-            writer
-                .write_all(markdown.as_bytes())
-                .map_err(stdout_error)?;
-            emit_warnings(&document.warnings)
-        }
-        TableFormat::Csv => {
-            let csv = table_to_csv(selected)?;
-            let stdout = io::stdout();
-            let mut writer = stdout.lock();
-            writer.write_all(csv.as_bytes()).map_err(stdout_error)?;
-            emit_warnings(&document.warnings)
-        }
-        TableFormat::Tsv => {
-            let tsv = table_to_tsv(selected)?;
-            let stdout = io::stdout();
-            let mut writer = stdout.lock();
-            writer.write_all(tsv.as_bytes()).map_err(stdout_error)?;
-            emit_warnings(&document.warnings)
-        }
-        TableFormat::Html => {
-            let html = table_to_html(selected)?;
-            let stdout = io::stdout();
-            let mut writer = stdout.lock();
-            writer.write_all(html.as_bytes()).map_err(stdout_error)?;
-            emit_warnings(&document.warnings)
-        }
-    }
-}
+    let target = document
+        .tables()
+        .find(|(block, _)| block.id.to_string() == object)
+        .map(|(_, table)| table)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: object.to_owned(),
+        })?;
 
-fn write_json<T>(
-    source: &DocumentSource,
-    result: T,
-    warnings: Vec<Diagnostic>,
-) -> Result<(), DocsightError>
-where
-    T: Serialize,
-{
-    let envelope = AgentEnvelope::with_warnings(source, result, warnings);
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    serde_json::to_writer(&mut writer, &envelope).map_err(output_serialization_error)?;
+    match format {
+        TableFormat::Json => {
+            return write_single_json(
+                &source,
+                target,
+                document.warnings.clone(),
+                &QueryLimits::default(),
+            );
+        }
+        TableFormat::Markdown => {
+            let md = table_to_markdown(target)?;
+            write!(writer, "{md}").map_err(stdout_error)?;
+        }
+        TableFormat::Csv => {
+            let csv = table_to_csv(target)?;
+            write!(writer, "{csv}").map_err(stdout_error)?;
+        }
+        TableFormat::Html => {
+            let html = table_to_html(target)?;
+            write!(writer, "{html}").map_err(stdout_error)?;
+        }
+        TableFormat::Tsv => {
+            let tsv = table_to_tsv(target)?;
+            write!(writer, "{tsv}").map_err(stdout_error)?;
+        }
+    }
+    emit_warnings(&document.warnings, quiet, json_errors)
+}
+
+fn render(
+    path: &PathBuf,
+    target: RenderTarget,
+    dpi: u16,
+    out: &Path,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let rendered = render_document(&source, &RenderRequest { target, dpi })?;
+    rendered.write(out)?;
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Rendered page {} at {} DPI to {} ({}x{} px)",
+        rendered.metadata.page,
+        rendered.metadata.dpi,
+        out.display(),
+        rendered.metadata.width_px,
+        rendered.metadata.height_px
+    )
+    .map_err(stdout_error)?;
+    emit_warnings(&rendered.warnings, quiet, json_errors)
+}
+
+fn images(
+    path: &PathBuf,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let images: Vec<ImageRecord> = document
+        .figures()
+        .map(|(block, fig)| ImageRecord {
+            id: block.id.clone(),
+            alt_text: fig.alt_text.clone(),
+            caption: fig.caption.clone(),
+            width_pt: fig.width_pt,
+            height_pt: fig.height_pt,
+            page: block.page,
+            resource: fig.resource_id.clone(),
+        })
+        .collect();
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "images".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let offset = writer.continuation_offset();
+        for img in images.iter().skip(offset) {
+            let val = serde_json::to_value(img).map_err(output_serialization_error)?;
+            if !writer.write_item("image", &val)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(images.len())?;
+        return Ok(());
+    }
+
+    if json {
+        let envelope = apply_bounded_collection(
+            &images,
+            limits,
+            "images",
+            &source,
+            document.warnings,
+            |imgs| {
+                serde_json::to_value(ImagesResult { images: imgs })
+                    .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Images: {}", images.len()).map_err(stdout_error)?;
+    for img in &images {
+        let page_str = img
+            .page
+            .map(|p| format!("p.{p}"))
+            .unwrap_or_else(|| "unplaced".to_owned());
+        let dims = match (img.width_pt, img.height_pt) {
+            (Some(w), Some(h)) => format!("{w:.1}x{h:.1} pt"),
+            _ => "unknown size".to_owned(),
+        };
+        let label = img
+            .alt_text
+            .as_deref()
+            .or(img.caption.as_deref())
+            .unwrap_or("");
+        writeln!(writer, "[{}] {} {} \"{}\"", img.id, page_str, dims, label)
+            .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, quiet, json_errors)
+}
+
+fn links(
+    path: &PathBuf,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let links: Vec<LinkRecord> = document
+        .links
+        .iter()
+        .map(|link| LinkRecord {
+            id: link.id.clone(),
+            text: link.text.clone(),
+            target: link.target.clone(),
+            is_external: link.is_external,
+            page: link.page,
+        })
+        .collect();
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "links".into(),
+            source.sha256().to_owned(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let offset = writer.continuation_offset();
+        for link in links.iter().skip(offset) {
+            let val = serde_json::to_value(link).map_err(output_serialization_error)?;
+            if !writer.write_item("link", &val)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish(links.len())?;
+        return Ok(());
+    }
+
+    if json {
+        let envelope = apply_bounded_collection(
+            &links,
+            limits,
+            "links",
+            &source,
+            document.warnings,
+            |lnks| {
+                serde_json::to_value(LinksResult { links: lnks })
+                    .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Links: {}", links.len()).map_err(stdout_error)?;
+    for link in &links {
+        let page_str = link
+            .page
+            .map(|p| format!("p.{p}"))
+            .unwrap_or_else(|| "unplaced".to_owned());
+        let kind_str = if link.is_external { "EXT" } else { "INT" };
+        writeln!(
+            writer,
+            "[{}] {} [{}] \"{}\" -> {}",
+            link.id, page_str, kind_str, link.text, link.target
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, quiet, json_errors)
+}
+
+fn write_single_json<T: Serialize>(
+    source: &DocumentSource,
+    result: &T,
+    warnings: Vec<Diagnostic>,
+    limits: &QueryLimits,
+) -> Result<(), DocsightError> {
+    let mut val = serde_json::to_value(result).map_err(output_serialization_error)?;
+    if let Some(text_limit) = limits.text_limit {
+        truncate_json_strings(&mut val, text_limit);
+    }
+    if let Some(ref select) = limits.select {
+        val = project_json(&val, select);
+    }
+    let envelope = AgentEnvelope::with_limits(source, val, warnings, OutputLimits::default());
+    write_envelope(&envelope)
+}
+
+fn write_envelope<T: Serialize>(envelope: &AgentEnvelope<T>) -> Result<(), DocsightError> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    serde_json::to_writer(&mut writer, envelope).map_err(output_serialization_error)?;
     writer.write_all(b"\n").map_err(stdout_error)
 }
 
-fn emit_warnings(warnings: &[Diagnostic]) -> Result<(), DocsightError> {
+fn emit_warnings(
+    warnings: &[Diagnostic],
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    if quiet {
+        return Ok(());
+    }
     let stderr = io::stderr();
     let mut writer = stderr.lock();
     for warning in warnings {
-        writeln!(writer, "{}: {}", warning.code, warning.message).map_err(stderr_error)?;
+        if json_errors {
+            let val = serde_json::json!({
+                "schema": docsight_agent::AGENT_SCHEMA,
+                "warning": warning,
+            });
+            let line = serde_json::to_string(&val).map_err(output_serialization_error)?;
+            writeln!(writer, "{line}").map_err(stderr_error)?;
+        } else {
+            writeln!(writer, "{}: {}", warning.code, warning.message).map_err(stderr_error)?;
+        }
     }
     Ok(())
 }
@@ -686,102 +1185,21 @@ fn stderr_error(source: io::Error) -> DocsightError {
     }
 }
 
-fn parse_bbox(value: &str) -> Result<Rect, String> {
-    let parts = value.split(',').collect::<Vec<_>>();
-    if parts.len() != 4 {
-        return Err("bbox must contain x0,y0,x1,y1".to_owned());
-    }
-    let coordinates = parts
-        .iter()
-        .map(|part| {
-            part.parse::<f32>()
-                .map_err(|_| "bbox coordinates must be finite numbers".to_owned())
+fn parse_bbox(raw: &str) -> Result<Rect, String> {
+    let values = raw
+        .split(',')
+        .map(str::trim)
+        .map(|value| {
+            value
+                .parse::<f32>()
+                .map_err(|error| format!("invalid coordinate '{value}': {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Rect::new(
-        coordinates[0],
-        coordinates[1],
-        coordinates[2],
-        coordinates[3],
-    )
-    .map_err(|error| error.to_string())
-}
-
-fn images(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
-    let images: Vec<ImageRecord> = document
-        .figures()
-        .map(|(block, fig)| ImageRecord {
-            id: block.id.clone(),
-            alt_text: fig.alt_text.clone(),
-            caption: fig.caption.clone(),
-            width_pt: fig.width_pt,
-            height_pt: fig.height_pt,
-            page: block.page,
-            resource: fig.resource_id.clone(),
-        })
-        .collect();
-    let result = ImagesResult { images };
-    if json {
-        return write_json(&source, &result, document.warnings);
+    if values.len() != 4 {
+        return Err(format!(
+            "bounding box expects 4 comma-separated numbers, got {}",
+            values.len()
+        ));
     }
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    writeln!(writer, "Images: {}", result.images.len()).map_err(stdout_error)?;
-    for img in &result.images {
-        let page_str = img
-            .page
-            .map(|p| format!("p.{p}"))
-            .unwrap_or_else(|| "unplaced".to_owned());
-        let dims = match (img.width_pt, img.height_pt) {
-            (Some(w), Some(h)) => format!("{:.1}x{:.1} pt", w, h),
-            _ => "unknown dims".to_owned(),
-        };
-        let label = img
-            .alt_text
-            .as_deref()
-            .or(img.caption.as_deref())
-            .unwrap_or("");
-        writeln!(writer, "[{}] {} {} \"{}\"", img.id, page_str, dims, label)
-            .map_err(stdout_error)?;
-    }
-    emit_warnings(&document.warnings)
-}
-
-fn links(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
-    let links: Vec<LinkRecord> = document
-        .links
-        .iter()
-        .map(|link| LinkRecord {
-            id: link.id.clone(),
-            text: link.text.clone(),
-            target: link.target.clone(),
-            is_external: link.is_external,
-            page: link.page,
-        })
-        .collect();
-    let result = LinksResult { links };
-    if json {
-        return write_json(&source, &result, document.warnings);
-    }
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    writeln!(writer, "Links: {}", result.links.len()).map_err(stdout_error)?;
-    for link in &result.links {
-        let page_str = link
-            .page
-            .map(|p| format!("p.{p}"))
-            .unwrap_or_else(|| "unplaced".to_owned());
-        let kind_str = if link.is_external { "EXT" } else { "INT" };
-        writeln!(
-            writer,
-            "[{}] {} [{}] \"{}\" -> {}",
-            link.id, page_str, kind_str, link.text, link.target
-        )
-        .map_err(stdout_error)?;
-    }
-    emit_warnings(&document.warnings)
+    Rect::new(values[0], values[1], values[2], values[3]).map_err(|error| error.to_string())
 }

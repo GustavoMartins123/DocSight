@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentEnvelope",
+  "type": "object",
+  "required": [
+    "schema",
+    "engine",
+    "document",
+    "result",
+    "warnings",
+    "limits"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "docsight.agent/v1"
+    },
+    "engine": {
+      "type": "string"
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "id",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "result": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "diagnostic.json"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "truncated"
+      ],
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "continuation_token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_items": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "returned_items": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

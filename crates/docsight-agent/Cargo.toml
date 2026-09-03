@@ -8,8 +8,6 @@ license.workspace = true
 [dependencies]
 docsight-core = { path = "../docsight-core" }
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
 
 [lints]
