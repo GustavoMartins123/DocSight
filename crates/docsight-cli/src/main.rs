@@ -13,6 +13,7 @@ use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{RenderRequest, RenderTarget, render_document};
 use serde::Serialize;
+use sha2::Digest;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -24,6 +25,9 @@ use std::process::ExitCode;
     about = "Headless document inspection for agents"
 )]
 struct Cli {
+    #[arg(long, global = true)]
+    sandbox: bool,
+
     #[arg(long, global = true)]
     json_errors: bool,
 
@@ -154,6 +158,11 @@ enum Command {
         threshold: u8,
         #[arg(long)]
         out_dir: Option<PathBuf>,
+    },
+    Fingerprint {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -295,6 +304,30 @@ struct LinksResult {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.sandbox {
+        let raw_args: Vec<String> = std::env::args()
+            .skip(1)
+            .filter(|arg| arg != "--sandbox")
+            .collect();
+        match docsight_worker::run_in_sandbox(
+            None,
+            &docsight_worker::SandboxPolicy::default(),
+            &raw_args,
+        ) {
+            Ok(output) => {
+                let _ = io::stdout().write_all(&output.stdout);
+                let _ = io::stderr().write_all(&output.stderr);
+                return ExitCode::from(output.exit_code);
+            }
+            Err(error) => {
+                let exit_code = error.exit_code();
+                if emit_error(&error, cli.json_errors).is_err() {
+                    return ExitCode::from(40);
+                }
+                return ExitCode::from(exit_code);
+            }
+        }
+    }
     match execute(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -433,6 +466,13 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet: cli.quiet,
             json_errors: cli.json_errors,
         }),
+        Command::Fingerprint { path, json } => fingerprint(
+            path,
+            cli.is_agent_json(*json),
+            &limits,
+            cli.quiet,
+            cli.json_errors,
+        ),
     }
 }
 
@@ -1362,4 +1402,85 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
         writeln!(writer, "Visual diffs written to {}", dir.display()).map_err(stdout_error)?;
     }
     emit_warnings(&diff_result.warnings, args.quiet, args.json_errors)
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct FingerprintRecord {
+    file_sha256: String,
+    engine: String,
+    ooxml_engine: String,
+    pdf_engine: String,
+    raster_engine: String,
+    fonts: String,
+    layout_profile: String,
+    result_fingerprint: String,
+}
+
+fn fingerprint(
+    path: &Path,
+    json: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let file_sha256 = source.sha256().to_owned();
+    let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
+    let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
+    let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));
+    let raster_engine = format!("docsight-render {}", env!("CARGO_PKG_VERSION"));
+    let fonts = "1cb9d8f572a1e809".to_owned();
+    let layout_profile = "agent-fidelity-v1".to_owned();
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(file_sha256.as_bytes());
+    hasher.update(b"|");
+    hasher.update(engine.as_bytes());
+    hasher.update(b"|");
+    hasher.update(ooxml_engine.as_bytes());
+    hasher.update(b"|");
+    hasher.update(pdf_engine.as_bytes());
+    hasher.update(b"|");
+    hasher.update(raster_engine.as_bytes());
+    hasher.update(b"|");
+    hasher.update(fonts.as_bytes());
+    hasher.update(b"|");
+    let hash = hasher.finalize();
+    let mut result_fingerprint = String::with_capacity(64);
+    for byte in hash {
+        use std::fmt::Write as _;
+        let _ = write!(&mut result_fingerprint, "{byte:02x}");
+    }
+
+    let record = FingerprintRecord {
+        file_sha256,
+        engine,
+        ooxml_engine,
+        pdf_engine,
+        raster_engine,
+        fonts,
+        layout_profile,
+        result_fingerprint,
+    };
+
+    if json {
+        return write_single_json(&source, &record, Vec::new(), limits);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "{:<18} {}", "file_sha256", record.file_sha256).map_err(stdout_error)?;
+    writeln!(writer, "{:<18} {}", "engine", record.engine).map_err(stdout_error)?;
+    writeln!(writer, "{:<18} {}", "ooxml_engine", record.ooxml_engine).map_err(stdout_error)?;
+    writeln!(writer, "{:<18} {}", "pdf_engine", record.pdf_engine).map_err(stdout_error)?;
+    writeln!(writer, "{:<18} {}", "raster_engine", record.raster_engine).map_err(stdout_error)?;
+    writeln!(writer, "{:<18} {}", "fonts", record.fonts).map_err(stdout_error)?;
+    writeln!(writer, "{:<18} {}", "layout_profile", record.layout_profile).map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "{:<18} {}",
+        "result_fingerprint", record.result_fingerprint
+    )
+    .map_err(stdout_error)?;
+    emit_warnings(&[], quiet, json_errors)
 }

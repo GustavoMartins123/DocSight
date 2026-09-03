@@ -1,32 +1,31 @@
 [package]
-name = "docsight-cli"
+name = "docsight-worker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "docsight_worker"
+path = "src/lib.rs"
+
 [[bin]]
-name = "docsight"
+name = "docsight-worker"
 path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
-docsight-agent = { path = "../docsight-agent" }
 docsight-core = { path = "../docsight-core" }
 docsight-layout = { path = "../docsight-layout" }
 docsight-ooxml = { path = "../docsight-ooxml" }
 docsight-pdf = { path = "../docsight-pdf" }
 docsight-render = { path = "../docsight-render" }
-docsight-tables = { path = "../docsight-tables" }
-docsight-diff = { path = "../docsight-diff" }
-docsight-worker = { path = "../docsight-worker" }
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-zip.workspace = true
 
 [lints]
 workspace = true

@@ -205,9 +205,12 @@ dependencies = [
  "docsight-pdf",
  "docsight-render",
  "docsight-tables",
+ "docsight-worker",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "zip",
 ]
 
 [[package]]
@@ -283,6 +286,21 @@ dependencies = [
  "docsight-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "docsight-worker"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "docsight-core",
+ "docsight-layout",
+ "docsight-ooxml",
+ "docsight-pdf",
+ "docsight-render",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
