@@ -1,12 +1,12 @@
 mod content;
 mod raster;
+mod reconstruction;
 mod syntax;
 
 use content::{DisplayCommand, TextRun, fonts_from_resources, parse_content};
 use docsight_core::{
-    Block, BlockContent, BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document,
-    DocumentFormat, DocumentMetadata, DocumentSource, ObjectId, Page, ParagraphBlock, Rect,
-    SourceSpan,
+    Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
+    DocumentSource, ObjectId, Page, Rect,
 };
 use raster::{MAX_DPI, MIN_DPI};
 use serde::Serialize;
@@ -197,39 +197,26 @@ impl<'a> PdfDocument<'a> {
         for page_num in 1..=self.page_count() {
             let page_record = self.page_record(page_num)?;
             let parsed = self.parse_page(page_num)?;
-            let mut page_block_ids = Vec::new();
-
             if parsed.approximated_base14_font {
                 all_warnings.push(base14_warning(page_num));
             }
 
-            for (index, run) in parsed.text_runs.into_iter().enumerate() {
-                global_reading_order =
-                    global_reading_order.checked_add(1).ok_or_else(page_limit)?;
-                let span = self.make_span(page_num, index, run, parsed.approximated_base14_font)?;
-                let block = Block {
-                    id: span.id.clone(),
-                    kind: BlockKind::Paragraph,
-                    page: Some(page_num),
-                    bbox: Some(span.bbox),
-                    z_index: 0,
-                    reading_order: global_reading_order,
-                    source: SourceSpan::new(span.source),
-                    confidence: span.confidence,
-                    content: BlockContent::Paragraph(ParagraphBlock {
-                        text: span.text,
-                        style_id: None,
-                    }),
-                };
-                page_block_ids.push(block.id.clone());
-                blocks.push(block);
-            }
+            let reconstructed = reconstruction::reconstruct_page_semantics(
+                page_num,
+                self.source.sha256(),
+                page_record.media_box.width(),
+                page_record.media_box.height(),
+                &parsed.text_runs,
+                &parsed.commands,
+                &mut global_reading_order,
+            )?;
+            blocks.extend(reconstructed.blocks);
 
             pages.push(Page {
                 number: page_num,
                 width_pt: page_record.media_box.width(),
                 height_pt: page_record.media_box.height(),
-                block_ids: page_block_ids,
+                block_ids: reconstructed.block_ids,
                 overlays: Vec::new(),
             });
         }

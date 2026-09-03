@@ -1,0 +1,56 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 866 >>
+stream
+0 0 0 RG
+1 w
+50 480 m 250 480 l S
+50 510 m 250 510 l S
+50 540 m 250 540 l S
+50 480 m 50 540 l S
+150 480 m 150 540 l S
+250 480 m 250 540 l S
+0 0 0 rg
+BT /F2 18 Tf 50 780 Td (Project Architecture Report) Tj ET
+BT /F2 14 Tf 50 730 Td (1. System Overview) Tj ET
+BT /F1 10 Tf 50 700 Td (This document describes the native architecture of the system.) Tj ET
+BT /F1 10 Tf 50 685 Td (All components operate deterministically without remote dependencies.) Tj ET
+BT /F2 14 Tf 50 640 Td (2. Performance Metrics) Tj ET
+BT /F1 10 Tf 50 610 Td (Key metrics are summarized in the table below for quick review.) Tj ET
+BT /F2 10 Tf 60 520 Td (Metric) Tj ET
+BT /F2 10 Tf 160 520 Td (Score) Tj ET
+BT /F1 10 Tf 60 490 Td (Latency) Tj ET
+BT /F1 10 Tf 160 490 Td (12ms) Tj ET
+BT /F1 10 Tf 50 440 Td (In conclusion, the native pipeline satisfies all operational safety constraints.) Tj ET
+
+endstream
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000000321 00000 n 
+0000001238 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1313
+%%EOF

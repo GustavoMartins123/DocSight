@@ -1,0 +1,50 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 525 >>
+stream
+0 0 0 rg
+BT /F2 16 Tf 50 780 Td (Financial Schedule) Tj ET
+BT /F2 10 Tf 50 720 Td (Account) Tj ET
+BT /F2 10 Tf 180 720 Td (Q1) Tj ET
+BT /F2 10 Tf 300 720 Td (Q2) Tj ET
+BT /F1 10 Tf 50 690 Td (Revenue) Tj ET
+BT /F1 10 Tf 180 690 Td ($12,000) Tj ET
+BT /F1 10 Tf 300 690 Td ($14,500) Tj ET
+BT /F1 10 Tf 50 660 Td (Expenses) Tj ET
+BT /F1 10 Tf 180 660 Td ($8,000) Tj ET
+BT /F1 10 Tf 300 660 Td ($9,200) Tj ET
+BT /F1 10 Tf 50 630 Td (Net Income) Tj ET
+BT /F1 10 Tf 180 630 Td ($4,000) Tj ET
+BT /F1 10 Tf 300 630 Td ($5,300) Tj ET
+
+endstream
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000000321 00000 n 
+0000000897 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+972
+%%EOF

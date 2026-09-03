@@ -1,5 +1,5 @@
 [package]
-name = "docsight-pdf"
+name = "docsight-tables"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,11 +7,8 @@ license.workspace = true
 
 [dependencies]
 docsight-core = { path = "../docsight-core" }
-docsight-tables = { path = "../docsight-tables" }
 serde.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

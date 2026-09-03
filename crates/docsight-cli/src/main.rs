@@ -202,8 +202,14 @@ struct TextResult {
 #[derive(Clone, Debug, Serialize)]
 struct TableSummary {
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
     rows: u32,
     columns: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detector: Option<String>,
     source: String,
 }
 
@@ -437,10 +443,10 @@ fn inspect(
             text: true,
             render: true,
         },
-        paragraphs: if is_pdf { None } else { Some(paragraphs) },
-        headings: if is_pdf { None } else { Some(headings) },
-        tables: if is_pdf { None } else { Some(tables) },
-        figures: if is_pdf { None } else { Some(figures) },
+        paragraphs: Some(paragraphs),
+        headings: Some(headings),
+        tables: Some(tables),
+        figures: Some(figures),
         comments: if is_pdf { None } else { Some(comments) },
         tracked,
         pages,
@@ -805,13 +811,30 @@ fn tables(
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
+    let is_pdf = source.format() == DocumentFormat::Pdf;
     let tables: Vec<TableSummary> = document
         .tables()
-        .map(|(block, table)| TableSummary {
-            id: block.id.to_string(),
-            rows: table.rows,
-            columns: table.columns,
-            source: block.source.path.clone(),
+        .map(|(block, table)| {
+            let detector = if is_pdf {
+                if block.source.path.ends_with("ruled") {
+                    Some("ruled".to_owned())
+                } else if block.source.path.ends_with("alignment") {
+                    Some("alignment".to_owned())
+                } else {
+                    Some("inferred".to_owned())
+                }
+            } else {
+                Some("structural".to_owned())
+            };
+            TableSummary {
+                id: block.id.to_string(),
+                page: block.page,
+                rows: table.rows,
+                columns: table.columns,
+                confidence: Some(block.confidence),
+                detector,
+                source: block.source.path.clone(),
+            }
         })
         .collect();
 
@@ -855,13 +878,37 @@ fn tables(
 
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    for table in &tables {
+    if !tables.is_empty() {
         writeln!(
             writer,
-            "[{}] {} rows x {} cols ({})",
-            table.id, table.rows, table.columns, table.source
+            "{:<12} {:>5}  {:>6}   {:>10}  Detector",
+            "ID", "Page", "Size", "Confidence"
         )
         .map_err(stdout_error)?;
+        for table in &tables {
+            let page_str = table
+                .page
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "-".to_owned());
+            let size_str = format!("{}x{}", table.rows, table.columns);
+            let conf_str = table
+                .confidence
+                .map(|c| format!("{c:.3}"))
+                .unwrap_or_else(|| "1.000".to_owned());
+            let det_str = table.detector.as_deref().unwrap_or("structural");
+            let review_suffix =
+                if table.confidence.map(|c| c < 0.70).unwrap_or(false) && det_str != "structural" {
+                    "  [review]"
+                } else {
+                    ""
+                };
+            writeln!(
+                writer,
+                "{:<12} {:>5}  {:>6}   {:>10}  {}{}",
+                table.id, page_str, size_str, conf_str, det_str, review_suffix
+            )
+            .map_err(stdout_error)?;
+        }
     }
     emit_warnings(&document.warnings, quiet, json_errors)
 }

@@ -17,6 +17,7 @@ docsight-layout = { path = "../docsight-layout" }
 docsight-ooxml = { path = "../docsight-ooxml" }
 docsight-pdf = { path = "../docsight-pdf" }
 docsight-render = { path = "../docsight-render" }
+docsight-tables = { path = "../docsight-tables" }
 serde.workspace = true
 serde_json.workspace = true
 

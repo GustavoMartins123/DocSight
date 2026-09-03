@@ -1,0 +1,696 @@
+use docsight_core::{
+    Block, BlockContent, BlockKind, ObjectId, Rect, SourceSpan, TableBlock, TableCell,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableDetectorKind {
+    Ruled,
+    Alignment,
+    Structural,
+}
+
+impl std::fmt::Display for TableDetectorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ruled => write!(f, "ruled"),
+            Self::Alignment => write!(f, "alignment"),
+            Self::Structural => write!(f, "structural"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSpanItem {
+    pub text: String,
+    pub bbox: Rect,
+    pub font_size: f32,
+    pub bold: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RulingSegment {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InferredTableCell {
+    pub row: u32,
+    pub column: u32,
+    pub row_span: u32,
+    pub column_span: u32,
+    pub bbox: Option<Rect>,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InferredTable {
+    pub page: u32,
+    pub bbox: Rect,
+    pub rows: u32,
+    pub columns: u32,
+    pub header_rows: u32,
+    pub cells: Vec<InferredTableCell>,
+    pub confidence: f32,
+    pub detector: TableDetectorKind,
+}
+
+impl InferredTable {
+    pub fn to_table_block(&self, document_digest: &str) -> TableBlock {
+        let cells = self
+            .cells
+            .iter()
+            .map(|cell| {
+                let cell_id = ObjectId::new(
+                    "cell",
+                    document_digest,
+                    &format!(
+                        "pdf::page[{}]::table[{:.0},{:.0}]::cell[{},{}]",
+                        self.page, self.bbox.x0, self.bbox.y0, cell.row, cell.column
+                    ),
+                );
+                TableCell {
+                    id: cell_id,
+                    row: cell.row,
+                    column: cell.column,
+                    row_span: cell.row_span,
+                    column_span: cell.column_span,
+                    bbox: cell.bbox,
+                    text: cell.text.clone(),
+                    blocks: Vec::new(),
+                    source: SourceSpan::new(format!(
+                        "pdf::page[{}]::table::cell[{},{}]",
+                        self.page, cell.row, cell.column
+                    )),
+                }
+            })
+            .collect();
+
+        TableBlock {
+            rows: self.rows,
+            columns: self.columns,
+            header_rows: self.header_rows,
+            cells,
+        }
+    }
+
+    pub fn to_block(&self, document_digest: &str, index: usize, reading_order: u32) -> Block {
+        let table_id = ObjectId::new(
+            "tbl",
+            document_digest,
+            &format!(
+                "pdf::page[{}]::table[{index}]::{:.0}_{:.0}",
+                self.page, self.bbox.x0, self.bbox.y0
+            ),
+        );
+        let table_block = self.to_table_block(document_digest);
+        Block {
+            id: table_id,
+            kind: BlockKind::Table,
+            page: Some(self.page),
+            bbox: Some(self.bbox),
+            z_index: 0,
+            reading_order,
+            source: SourceSpan::new(format!(
+                "pdf::page[{}]::table[{index}]::{}",
+                self.page, self.detector
+            )),
+            confidence: self.confidence,
+            content: BlockContent::Table(table_block),
+        }
+    }
+}
+
+pub fn detect_tables(
+    page: u32,
+    spans: &[TextSpanItem],
+    rulings: &[RulingSegment],
+    _page_width: f32,
+    _page_height: f32,
+) -> Vec<InferredTable> {
+    let mut detected = Vec::new();
+
+    let ruled_tables = detect_ruled_tables(page, spans, rulings);
+    let mut covered_span_indices = std::collections::BTreeSet::new();
+
+    for table in &ruled_tables {
+        for (idx, span) in spans.iter().enumerate() {
+            let cx = (span.bbox.x0 + span.bbox.x1) * 0.5;
+            let cy = (span.bbox.y0 + span.bbox.y1) * 0.5;
+            if cx >= table.bbox.x0
+                && cx <= table.bbox.x1
+                && cy >= table.bbox.y0
+                && cy <= table.bbox.y1
+            {
+                covered_span_indices.insert(idx);
+            }
+        }
+    }
+    detected.extend(ruled_tables);
+
+    let remaining_spans: Vec<(usize, TextSpanItem)> = spans
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| !covered_span_indices.contains(idx))
+        .map(|(idx, span)| (idx, span.clone()))
+        .collect();
+
+    let alignment_tables = detect_alignment_tables(page, &remaining_spans);
+    detected.extend(alignment_tables);
+
+    detected.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .partial_cmp(&b.bbox.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    detected
+}
+
+fn detect_ruled_tables(
+    page: u32,
+    spans: &[TextSpanItem],
+    rulings: &[RulingSegment],
+) -> Vec<InferredTable> {
+    let mut h_lines: Vec<(f32, f32, f32)> = Vec::new();
+    let mut v_lines: Vec<(f32, f32, f32)> = Vec::new();
+
+    for r in rulings {
+        let dx = (r.x1 - r.x0).abs();
+        let dy = (r.y1 - r.y0).abs();
+        if dy <= 2.0 && dx >= 15.0 {
+            let y = (r.y0 + r.y1) * 0.5;
+            let x_min = r.x0.min(r.x1);
+            let x_max = r.x0.max(r.x1);
+            h_lines.push((y, x_min, x_max));
+        } else if dx <= 2.0 && dy >= 15.0 {
+            let x = (r.x0 + r.x1) * 0.5;
+            let y_min = r.y0.min(r.y1);
+            let y_max = r.y0.max(r.y1);
+            v_lines.push((x, y_min, y_max));
+        }
+    }
+
+    if h_lines.len() < 2 || v_lines.len() < 2 {
+        return Vec::new();
+    }
+
+    h_lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    v_lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut clustered_y: Vec<f32> = Vec::new();
+    for (y, _, _) in &h_lines {
+        if let Some(last) = clustered_y.last_mut() {
+            if (*y - *last).abs() <= 2.5 {
+                *last = (*last + *y) * 0.5;
+                continue;
+            }
+        }
+        clustered_y.push(*y);
+    }
+
+    let mut clustered_x: Vec<f32> = Vec::new();
+    for (x, _, _) in &v_lines {
+        if let Some(last) = clustered_x.last_mut() {
+            if (*x - *last).abs() <= 2.5 {
+                *last = (*last + *x) * 0.5;
+                continue;
+            }
+        }
+        clustered_x.push(*x);
+    }
+
+    if clustered_y.len() < 2 || clustered_x.len() < 2 {
+        return Vec::new();
+    }
+
+    let rows = (clustered_y.len() - 1) as u32;
+    let cols = (clustered_x.len() - 1) as u32;
+
+    let x0 = *clustered_x.first().unwrap_or(&0.0);
+    let x1 = *clustered_x.last().unwrap_or(&0.0);
+    let y0 = *clustered_y.first().unwrap_or(&0.0);
+    let y1 = *clustered_y.last().unwrap_or(&0.0);
+
+    let bbox = match Rect::new(x0, y0, x1, y1) {
+        Ok(rect) => rect,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut cells = Vec::new();
+    for r in 0..rows {
+        let row_top = clustered_y[r as usize];
+        let row_bot = clustered_y[(r + 1) as usize];
+        for c in 0..cols {
+            let col_left = clustered_x[c as usize];
+            let col_right = clustered_x[(c + 1) as usize];
+
+            let cell_bbox = Rect::new(col_left, row_top, col_right, row_bot).ok();
+
+            let mut cell_spans: Vec<&TextSpanItem> = spans
+                .iter()
+                .filter(|s| {
+                    let cx = (s.bbox.x0 + s.bbox.x1) * 0.5;
+                    let cy = (s.bbox.y0 + s.bbox.y1) * 0.5;
+                    cx >= col_left && cx <= col_right && cy >= row_top && cy <= row_bot
+                })
+                .collect();
+
+            cell_spans.sort_by(|a, b| {
+                a.bbox
+                    .y0
+                    .partial_cmp(&b.bbox.y0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        a.bbox
+                            .x0
+                            .partial_cmp(&b.bbox.x0)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            });
+
+            let cell_text = cell_spans
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            cells.push(InferredTableCell {
+                row: r,
+                column: c,
+                row_span: 1,
+                column_span: 1,
+                bbox: cell_bbox,
+                text: cell_text,
+            });
+        }
+    }
+
+    let non_empty_cells = cells.iter().filter(|c| !c.text.trim().is_empty()).count();
+    let total_cells = (rows * cols) as usize;
+    if total_cells == 0 || non_empty_cells == 0 {
+        return Vec::new();
+    }
+
+    let confidence = if non_empty_cells >= total_cells / 3 {
+        0.991
+    } else {
+        0.940
+    };
+
+    vec![InferredTable {
+        page,
+        bbox,
+        rows,
+        columns: cols,
+        header_rows: 1,
+        cells,
+        confidence,
+        detector: TableDetectorKind::Ruled,
+    }]
+}
+
+#[derive(Clone, Debug)]
+struct LineCluster {
+    y0: f32,
+    y1: f32,
+    spans: Vec<TextSpanItem>,
+}
+
+fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<InferredTable> {
+    if spans.len() < 4 {
+        return Vec::new();
+    }
+
+    let mut sorted_spans: Vec<TextSpanItem> = spans.iter().map(|(_, s)| s.clone()).collect();
+    sorted_spans.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .partial_cmp(&b.bbox.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.bbox
+                    .x0
+                    .partial_cmp(&b.bbox.x0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let mut lines: Vec<LineCluster> = Vec::new();
+    for span in sorted_spans {
+        let span_cy = (span.bbox.y0 + span.bbox.y1) * 0.5;
+        let mut merged = false;
+        for line in &mut lines {
+            let line_cy = (line.y0 + line.y1) * 0.5;
+            let line_h = (line.y1 - line.y0).abs().max(8.0);
+            if (span_cy - line_cy).abs() <= line_h * 0.4 {
+                line.y0 = line.y0.min(span.bbox.y0);
+                line.y1 = line.y1.max(span.bbox.y1);
+                line.spans.push(span.clone());
+                merged = true;
+                break;
+            }
+        }
+        if !merged {
+            lines.push(LineCluster {
+                y0: span.bbox.y0,
+                y1: span.bbox.y1,
+                spans: vec![span],
+            });
+        }
+    }
+
+    for line in &mut lines {
+        line.spans.sort_by(|a, b| {
+            a.bbox
+                .x0
+                .partial_cmp(&b.bbox.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    let multi_col_lines: Vec<&LineCluster> = lines.iter().filter(|l| l.spans.len() >= 2).collect();
+    if multi_col_lines.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut consecutive_runs: Vec<Vec<&LineCluster>> = Vec::new();
+    let mut current_run: Vec<&LineCluster> = Vec::new();
+
+    for line in &lines {
+        if line.spans.len() >= 2 {
+            if let Some(prev) = current_run.last() {
+                let gap = line.y0 - prev.y1;
+                let prev_h = prev.y1 - prev.y0;
+                if gap <= prev_h * 2.5 {
+                    current_run.push(line);
+                    continue;
+                }
+            } else {
+                current_run.push(line);
+                continue;
+            }
+        }
+        if current_run.len() >= 2 {
+            consecutive_runs.push(current_run);
+        }
+        current_run = Vec::new();
+        if line.spans.len() >= 2 {
+            current_run.push(line);
+        }
+    }
+    if current_run.len() >= 2 {
+        consecutive_runs.push(current_run);
+    }
+
+    let mut tables = Vec::new();
+    for run in consecutive_runs {
+        let mut x_starts: Vec<f32> = Vec::new();
+        for line in &run {
+            for span in &line.spans {
+                x_starts.push(span.bbox.x0);
+            }
+        }
+        x_starts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut col_lefts: Vec<f32> = Vec::new();
+        for x in x_starts {
+            if let Some(last) = col_lefts.last_mut() {
+                if (x - *last).abs() <= 12.0 {
+                    *last = (*last + x) * 0.5;
+                    continue;
+                }
+            }
+            col_lefts.push(x);
+        }
+
+        if col_lefts.len() < 2 {
+            continue;
+        }
+
+        let num_cols = col_lefts.len() as u32;
+        let num_rows = run.len() as u32;
+
+        let table_x0 = run
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.bbox.x0))
+            .fold(f32::INFINITY, f32::min);
+        let table_x1 = run
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.bbox.x1))
+            .fold(f32::NEG_INFINITY, f32::max);
+        let table_y0 = run.first().map(|l| l.y0).unwrap_or(0.0);
+        let table_y1 = run.last().map(|l| l.y1).unwrap_or(0.0);
+
+        let bbox = match Rect::new(table_x0, table_y0, table_x1, table_y1) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let mut cells = Vec::new();
+        for (r_idx, line) in run.iter().enumerate() {
+            let row_idx = r_idx as u32;
+            for (c_idx, col_x) in col_lefts.iter().enumerate() {
+                let col_idx = c_idx as u32;
+                let next_col_x = col_lefts.get(c_idx + 1).copied().unwrap_or(table_x1 + 10.0);
+
+                let cell_spans: Vec<&TextSpanItem> = line
+                    .spans
+                    .iter()
+                    .filter(|s| {
+                        let cx = s.bbox.x0;
+                        cx >= col_x - 10.0 && cx < next_col_x - 5.0
+                    })
+                    .collect();
+
+                let text = cell_spans
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                let cell_bbox = if let Some(first_span) = cell_spans.first() {
+                    let mut b_x0 = first_span.bbox.x0;
+                    let mut b_y0 = first_span.bbox.y0;
+                    let mut b_x1 = first_span.bbox.x1;
+                    let mut b_y1 = first_span.bbox.y1;
+                    for s in &cell_spans[1..] {
+                        b_x0 = b_x0.min(s.bbox.x0);
+                        b_y0 = b_y0.min(s.bbox.y0);
+                        b_x1 = b_x1.max(s.bbox.x1);
+                        b_y1 = b_y1.max(s.bbox.y1);
+                    }
+                    Rect::new(b_x0, b_y0, b_x1, b_y1).ok()
+                } else {
+                    None
+                };
+
+                cells.push(InferredTableCell {
+                    row: row_idx,
+                    column: col_idx,
+                    row_span: 1,
+                    column_span: 1,
+                    bbox: cell_bbox,
+                    text,
+                });
+            }
+        }
+
+        let non_empty = cells.iter().filter(|c| !c.text.trim().is_empty()).count();
+        if non_empty < (num_rows * 2) as usize {
+            continue;
+        }
+
+        let confidence = if num_rows >= 3 && num_cols >= 3 {
+            0.934
+        } else if num_rows >= 2 && num_cols >= 2 {
+            0.850
+        } else {
+            0.612
+        };
+
+        tables.push(InferredTable {
+            page,
+            bbox,
+            rows: num_rows,
+            columns: num_cols,
+            header_rows: 1,
+            cells,
+            confidence,
+            detector: TableDetectorKind::Alignment,
+        });
+    }
+
+    tables
+}
+
+pub use docsight_core::{
+    table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_ruled_table() -> Result<(), Box<dyn std::error::Error>> {
+        let rulings = vec![
+            RulingSegment {
+                x0: 20.0,
+                y0: 50.0,
+                x1: 200.0,
+                y1: 50.0,
+            },
+            RulingSegment {
+                x0: 20.0,
+                y0: 80.0,
+                x1: 200.0,
+                y1: 80.0,
+            },
+            RulingSegment {
+                x0: 20.0,
+                y0: 110.0,
+                x1: 200.0,
+                y1: 110.0,
+            },
+            RulingSegment {
+                x0: 20.0,
+                y0: 50.0,
+                x1: 20.0,
+                y1: 110.0,
+            },
+            RulingSegment {
+                x0: 110.0,
+                y0: 50.0,
+                x1: 110.0,
+                y1: 110.0,
+            },
+            RulingSegment {
+                x0: 200.0,
+                y0: 50.0,
+                x1: 200.0,
+                y1: 110.0,
+            },
+        ];
+        let spans = vec![
+            TextSpanItem {
+                text: "Header 1".into(),
+                bbox: Rect::new(25.0, 55.0, 80.0, 75.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Header 2".into(),
+                bbox: Rect::new(115.0, 55.0, 170.0, 75.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Val 1".into(),
+                bbox: Rect::new(25.0, 85.0, 60.0, 105.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "Val 2".into(),
+                bbox: Rect::new(115.0, 85.0, 150.0, 105.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+
+        let tables = detect_tables(1, &spans, &rulings, 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].detector, TableDetectorKind::Ruled);
+        assert_eq!(tables[0].rows, 2);
+        assert_eq!(tables[0].columns, 2);
+        assert!(tables[0].confidence >= 0.95);
+        assert_eq!(tables[0].cells[0].text, "Header 1");
+        assert_eq!(tables[0].cells[3].text, "Val 2");
+
+        let block = tables[0].to_table_block("test_digest");
+        assert_eq!(block.rows, 2);
+        assert_eq!(block.columns, 2);
+
+        let md = table_to_markdown(&block)?;
+        assert!(md.contains("Header 1"));
+        assert!(md.contains("Val 2"));
+        Ok(())
+    }
+
+    #[test]
+    fn detects_alignment_table() -> Result<(), Box<dyn std::error::Error>> {
+        let spans = vec![
+            TextSpanItem {
+                text: "Item".into(),
+                bbox: Rect::new(30.0, 50.0, 60.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Qty".into(),
+                bbox: Rect::new(100.0, 50.0, 120.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Price".into(),
+                bbox: Rect::new(170.0, 50.0, 200.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Apples".into(),
+                bbox: Rect::new(30.0, 70.0, 70.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "10".into(),
+                bbox: Rect::new(100.0, 70.0, 115.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "$5.00".into(),
+                bbox: Rect::new(170.0, 70.0, 205.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "Bananas".into(),
+                bbox: Rect::new(30.0, 90.0, 75.0, 102.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "20".into(),
+                bbox: Rect::new(100.0, 90.0, 115.0, 102.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "$8.00".into(),
+                bbox: Rect::new(170.0, 90.0, 205.0, 102.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].detector, TableDetectorKind::Alignment);
+        assert_eq!(tables[0].rows, 3);
+        assert_eq!(tables[0].columns, 3);
+        assert!(tables[0].confidence >= 0.85);
+
+        let block = tables[0].to_table_block("test_digest");
+        let csv = table_to_csv(&block)?;
+        assert!(csv.contains("Apples,10,$5.00"));
+        Ok(())
+    }
+}
