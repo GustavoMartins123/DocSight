@@ -199,6 +199,7 @@ dependencies = [
  "clap",
  "docsight-agent",
  "docsight-core",
+ "docsight-layout",
  "docsight-ooxml",
  "docsight-pdf",
  "docsight-render",
@@ -215,6 +216,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "docsight-layout"
+version = "0.1.0"
+dependencies = [
+ "docsight-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -241,6 +251,8 @@ name = "docsight-render"
 version = "0.1.0"
 dependencies = [
  "docsight-core",
+ "docsight-layout",
+ "docsight-ooxml",
  "docsight-pdf",
  "serde",
 ]

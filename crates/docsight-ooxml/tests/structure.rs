@@ -155,3 +155,170 @@ fn rejects_excessive_compression_ratio() -> Result<(), Box<dyn std::error::Error
     assert!(matches!(error, Err(DocsightError::ResourceLimit { .. })));
     Ok(())
 }
+
+fn package_full(
+    document: &str,
+    rels: Option<&str>,
+    header: Option<&str>,
+    footer: Option<&str>,
+    footnotes: Option<&str>,
+    endnotes: Option<&str>,
+    comments: Option<&str>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(
+        b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+    )?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    if let Some(rels) = rels {
+        writer.start_file("word/_rels/document.xml.rels", options)?;
+        writer.write_all(rels.as_bytes())?;
+    }
+    if let Some(header) = header {
+        writer.start_file("word/header1.xml", options)?;
+        writer.write_all(header.as_bytes())?;
+    }
+    if let Some(footer) = footer {
+        writer.start_file("word/footer1.xml", options)?;
+        writer.write_all(footer.as_bytes())?;
+    }
+    if let Some(footnotes) = footnotes {
+        writer.start_file("word/footnotes.xml", options)?;
+        writer.write_all(footnotes.as_bytes())?;
+    }
+    if let Some(endnotes) = endnotes {
+        writer.start_file("word/endnotes.xml", options)?;
+        writer.write_all(endnotes.as_bytes())?;
+    }
+    if let Some(comments) = comments {
+        writer.start_file("word/comments.xml", options)?;
+        writer.write_all(comments.as_bytes())?;
+    }
+    Ok(writer.finish()?.into_inner())
+}
+
+#[test]
+fn parses_figures_headers_footers_notes_links_and_comments()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <w:body>
+          <w:p>
+            <w:r><w:t>Check this link: </w:t></w:r>
+            <w:hyperlink r:id="rIdLink"><w:r><w:t>Docsight Website</w:t></w:r></w:hyperlink>
+          </w:p>
+          <w:p>
+            <w:r><w:t>Internal bookmark: </w:t></w:r>
+            <w:hyperlink w:anchor="section2"><w:r><w:t>Jump to section 2</w:t></w:r></w:hyperlink>
+          </w:p>
+          <w:p>
+            <w:r>
+              <w:drawing>
+                <wp:inline>
+                  <wp:extent cx="1270000" cy="635000"/>
+                  <wp:docPr id="1" name="Figure 1" descr="Architecture Diagram"/>
+                  <a:graphic>
+                    <a:graphicData>
+                      <a:blip r:embed="rIdImg"/>
+                    </a:graphicData>
+                  </a:graphic>
+                </wp:inline>
+              </w:drawing>
+            </w:r>
+          </w:p>
+          <w:p>
+            <w:r><w:t>Normal text before edit.</w:t></w:r>
+            <w:ins w:id="1" w:author="Author"><w:r><w:t> Inserted text.</w:t></w:r></w:ins>
+            <w:del w:id="2" w:author="Author"><w:r><w:delText> Deleted text.</w:delText></w:r></w:del>
+          </w:p>
+          <w:sectPr>
+            <w:headerReference r:id="rIdH" w:type="default"/>
+            <w:footerReference r:id="rIdF" w:type="default"/>
+            <w:pgSz w:w="12240" w:h="15840"/>
+            <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+          </w:sectPr>
+        </w:body></w:document>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+      <Relationship Id="rIdF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+      <Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/diagram.png"/>
+      <Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://docsight.dev"/>
+    </Relationships>"#;
+    let header = format!(
+        r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:t>Company Confidential</w:t></w:r></w:p></w:hdr>"#
+    );
+    let footer = format!(
+        r#"<w:ftr xmlns:w="{W_NS}"><w:p><w:r><w:t>Page </w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p></w:ftr>"#
+    );
+    let footnotes = format!(
+        r#"<w:footnotes xmlns:w="{W_NS}">
+          <w:footnote w:id="1"><w:p><w:r><w:t>First citation footnote</w:t></w:r></w:p></w:footnote>
+        </w:footnotes>"#
+    );
+    let endnotes = format!(
+        r#"<w:endnotes xmlns:w="{W_NS}">
+          <w:endnote w:id="1"><w:p><w:r><w:t>Endnote bibliographic reference</w:t></w:r></w:p></w:endnote>
+        </w:endnotes>"#
+    );
+    let comments = format!(
+        r#"<w:comments xmlns:w="{W_NS}">
+          <w:comment w:id="1" w:author="Editor" w:date="2026-09-03T10:00:00Z">
+            <w:p><w:r><w:t>Please verify numbers</w:t></w:r></w:p>
+          </w:comment>
+        </w:comments>"#
+    );
+
+    let bytes = package_full(
+        &document,
+        Some(rels),
+        Some(&header),
+        Some(&footer),
+        Some(&footnotes),
+        Some(&endnotes),
+        Some(&comments),
+    )?;
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+
+    assert_eq!(doc.figures().count(), 1);
+    let (_, fig) = doc.figures().next().ok_or("missing figure")?;
+    assert_eq!(fig.alt_text.as_deref(), Some("Architecture Diagram"));
+    assert_eq!(fig.width_pt, Some(100.0));
+    assert_eq!(fig.height_pt, Some(50.0));
+    assert_eq!(fig.resource_id.as_deref(), Some("rIdImg"));
+
+    assert_eq!(doc.resources.len(), 1);
+    assert_eq!(doc.resources[0].name, "media/diagram.png");
+    assert_eq!(doc.resources[0].mime_type.as_deref(), Some("image/png"));
+
+    assert_eq!(doc.links.len(), 2);
+    assert_eq!(doc.links[0].text, "Docsight Website");
+    assert_eq!(doc.links[0].target, "https://docsight.dev");
+    assert!(doc.links[0].is_external);
+
+    assert_eq!(doc.links[1].text, "Jump to section 2");
+    assert_eq!(doc.links[1].target, "#section2");
+    assert!(!doc.links[1].is_external);
+
+    assert_eq!(doc.notes().count(), 2);
+    assert_eq!(doc.comments.len(), 1);
+    assert_eq!(doc.comments[0].author.as_deref(), Some("Editor"));
+    assert_eq!(doc.comments[0].text, "Please verify numbers");
+
+    assert_eq!(doc.tracked_changes.insertions, 1);
+    assert_eq!(doc.tracked_changes.deletions, 1);
+
+    assert_eq!(doc.sections.len(), 1);
+    assert_eq!(
+        doc.sections[0].header_text.as_deref(),
+        Some("Company Confidential")
+    );
+    assert_eq!(doc.sections[0].footer_text.as_deref(), Some("Page [PAGE]"));
+
+    Ok(())
+}

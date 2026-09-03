@@ -116,15 +116,20 @@ fn table_formats_csv_tsv_html_markdown() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
-fn page_command_on_unpaginated_docx_returns_unsupported_feature()
--> Result<(), Box<dyn std::error::Error>> {
+fn page_command_on_docx_returns_paginated_spans() -> Result<(), Box<dyn std::error::Error>> {
     let spec_path = specification();
     let spec_str = spec_path.to_str().ok_or("invalid specification path")?;
     let output = docsight()
-        .args(["--json-errors", "page", spec_str, "1"])
+        .args(["page", spec_str, "1", "--json"])
         .output()?;
-    assert_eq!(output.status.code(), Some(20));
-    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
-    assert_eq!(error["code"], "UNSUPPORTED_FEATURE");
+    assert_eq!(output.status.code(), Some(0));
+    let page: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(page["result"]["number"], 1);
+    assert!(page["result"]["width_pt"].as_f64().unwrap_or(0.0) > 0.0);
+    assert!(page["result"]["height_pt"].as_f64().unwrap_or(0.0) > 0.0);
+    let spans = page["result"]["spans"]
+        .as_array()
+        .ok_or("missing spans array")?;
+    assert!(!spans.is_empty());
     Ok(())
 }

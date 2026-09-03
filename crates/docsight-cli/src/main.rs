@@ -4,9 +4,10 @@ use docsight_core::{
     BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
     Rect, table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
+use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
-use docsight_render::{RenderRequest, RenderTarget, render_pdf};
+use docsight_render::{RenderRequest, RenderTarget, render_document};
 use serde::Serialize;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -81,6 +82,16 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    Images {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Links {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -107,6 +118,12 @@ struct InspectResult {
     paragraphs: Option<usize>,
     headings: Option<usize>,
     tables: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    figures: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comments: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tracked: Option<docsight_core::TrackedChanges>,
     pages: Option<u32>,
     engine: Option<&'static str>,
 }
@@ -160,11 +177,51 @@ struct PageSpanRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+struct PageOverlayRecord {
+    id: ObjectId,
+    kind: docsight_core::OverlayKind,
+    text: String,
+    bbox: Option<Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 struct PageResult {
     number: u32,
     width_pt: f32,
     height_pt: f32,
     spans: Vec<PageSpanRecord>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    overlays: Vec<PageOverlayRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct ImageRecord {
+    id: ObjectId,
+    alt_text: Option<String>,
+    caption: Option<String>,
+    width_pt: Option<f32>,
+    height_pt: Option<f32>,
+    page: Option<u32>,
+    resource: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ImagesResult {
+    images: Vec<ImageRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct LinkRecord {
+    id: ObjectId,
+    text: String,
+    target: String,
+    is_external: bool,
+    page: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct LinksResult {
+    links: Vec<LinkRecord>,
 }
 
 fn main() -> ExitCode {
@@ -207,12 +264,18 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             dpi,
             out,
         } => crop(path, *page, *bbox, object.as_deref(), *dpi, out),
+        Command::Images { path, json } => images(path, *json),
+        Command::Links { path, json } => links(path, *json),
     }
 }
 
 fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
     match source.format() {
-        DocumentFormat::Docx => parse_docx(source),
+        DocumentFormat::Docx => {
+            let unpaginated = parse_docx(source)?;
+            let laid_out = layout_docx(unpaginated)?;
+            Ok(laid_out.document)
+        }
         DocumentFormat::Pdf => {
             let pdf = PdfDocument::open(source)?;
             pdf.to_document()
@@ -227,6 +290,14 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
     let paragraphs = document.paragraphs().count() + document.list_items().count();
     let headings = document.headings().count();
     let tables = document.tables().count();
+    let figures = document.figures().count();
+    let comments = document.comments.len();
+    let tracked =
+        if document.tracked_changes.insertions > 0 || document.tracked_changes.deletions > 0 {
+            Some(document.tracked_changes)
+        } else {
+            None
+        };
     let pages = if document.pages.is_empty() {
         None
     } else {
@@ -238,11 +309,14 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         capabilities: InspectCapabilities {
             structure: true,
             text: true,
-            render: is_pdf,
+            render: true,
         },
         paragraphs: if is_pdf { None } else { Some(paragraphs) },
         headings: if is_pdf { None } else { Some(headings) },
         tables: if is_pdf { None } else { Some(tables) },
+        figures: if is_pdf { None } else { Some(figures) },
+        comments: if is_pdf { None } else { Some(comments) },
+        tracked,
         pages,
         engine: if is_pdf { Some(ENGINE_NAME) } else { None },
     };
@@ -268,6 +342,24 @@ fn inspect(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
         }
         if let Some(tables) = result.tables {
             writeln!(writer, "Tables      {tables}").map_err(stdout_error)?;
+        }
+        if let Some(figures) = result.figures {
+            if figures > 0 {
+                writeln!(writer, "Figures     {figures}").map_err(stdout_error)?;
+            }
+        }
+        if let Some(comments) = result.comments {
+            if comments > 0 {
+                writeln!(writer, "Comments    {comments}").map_err(stdout_error)?;
+            }
+        }
+        if let Some(tracked) = result.tracked {
+            writeln!(
+                writer,
+                "Tracked     {} insertions / {} deletions",
+                tracked.insertions, tracked.deletions
+            )
+            .map_err(stdout_error)?;
         }
         if let Some(pages) = result.pages {
             writeln!(writer, "Pages       {pages}").map_err(stdout_error)?;
@@ -306,11 +398,22 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
             })
         })
         .collect();
+    let overlays: Vec<PageOverlayRecord> = target_page
+        .overlays
+        .iter()
+        .map(|o| PageOverlayRecord {
+            id: o.id.clone(),
+            kind: o.kind,
+            text: o.text.clone(),
+            bbox: o.bbox,
+        })
+        .collect();
     let page_result = PageResult {
         number: target_page.number,
         width_pt: target_page.width_pt,
         height_pt: target_page.height_pt,
         spans,
+        overlays,
     };
     if json {
         return write_json(&source, &page_result, document.warnings);
@@ -319,11 +422,12 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
     let mut writer = stdout.lock();
     writeln!(
         writer,
-        "Page {}  {}x{} pt  {} spans",
+        "Page {}  {}x{} pt  {} spans  {} overlays",
         page_result.number,
         page_result.width_pt,
         page_result.height_pt,
-        page_result.spans.len()
+        page_result.spans.len(),
+        page_result.overlays.len()
     )
     .map_err(stdout_error)?;
     for span in &page_result.spans {
@@ -334,12 +438,24 @@ fn page_command(path: &PathBuf, number: u32, json: bool) -> Result<(), DocsightE
         )
         .map_err(stdout_error)?;
     }
+    for overlay in &page_result.overlays {
+        let bbox_str = overlay
+            .bbox
+            .map(|b| format!("[{},{},{},{}]", b.x0, b.y0, b.x1, b.y1))
+            .unwrap_or_else(|| "none".to_owned());
+        writeln!(
+            writer,
+            "[{}] {:?} {} \"{}\"",
+            overlay.id, overlay.kind, bbox_str, overlay.text
+        )
+        .map_err(stdout_error)?;
+    }
     emit_warnings(&document.warnings)
 }
 
 fn render(path: &PathBuf, target: RenderTarget, dpi: u16, out: &Path) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let rendered = render_pdf(&source, &RenderRequest { target, dpi })?;
+    let rendered = render_document(&source, &RenderRequest { target, dpi })?;
     rendered.write(out)?;
     let stdout = io::stdout();
     let mut writer = stdout.lock();
@@ -420,6 +536,7 @@ fn document_text(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
                         .unwrap_or_default(),
                 ),
                 BlockContent::Shape(s) => ("shape", s.label.clone().unwrap_or_default()),
+                BlockContent::Note(n) => ("note", n.text.clone()),
                 BlockContent::Unknown(u) => ("unknown", u.details.clone().unwrap_or_default()),
             };
             TextRecord {
@@ -588,4 +705,83 @@ fn parse_bbox(value: &str) -> Result<Rect, String> {
         coordinates[3],
     )
     .map_err(|error| error.to_string())
+}
+
+fn images(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let images: Vec<ImageRecord> = document
+        .figures()
+        .map(|(block, fig)| ImageRecord {
+            id: block.id.clone(),
+            alt_text: fig.alt_text.clone(),
+            caption: fig.caption.clone(),
+            width_pt: fig.width_pt,
+            height_pt: fig.height_pt,
+            page: block.page,
+            resource: fig.resource_id.clone(),
+        })
+        .collect();
+    let result = ImagesResult { images };
+    if json {
+        return write_json(&source, &result, document.warnings);
+    }
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Images: {}", result.images.len()).map_err(stdout_error)?;
+    for img in &result.images {
+        let page_str = img
+            .page
+            .map(|p| format!("p.{p}"))
+            .unwrap_or_else(|| "unplaced".to_owned());
+        let dims = match (img.width_pt, img.height_pt) {
+            (Some(w), Some(h)) => format!("{:.1}x{:.1} pt", w, h),
+            _ => "unknown dims".to_owned(),
+        };
+        let label = img
+            .alt_text
+            .as_deref()
+            .or(img.caption.as_deref())
+            .unwrap_or("");
+        writeln!(writer, "[{}] {} {} \"{}\"", img.id, page_str, dims, label)
+            .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings)
+}
+
+fn links(path: &PathBuf, json: bool) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let links: Vec<LinkRecord> = document
+        .links
+        .iter()
+        .map(|link| LinkRecord {
+            id: link.id.clone(),
+            text: link.text.clone(),
+            target: link.target.clone(),
+            is_external: link.is_external,
+            page: link.page,
+        })
+        .collect();
+    let result = LinksResult { links };
+    if json {
+        return write_json(&source, &result, document.warnings);
+    }
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Links: {}", result.links.len()).map_err(stdout_error)?;
+    for link in &result.links {
+        let page_str = link
+            .page
+            .map(|p| format!("p.{p}"))
+            .unwrap_or_else(|| "unplaced".to_owned());
+        let kind_str = if link.is_external { "EXT" } else { "INT" };
+        writeln!(
+            writer,
+            "[{}] {} [{}] \"{}\" -> {}",
+            link.id, page_str, kind_str, link.text, link.target
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings)
 }

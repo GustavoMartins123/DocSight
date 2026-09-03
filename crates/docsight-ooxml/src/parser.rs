@@ -1,13 +1,15 @@
 use crate::package::read_parts;
 use docsight_core::{
-    Block, BlockContent, BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document,
-    DocumentFormat, DocumentMetadata, DocumentSource, HeadingBlock, ListItemBlock, ObjectId,
-    ParagraphBlock, Section, SourceSpan, Style, TableBlock, TableCell,
+    Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
+    Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
+    Hyperlink, ListItemBlock, NoteBlock, NoteKind, ObjectId, ParagraphBlock, Resource,
+    ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell, TrackedChanges,
 };
 use roxmltree::{Document as XmlDocument, Node};
 use std::collections::{BTreeMap, BTreeSet};
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const MAX_STYLE_DEPTH: usize = 64;
 const MAX_TABLE_DEPTH: usize = 32;
 
@@ -53,6 +55,9 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         });
     }
     let parts = read_parts(source.bytes())?;
+    let rels = parse_relationships(parts.rels.as_deref())?;
+    let header_texts = extract_part_texts(&parts.headers)?;
+    let footer_texts = extract_part_texts(&parts.footers)?;
     let styles = parse_styles(parts.styles.as_deref())?;
     let numbering = parse_numbering(parts.numbering.as_deref())?;
     let xml = XmlDocument::parse(&parts.document).map_err(xml_error)?;
@@ -65,13 +70,26 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     let mut blocks = Vec::new();
     let mut sections = Vec::new();
     let mut warnings = Vec::new();
+    let mut resources = Vec::new();
+    let mut links = Vec::new();
     let mut paragraph_index = 0_u32;
     let mut table_index = 0_u32;
     let mut section_index = 0_u32;
+    let mut figure_index = 0_u32;
+    let mut link_counter = 0_usize;
     let mut reading_order = 0_u32;
 
     for child in body.children().filter(Node::is_element) {
         if child.has_tag_name((W_NS, "p")) {
+            let child_figures = extract_figures(
+                child,
+                source,
+                &rels,
+                &mut reading_order,
+                &mut figure_index,
+                &mut resources,
+            );
+            extract_hyperlinks(child, source, &rels, &mut link_counter, &mut links);
             paragraph_index = paragraph_index
                 .checked_add(1)
                 .ok_or_else(block_count_error)?;
@@ -85,13 +103,21 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 reading_order,
                 &mut warnings,
             )?);
+            blocks.extend(child_figures);
         } else if child.has_tag_name((W_NS, "tbl")) {
             table_index = table_index.checked_add(1).ok_or_else(block_count_error)?;
             reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
             blocks.push(parse_table(child, table_index, source, reading_order)?);
         } else if child.has_tag_name((W_NS, "sectPr")) {
             section_index = section_index.checked_add(1).ok_or_else(block_count_error)?;
-            sections.push(parse_section(child, section_index, source));
+            sections.push(parse_section(
+                child,
+                section_index,
+                source,
+                &header_texts,
+                &footer_texts,
+                &rels,
+            ));
         } else {
             warnings.push(Diagnostic {
                 code: "DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned(),
@@ -101,6 +127,50 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
             });
         }
     }
+
+    if sections.is_empty() {
+        sections.push(Section {
+            id: source.object_id("sect", "/word/document.xml::body/sectPr[1]"),
+            section_index: 1,
+            page_width_pt: Some(612.0),
+            page_height_pt: Some(792.0),
+            margin_top_pt: Some(72.0),
+            margin_right_pt: Some(72.0),
+            margin_bottom_pt: Some(72.0),
+            margin_left_pt: Some(72.0),
+            header_text: header_texts.first().map(|(_, t)| t.clone()),
+            footer_text: footer_texts.first().map(|(_, t)| t.clone()),
+        });
+    }
+
+    blocks.extend(parse_notes(
+        parts.footnotes.as_deref(),
+        source,
+        "footnote",
+        NoteKind::Footnote,
+        &mut reading_order,
+    )?);
+    blocks.extend(parse_notes(
+        parts.endnotes.as_deref(),
+        source,
+        "endnote",
+        NoteKind::Endnote,
+        &mut reading_order,
+    )?);
+
+    let comments = parse_comments(parts.comments.as_deref(), source)?;
+    let insertions = body
+        .descendants()
+        .filter(|n| n.has_tag_name((W_NS, "ins")))
+        .count();
+    let deletions = body
+        .descendants()
+        .filter(|n| n.has_tag_name((W_NS, "del")))
+        .count();
+    let tracked_changes = TrackedChanges {
+        insertions,
+        deletions,
+    };
 
     let converted_styles: Vec<Style> = styles
         .into_iter()
@@ -125,12 +195,22 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         sections,
         pages: Vec::new(),
         blocks,
-        resources: Vec::new(),
+        resources,
+        links,
+        comments,
+        tracked_changes,
         warnings,
     })
 }
 
-fn parse_section(node: Node<'_, '_>, index: u32, source: &DocumentSource) -> Section {
+fn parse_section(
+    node: Node<'_, '_>,
+    index: u32,
+    source: &DocumentSource,
+    header_texts: &[(String, String)],
+    footer_texts: &[(String, String)],
+    rels: &BTreeMap<String, (String, String)>,
+) -> Section {
     let source_path = format!("/word/document.xml::body/sectPr[{index}]");
     let mut page_width_pt = None;
     let mut page_height_pt = None;
@@ -180,6 +260,46 @@ fn parse_section(node: Node<'_, '_>, index: u32, source: &DocumentSource) -> Sec
         }
     }
 
+    let mut header_text = None;
+    let mut footer_text = None;
+
+    for child in node.children().filter(Node::is_element) {
+        if child.has_tag_name((W_NS, "headerReference")) {
+            let r_id = child
+                .attribute((R_NS, "id"))
+                .or_else(|| child.attribute("r:id"));
+            if let Some(r_id) = r_id {
+                if let Some((_, target)) = rels.get(r_id) {
+                    if let Some((_, text)) =
+                        header_texts.iter().find(|(name, _)| name.ends_with(target))
+                    {
+                        header_text = Some(text.clone());
+                    }
+                }
+            }
+        } else if child.has_tag_name((W_NS, "footerReference")) {
+            let r_id = child
+                .attribute((R_NS, "id"))
+                .or_else(|| child.attribute("r:id"));
+            if let Some(r_id) = r_id {
+                if let Some((_, target)) = rels.get(r_id) {
+                    if let Some((_, text)) =
+                        footer_texts.iter().find(|(name, _)| name.ends_with(target))
+                    {
+                        footer_text = Some(text.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    if header_text.is_none() {
+        header_text = header_texts.first().map(|(_, text)| text.clone());
+    }
+    if footer_text.is_none() {
+        footer_text = footer_texts.first().map(|(_, text)| text.clone());
+    }
+
     Section {
         id: source.object_id("sect", &source_path),
         section_index: index,
@@ -189,7 +309,296 @@ fn parse_section(node: Node<'_, '_>, index: u32, source: &DocumentSource) -> Sec
         margin_right_pt,
         margin_bottom_pt,
         margin_left_pt,
+        header_text,
+        footer_text,
     }
+}
+
+fn parse_relationships(
+    xml_opt: Option<&str>,
+) -> Result<BTreeMap<String, (String, String)>, DocsightError> {
+    let mut map = BTreeMap::new();
+    let Some(xml) = xml_opt else {
+        return Ok(map);
+    };
+    let doc = XmlDocument::parse(xml).map_err(xml_error)?;
+    for rel in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "Relationship")
+    {
+        if let (Some(id), Some(target)) = (rel.attribute("Id"), rel.attribute("Target")) {
+            let rel_type = rel.attribute("Type").unwrap_or("").to_owned();
+            map.insert(id.to_owned(), (rel_type, target.to_owned()));
+        }
+    }
+    Ok(map)
+}
+
+fn extract_part_texts(parts: &[(String, String)]) -> Result<Vec<(String, String)>, DocsightError> {
+    let mut results = Vec::new();
+    for (part_name, xml_str) in parts {
+        let doc = XmlDocument::parse(xml_str).map_err(xml_error)?;
+        let text = doc
+            .descendants()
+            .filter(|n| n.has_tag_name((W_NS, "p")))
+            .map(paragraph_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.trim().is_empty() {
+            results.push((part_name.clone(), text));
+        }
+    }
+    Ok(results)
+}
+
+fn extract_figures(
+    node: Node<'_, '_>,
+    source: &DocumentSource,
+    rels: &BTreeMap<String, (String, String)>,
+    reading_order: &mut u32,
+    figure_index: &mut u32,
+    resources: &mut Vec<Resource>,
+) -> Vec<Block> {
+    let mut figures = Vec::new();
+    for drawing in node
+        .descendants()
+        .filter(|n| n.has_tag_name((W_NS, "drawing")) || n.has_tag_name((W_NS, "pict")))
+    {
+        *figure_index += 1;
+        *reading_order += 1;
+        let mut width_pt = None;
+        let mut height_pt = None;
+        let mut alt_text = None;
+        let mut resource_id = None;
+
+        if let Some(extent) = drawing
+            .descendants()
+            .find(|n| n.tag_name().name() == "extent")
+        {
+            if let Some(cx) = extent.attribute("cx").and_then(|v| v.parse::<f32>().ok()) {
+                width_pt = Some(cx / 12700.0);
+            }
+            if let Some(cy) = extent.attribute("cy").and_then(|v| v.parse::<f32>().ok()) {
+                height_pt = Some(cy / 12700.0);
+            }
+        }
+        if let Some(doc_pr) = drawing
+            .descendants()
+            .find(|n| n.tag_name().name() == "docPr")
+        {
+            alt_text = doc_pr
+                .attribute("descr")
+                .or_else(|| doc_pr.attribute("title"))
+                .or_else(|| doc_pr.attribute("name"))
+                .map(str::to_owned);
+        }
+        if let Some(blip) = drawing
+            .descendants()
+            .find(|n| n.tag_name().name() == "blip")
+        {
+            if let Some(embed) = blip
+                .attribute((R_NS, "embed"))
+                .or_else(|| blip.attribute("r:embed"))
+            {
+                resource_id = Some(embed.to_owned());
+                if let Some((_, target)) = rels.get(embed) {
+                    let res_id = source.object_id("res", target);
+                    if !resources.iter().any(|r| r.id == res_id) {
+                        resources.push(Resource {
+                            id: res_id,
+                            kind: ResourceKind::Image,
+                            name: target.clone(),
+                            target: target.clone(),
+                            mime_type: guess_mime_type(target),
+                        });
+                    }
+                }
+            }
+        }
+
+        let source_path = format!("/word/document.xml::figure[{figure_index}]");
+        figures.push(Block {
+            id: source.object_id("fig", &source_path),
+            kind: BlockKind::Figure,
+            page: None,
+            bbox: None,
+            z_index: 0,
+            reading_order: *reading_order,
+            source: SourceSpan::new(&source_path),
+            confidence: 1.0,
+            content: BlockContent::Figure(FigureBlock {
+                alt_text,
+                caption: None,
+                resource_id,
+                width_pt,
+                height_pt,
+            }),
+        });
+    }
+    figures
+}
+
+fn guess_mime_type(path: &str) -> Option<String> {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        Some("image/png".to_owned())
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        Some("image/jpeg".to_owned())
+    } else if lower.ends_with(".svg") {
+        Some("image/svg+xml".to_owned())
+    } else if lower.ends_with(".emf") {
+        Some("image/x-emf".to_owned())
+    } else if lower.ends_with(".wmf") {
+        Some("image/x-wmf".to_owned())
+    } else {
+        None
+    }
+}
+
+fn extract_hyperlinks(
+    node: Node<'_, '_>,
+    source: &DocumentSource,
+    rels: &BTreeMap<String, (String, String)>,
+    link_counter: &mut usize,
+    links: &mut Vec<Hyperlink>,
+) {
+    for link in node
+        .descendants()
+        .filter(|n| n.has_tag_name((W_NS, "hyperlink")))
+    {
+        let r_id = link
+            .attribute((R_NS, "id"))
+            .or_else(|| link.attribute("r:id"));
+        let anchor = link
+            .attribute((W_NS, "anchor"))
+            .or_else(|| link.attribute("w:anchor"));
+        let target = if let Some(r_id) = r_id {
+            rels.get(r_id).map(|(_, t)| t.clone())
+        } else {
+            anchor.map(|a| format!("#{a}"))
+        };
+
+        if let Some(target) = target {
+            let text = paragraph_text(link);
+            if !text.trim().is_empty() {
+                *link_counter += 1;
+                let source_path = format!("/word/document.xml::link[{link_counter}]");
+                links.push(Hyperlink {
+                    id: source.object_id("lnk", &source_path),
+                    text,
+                    is_external: !target.starts_with('#'),
+                    target,
+                    page: None,
+                    source: SourceSpan::new(source_path),
+                });
+            }
+        }
+    }
+}
+
+fn parse_notes(
+    xml_opt: Option<&str>,
+    source: &DocumentSource,
+    tag_name: &str,
+    note_kind: NoteKind,
+    reading_order: &mut u32,
+) -> Result<Vec<Block>, DocsightError> {
+    let mut blocks = Vec::new();
+    let Some(xml) = xml_opt else {
+        return Ok(blocks);
+    };
+    let doc = XmlDocument::parse(xml).map_err(xml_error)?;
+    for note in doc
+        .descendants()
+        .filter(|n| n.has_tag_name((W_NS, tag_name)))
+    {
+        let Some(id) = note
+            .attribute((W_NS, "id"))
+            .or_else(|| note.attribute("w:id"))
+        else {
+            continue;
+        };
+        if id == "-1" || id == "0" {
+            continue;
+        }
+        let text = note
+            .children()
+            .filter(|n| n.has_tag_name((W_NS, "p")))
+            .map(paragraph_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.trim().is_empty() {
+            continue;
+        }
+        *reading_order += 1;
+        let prefix = match note_kind {
+            NoteKind::Footnote => "fn",
+            NoteKind::Endnote => "en",
+        };
+        let source_path = format!("/word/{tag_name}s.xml::{tag_name}[{id}]");
+        blocks.push(Block {
+            id: source.object_id(prefix, &source_path),
+            kind: BlockKind::Note,
+            page: None,
+            bbox: None,
+            z_index: 0,
+            reading_order: *reading_order,
+            source: SourceSpan::new(source_path),
+            confidence: 1.0,
+            content: BlockContent::Note(NoteBlock {
+                kind: note_kind,
+                note_id: id.to_owned(),
+                text,
+            }),
+        });
+    }
+    Ok(blocks)
+}
+
+fn parse_comments(
+    xml_opt: Option<&str>,
+    source: &DocumentSource,
+) -> Result<Vec<Comment>, DocsightError> {
+    let mut comments = Vec::new();
+    let Some(xml) = xml_opt else {
+        return Ok(comments);
+    };
+    let doc = XmlDocument::parse(xml).map_err(xml_error)?;
+    for comment in doc
+        .descendants()
+        .filter(|n| n.has_tag_name((W_NS, "comment")))
+    {
+        let Some(id) = comment
+            .attribute((W_NS, "id"))
+            .or_else(|| comment.attribute("w:id"))
+        else {
+            continue;
+        };
+        let author = comment
+            .attribute((W_NS, "author"))
+            .or_else(|| comment.attribute("w:author"))
+            .map(str::to_owned);
+        let date = comment
+            .attribute((W_NS, "date"))
+            .or_else(|| comment.attribute("w:date"))
+            .map(str::to_owned);
+        let text = comment
+            .children()
+            .filter(|n| n.has_tag_name((W_NS, "p")))
+            .map(paragraph_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source_path = format!("/word/comments.xml::comment[{id}]");
+        comments.push(Comment {
+            id: source.object_id("cmt", &source_path),
+            author,
+            date,
+            text,
+            page: None,
+            source: SourceSpan::new(source_path),
+        });
+    }
+    Ok(comments)
 }
 
 fn parse_paragraph(
@@ -420,6 +829,26 @@ fn paragraph_text(node: Node<'_, '_>) -> String {
             .any(|ancestor| ancestor.has_tag_name((W_NS, "del")))
         {
             continue;
+        }
+        if descendant.ancestors().any(|ancestor| {
+            ancestor != descendant
+                && ancestor.tag_name().name() == "fldSimple"
+                && ancestor.attributes().any(|a| {
+                    (a.name() == "instr" || a.name().ends_with(":instr"))
+                        && a.value().to_uppercase().contains("PAGE")
+                })
+        }) {
+            continue;
+        }
+        if descendant.tag_name().name() == "fldSimple" {
+            let is_page = descendant.attributes().any(|a| {
+                (a.name() == "instr" || a.name().ends_with(":instr"))
+                    && a.value().to_uppercase().contains("PAGE")
+            });
+            if is_page {
+                text.push_str("[PAGE]");
+                continue;
+            }
         }
         if descendant.has_tag_name((W_NS, "t")) {
             if let Some(value) = descendant.text() {

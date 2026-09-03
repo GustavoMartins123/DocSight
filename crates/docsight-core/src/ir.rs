@@ -35,6 +35,7 @@ pub enum BlockKind {
     Table,
     Figure,
     Shape,
+    Note,
     Unknown,
 }
 
@@ -107,6 +108,20 @@ pub struct ShapeBlock {
     pub label: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteKind {
+    Footnote,
+    Endnote,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoteBlock {
+    pub kind: NoteKind,
+    pub note_id: String,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnknownBlock {
     pub raw_tag: String,
@@ -122,6 +137,7 @@ pub enum BlockContent {
     Table(TableBlock),
     Figure(FigureBlock),
     Shape(ShapeBlock),
+    Note(NoteBlock),
     Unknown(UnknownBlock),
 }
 
@@ -166,6 +182,7 @@ impl Block {
                 .or_else(|| block.alt_text.clone())
                 .unwrap_or_default(),
             BlockContent::Shape(block) => block.label.clone().unwrap_or_default(),
+            BlockContent::Note(block) => block.text.clone(),
             BlockContent::Unknown(block) => block.details.clone().unwrap_or_default(),
         }
     }
@@ -229,6 +246,8 @@ pub struct Section {
     pub margin_right_pt: Option<f32>,
     pub margin_bottom_pt: Option<f32>,
     pub margin_left_pt: Option<f32>,
+    pub header_text: Option<String>,
+    pub footer_text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -269,6 +288,32 @@ pub struct DocumentMetadata {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Hyperlink {
+    pub id: ObjectId,
+    pub text: String,
+    pub target: String,
+    pub is_external: bool,
+    pub page: Option<u32>,
+    pub source: SourceSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: ObjectId,
+    pub author: Option<String>,
+    pub date: Option<String>,
+    pub text: String,
+    pub page: Option<u32>,
+    pub source: SourceSpan,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TrackedChanges {
+    pub insertions: usize,
+    pub deletions: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub id: String,
     pub sha256: String,
@@ -280,6 +325,9 @@ pub struct Document {
     pub pages: Vec<Page>,
     pub blocks: Vec<Block>,
     pub resources: Vec<Resource>,
+    pub links: Vec<Hyperlink>,
+    pub comments: Vec<Comment>,
+    pub tracked_changes: TrackedChanges,
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -308,6 +356,20 @@ impl Document {
     pub fn tables(&self) -> impl Iterator<Item = (&Block, &TableBlock)> {
         self.blocks.iter().filter_map(|block| match &block.content {
             BlockContent::Table(t) => Some((block, t)),
+            _ => None,
+        })
+    }
+
+    pub fn figures(&self) -> impl Iterator<Item = (&Block, &FigureBlock)> {
+        self.blocks.iter().filter_map(|block| match &block.content {
+            BlockContent::Figure(f) => Some((block, f)),
+            _ => None,
+        })
+    }
+
+    pub fn notes(&self) -> impl Iterator<Item = (&Block, &NoteBlock)> {
+        self.blocks.iter().filter_map(|block| match &block.content {
+            BlockContent::Note(n) => Some((block, n)),
             _ => None,
         })
     }

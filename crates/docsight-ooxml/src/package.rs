@@ -12,6 +12,12 @@ pub struct DocxParts {
     pub document: String,
     pub styles: Option<String>,
     pub numbering: Option<String>,
+    pub rels: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub footers: Vec<(String, String)>,
+    pub footnotes: Option<String>,
+    pub endnotes: Option<String>,
+    pub comments: Option<String>,
 }
 
 pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
@@ -26,10 +32,48 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     })?;
     let styles = read_xml_part(&mut archive, "word/styles.xml")?;
     let numbering = read_xml_part(&mut archive, "word/numbering.xml")?;
+    let rels = read_xml_part(&mut archive, "word/_rels/document.xml.rels")?;
+    let footnotes = read_xml_part(&mut archive, "word/footnotes.xml")?;
+    let endnotes = read_xml_part(&mut archive, "word/endnotes.xml")?;
+    let comments = read_xml_part(&mut archive, "word/comments.xml")?;
+
+    let mut header_names = Vec::new();
+    let mut footer_names = Vec::new();
+    for index in 0..archive.len() {
+        if let Ok(file) = archive.by_index(index) {
+            let name = file.name();
+            if name.starts_with("word/header") && name.ends_with(".xml") {
+                header_names.push(name.to_owned());
+            } else if name.starts_with("word/footer") && name.ends_with(".xml") {
+                footer_names.push(name.to_owned());
+            }
+        }
+    }
+
+    let mut headers = Vec::new();
+    for name in header_names {
+        if let Some(text) = read_xml_part(&mut archive, &name)? {
+            headers.push((name, text));
+        }
+    }
+
+    let mut footers = Vec::new();
+    for name in footer_names {
+        if let Some(text) = read_xml_part(&mut archive, &name)? {
+            footers.push((name, text));
+        }
+    }
+
     Ok(DocxParts {
         document,
         styles,
         numbering,
+        rels,
+        headers,
+        footers,
+        footnotes,
+        endnotes,
+        comments,
     })
 }
 

@@ -250,6 +250,9 @@ impl<'a> PdfDocument<'a> {
             pages,
             blocks,
             resources: Vec::new(),
+            links: Vec::new(),
+            comments: Vec::new(),
+            tracked_changes: docsight_core::TrackedChanges::default(),
             warnings: all_warnings,
         })
     }

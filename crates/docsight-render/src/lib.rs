@@ -1,5 +1,10 @@
-use docsight_core::{Diagnostic, DocsightError, DocumentSource, Rect, write_all};
+mod docx_raster;
+
+use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect, write_all};
+use docsight_layout::layout_docx;
+use docsight_ooxml::parse_docx;
 use docsight_pdf::{PdfDocument, RasterizedPage};
+use docx_raster::rasterize_docx_page;
 use serde::Serialize;
 use std::path::Path;
 
@@ -41,6 +46,53 @@ impl RenderedImage {
     pub fn write(&self, path: &Path) -> Result<(), DocsightError> {
         write_all(path, &self.png)
     }
+}
+
+pub fn render_document(
+    source: &DocumentSource,
+    request: &RenderRequest,
+) -> Result<RenderedImage, DocsightError> {
+    match source.format() {
+        DocumentFormat::Pdf => render_pdf(source, request),
+        DocumentFormat::Docx => render_docx(source, request),
+    }
+}
+
+pub fn render_docx(
+    source: &DocumentSource,
+    request: &RenderRequest,
+) -> Result<RenderedImage, DocsightError> {
+    let unpaginated = parse_docx(source)?;
+    let laid_out = layout_docx(unpaginated)?;
+    let (page_num, crop_box) = match &request.target {
+        RenderTarget::Page { page } => (*page, None),
+        RenderTarget::Region { page, bbox } => (*page, Some(*bbox)),
+        RenderTarget::Object { id } => {
+            let block = laid_out
+                .document
+                .find_block(id)
+                .ok_or_else(|| DocsightError::ObjectNotFound { object: id.clone() })?;
+            let page = block
+                .page
+                .ok_or_else(|| DocsightError::UnsupportedFeature {
+                    feature: "object has no page layout".to_owned(),
+                })?;
+            let bbox = block
+                .bbox
+                .ok_or_else(|| DocsightError::UnsupportedFeature {
+                    feature: "object has no geometry".to_owned(),
+                })?;
+            (page, Some(bbox))
+        }
+    };
+    let page = laid_out
+        .pages
+        .into_iter()
+        .find(|p| p.number == page_num)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: format!("page {page_num}"),
+        })?;
+    rasterize_docx_page(&page, request.dpi, crop_box, laid_out.document.warnings)
 }
 
 pub fn render_pdf(

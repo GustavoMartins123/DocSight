@@ -1,5 +1,5 @@
 [package]
-name = "docsight-render"
+name = "docsight-layout"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,10 +7,10 @@ license.workspace = true
 
 [dependencies]
 docsight-core = { path = "../docsight-core" }
-docsight-layout = { path = "../docsight-layout" }
-docsight-ooxml = { path = "../docsight-ooxml" }
-docsight-pdf = { path = "../docsight-pdf" }
-serde.workspace = true
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

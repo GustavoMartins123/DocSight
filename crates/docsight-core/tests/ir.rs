@@ -105,6 +105,9 @@ fn sample_document() -> Document {
         pages: vec![page1],
         blocks,
         resources: Vec::new(),
+        links: Vec::new(),
+        comments: Vec::new(),
+        tracked_changes: docsight_core::TrackedChanges::default(),
         warnings: Vec::new(),
     }
 }
