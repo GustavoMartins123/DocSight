@@ -41,6 +41,7 @@ fn sample_document() -> Document {
         columns: 2,
         header_rows: 1,
         cells: vec![cell1, cell2],
+        column_widths_pt: None,
     };
 
     let blocks = vec![

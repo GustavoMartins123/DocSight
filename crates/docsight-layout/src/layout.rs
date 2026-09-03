@@ -58,12 +58,16 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             severity: DiagnosticSeverity::Warning,
             message: "DOCX was paginated using deterministic layout engine".to_owned(),
             effect: "line wrapping and page boundaries are computed approximations".to_owned(),
+            object: None,
+            page: None,
         },
         Diagnostic {
             code: "DOCX_FONT_SUBSTITUTED".to_owned(),
             severity: DiagnosticSeverity::Warning,
             message: "layout used deterministic proportional fallback font".to_owned(),
             effect: "glyph metrics follow standard proportional reference widths".to_owned(),
+            object: None,
+            page: None,
         },
     ];
 

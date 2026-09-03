@@ -3,7 +3,7 @@ use docsight_core::{
     Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
     Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
     Hyperlink, ListItemBlock, NoteBlock, NoteKind, ObjectId, ParagraphBlock, Resource,
-    ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell, TrackedChanges,
+    ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell, TrackedChanges, UnknownBlock,
 };
 use roxmltree::{Document as XmlDocument, Node};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,6 +76,7 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     let mut table_index = 0_u32;
     let mut section_index = 0_u32;
     let mut figure_index = 0_u32;
+    let mut unknown_index = 0_u32;
     let mut link_counter = 0_usize;
     let mut reading_order = 0_u32;
 
@@ -119,16 +120,24 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &rels,
             ));
         } else {
-            warnings.push(Diagnostic {
-                code: "DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned(),
-                severity: DiagnosticSeverity::Warning,
-                message: format!("unsupported body element: {}", child.tag_name().name()),
-                effect: "the element is omitted from structural output".to_owned(),
-            });
+            unknown_index = unknown_index.checked_add(1).ok_or_else(block_count_error)?;
+            reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
+            blocks.push(parse_unknown_body_element(
+                child,
+                unknown_index,
+                source,
+                reading_order,
+                &mut warnings,
+            ));
         }
     }
 
     if sections.is_empty() {
+        warnings.push(Diagnostic::warning(
+            "DOCX_SECTION_DEFAULTED",
+            "document.xml has no sectPr; a default section was synthesized".to_owned(),
+            "page geometry falls back to Letter 612x792 pt with 72 pt margins",
+        ));
         sections.push(Section {
             id: source.object_id("sect", "/word/document.xml::body/sectPr[1]"),
             section_index: 1,
@@ -270,10 +279,12 @@ fn parse_section(
                 .or_else(|| child.attribute("r:id"));
             if let Some(r_id) = r_id {
                 if let Some((_, target)) = rels.get(r_id) {
-                    if let Some((_, text)) =
-                        header_texts.iter().find(|(name, _)| name.ends_with(target))
-                    {
-                        header_text = Some(text.clone());
+                    if let Some(normalized) = normalize_internal_target(target) {
+                        if let Some((_, text)) =
+                            header_texts.iter().find(|(name, _)| *name == normalized)
+                        {
+                            header_text = Some(text.clone());
+                        }
                     }
                 }
             }
@@ -283,21 +294,16 @@ fn parse_section(
                 .or_else(|| child.attribute("r:id"));
             if let Some(r_id) = r_id {
                 if let Some((_, target)) = rels.get(r_id) {
-                    if let Some((_, text)) =
-                        footer_texts.iter().find(|(name, _)| name.ends_with(target))
-                    {
-                        footer_text = Some(text.clone());
+                    if let Some(normalized) = normalize_internal_target(target) {
+                        if let Some((_, text)) =
+                            footer_texts.iter().find(|(name, _)| *name == normalized)
+                        {
+                            footer_text = Some(text.clone());
+                        }
                     }
                 }
             }
         }
-    }
-
-    if header_text.is_none() {
-        header_text = header_texts.first().map(|(_, text)| text.clone());
-    }
-    if footer_text.is_none() {
-        footer_text = footer_texts.first().map(|(_, text)| text.clone());
     }
 
     Section {
@@ -312,6 +318,25 @@ fn parse_section(
         header_text,
         footer_text,
     }
+}
+
+fn normalize_internal_target(target: &str) -> Option<String> {
+    if target.contains("://") || target.contains('\\') || target.contains("..") {
+        return None;
+    }
+    let relative = target.strip_prefix('/').unwrap_or(target);
+    let source_dir = "word";
+    let mut segments: Vec<&str> = source_dir.split('/').collect();
+    for segment in relative.split('/') {
+        match segment {
+            "" | "." => {}
+            other => segments.push(other),
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    Some(segments.join("/"))
 }
 
 fn parse_relationships(
@@ -601,6 +626,123 @@ fn parse_comments(
     Ok(comments)
 }
 
+fn parse_unknown_body_element(
+    node: Node<'_, '_>,
+    index: u32,
+    source: &DocumentSource,
+    reading_order: u32,
+    warnings: &mut Vec<Diagnostic>,
+) -> Block {
+    let raw_tag = node.tag_name().name().to_owned();
+    let mut child_names: BTreeSet<String> = BTreeSet::new();
+    for child in node.children().filter(Node::is_element) {
+        child_names.insert(child.tag_name().name().to_owned());
+    }
+    let details = if child_names.is_empty() {
+        None
+    } else {
+        Some(child_names.into_iter().collect::<Vec<_>>().join(", "))
+    };
+    let source_path = format!("/word/document.xml::body/{raw_tag}[{index}]");
+    let id = source.object_id("unk", &source_path);
+    warnings.push(Diagnostic {
+        code: "DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "body element {raw_tag} was not interpreted and is preserved as an opaque node"
+        ),
+        effect: "the element content is retained without semantic interpretation".to_owned(),
+        object: Some(id.clone()),
+        page: None,
+    });
+    Block {
+        id,
+        kind: BlockKind::Unknown,
+        page: None,
+        bbox: None,
+        z_index: 0,
+        reading_order,
+        source: SourceSpan::new(source_path),
+        confidence: 1.0,
+        content: BlockContent::Unknown(UnknownBlock { raw_tag, details }),
+    }
+}
+
+const KNOWN_PARAGRAPH_CHILDREN: &[&str] = &[
+    "pPr",
+    "r",
+    "hyperlink",
+    "bookmarkStart",
+    "bookmarkEnd",
+    "proofErr",
+    "ins",
+    "del",
+    "moveFrom",
+    "moveTo",
+    "commentRangeStart",
+    "commentRangeEnd",
+    "commentReference",
+    "fldSimple",
+    "sdt",
+    "smartTag",
+    "oMath",
+    "oMathPara",
+    "customXml",
+];
+
+const KNOWN_RUN_CHILDREN: &[&str] = &[
+    "rPr",
+    "t",
+    "tab",
+    "br",
+    "cr",
+    "drawing",
+    "pict",
+    "footnoteReference",
+    "endnoteReference",
+    "commentReference",
+    "fldChar",
+    "instrText",
+    "delText",
+    "noBreakHyphen",
+    "softHyphen",
+];
+
+const RUN_CONTAINERS: &[&str] = &[
+    "r",
+    "hyperlink",
+    "ins",
+    "del",
+    "moveFrom",
+    "moveTo",
+    "fldSimple",
+    "smartTag",
+];
+
+fn unsupported_run_elements(node: Node<'_, '_>) -> Vec<String> {
+    let mut unknown: BTreeSet<String> = BTreeSet::new();
+    for child in node.children().filter(Node::is_element) {
+        let name = child.tag_name().name();
+        if RUN_CONTAINERS.contains(&name) {
+            for grandchild in child.children().filter(Node::is_element) {
+                let inner = grandchild.tag_name().name();
+                if !KNOWN_RUN_CHILDREN.contains(&inner) {
+                    unknown.insert(format!("{name}/{inner}"));
+                }
+            }
+        } else if !KNOWN_PARAGRAPH_CHILDREN.contains(&name) {
+            unknown.insert(format!("p/{name}"));
+        }
+    }
+    if node
+        .descendants()
+        .any(|descendant| descendant.tag_name().name() == "oMath")
+    {
+        unknown.insert("oMath".to_owned());
+    }
+    unknown.into_iter().collect()
+}
+
 fn parse_paragraph(
     node: Node<'_, '_>,
     index: u32,
@@ -658,8 +800,11 @@ fn parse_paragraph(
         )
     };
 
+    let id = source.object_id(prefix, &source_path);
+    warn_unsupported_run_content(node, &id, warnings);
+
     Ok(Block {
-        id: source.object_id(prefix, &source_path),
+        id,
         kind,
         page: None,
         bbox: None,
@@ -669,6 +814,28 @@ fn parse_paragraph(
         confidence: 1.0,
         content,
     })
+}
+
+fn warn_unsupported_run_content(
+    node: Node<'_, '_>,
+    block_id: &ObjectId,
+    warnings: &mut Vec<Diagnostic>,
+) {
+    let unknown = unsupported_run_elements(node);
+    if !unknown.is_empty() {
+        warnings.push(Diagnostic {
+            code: "DOCX_RUN_ELEMENT_UNSUPPORTED".to_owned(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "paragraph contains run content that was not interpreted: {}",
+                unknown.join(", ")
+            ),
+            effect: "the paragraph text may be incomplete because run content was not extracted"
+                .to_owned(),
+            object: Some(block_id.clone()),
+            page: None,
+        });
+    }
 }
 
 fn parse_table(
@@ -708,6 +875,7 @@ fn parse_table_at(
     let mut active_merges: BTreeMap<u32, usize> = BTreeMap::new();
     let mut rows = 0_u32;
     let mut columns = 0_u32;
+    let mut header_rows = 0_u32;
     for (row_offset, row_node) in node
         .children()
         .filter(|child| child.has_tag_name((W_NS, "tr")))
@@ -719,10 +887,12 @@ fn parse_table_at(
         let mut column = 0_u32;
         let mut next_merges = BTreeMap::new();
         let mut extended = BTreeSet::new();
+        let mut row_is_header = false;
         for cell_node in row_node
             .children()
             .filter(|child| child.has_tag_name((W_NS, "tc")))
         {
+            row_is_header |= table_cell_is_header(cell_node);
             let column_span = table_cell_span(cell_node)?;
             let column_end = column
                 .checked_add(column_span)
@@ -804,9 +974,13 @@ fn parse_table_at(
             }
             column = column_end;
         }
+        if row_is_header {
+            header_rows = header_rows.checked_add(1).ok_or_else(table_size_error)?;
+        }
         columns = columns.max(column);
         active_merges = next_merges;
     }
+    let column_widths_pt = table_grid_widths(node);
     let id = source.object_id("tbl", &source_path);
     let span = SourceSpan::new(source_path);
     Ok((
@@ -814,11 +988,33 @@ fn parse_table_at(
         TableBlock {
             rows,
             columns,
-            header_rows: 1,
+            header_rows,
             cells,
+            column_widths_pt,
         },
         span,
     ))
+}
+
+fn table_grid_widths(node: Node<'_, '_>) -> Option<Vec<f32>> {
+    let grid = child_element(node, "tblGrid")?;
+    let widths: Vec<f32> = grid
+        .children()
+        .filter(|child| child.has_tag_name((W_NS, "gridCol")))
+        .filter_map(|column| {
+            column
+                .attribute((W_NS, "w"))
+                .and_then(|value| value.parse::<f32>().ok())
+                .map(|dxa| dxa / 20.0)
+        })
+        .collect();
+    (!widths.is_empty()).then_some(widths)
+}
+
+fn table_cell_is_header(node: Node<'_, '_>) -> bool {
+    child_element(node, "tcPr")
+        .map(|properties| child_element(properties, "tblHeader").is_some())
+        .unwrap_or(false)
 }
 
 fn paragraph_text(node: Node<'_, '_>) -> String {
@@ -1086,12 +1282,11 @@ fn resolve_list_marker(
     let (format, pattern, ordered) = match definition {
         Some(definition) => {
             if definition.format.is_none() {
-                warnings.push(Diagnostic {
-                    code: "DOCX_NUMBERING_FORMAT_MISSING".to_owned(),
-                    severity: DiagnosticSeverity::Warning,
-                    message: format!("numbering format is missing for numId {num_id}"),
-                    effect: "the list item ordering semantics are unavailable".to_owned(),
-                });
+                warnings.push(Diagnostic::warning(
+                    "DOCX_NUMBERING_FORMAT_MISSING",
+                    format!("numbering format is missing for numId {num_id}"),
+                    "the list item ordering semantics are unavailable",
+                ));
             }
             let ordered = definition
                 .format
@@ -1104,12 +1299,11 @@ fn resolve_list_marker(
             )
         }
         None => {
-            warnings.push(Diagnostic {
-                code: "DOCX_NUMBERING_UNRESOLVED".to_owned(),
-                severity: DiagnosticSeverity::Warning,
-                message: format!("numbering definition was not resolved for numId {num_id}"),
-                effect: "the list item marker format is unknown".to_owned(),
-            });
+            warnings.push(Diagnostic::warning(
+                "DOCX_NUMBERING_UNRESOLVED",
+                format!("numbering definition was not resolved for numId {num_id}"),
+                "the list item marker format is unknown",
+            ));
             (None, None, None)
         }
     };

@@ -95,6 +95,7 @@ impl InferredTable {
             columns: self.columns,
             header_rows: self.header_rows,
             cells,
+            column_widths_pt: None,
         }
     }
 

@@ -220,6 +220,7 @@ fn lays_out_tables_with_cells_and_borders() -> Result<(), Box<dyn std::error::Er
             columns: 2,
             header_rows: 1,
             cells,
+            column_widths_pt: None,
         }),
     };
 

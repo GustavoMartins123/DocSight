@@ -42,6 +42,23 @@ pub struct Diagnostic {
     pub severity: DiagnosticSeverity,
     pub message: String,
     pub effect: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<ObjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+}
+
+impl Diagnostic {
+    pub fn warning(code: &str, message: String, effect: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            severity: DiagnosticSeverity::Warning,
+            message,
+            effect: effect.to_owned(),
+            object: None,
+            page: None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -62,6 +79,8 @@ pub enum DocsightError {
     MalformedDocument { message: String },
     #[error("encrypted documents require a password and are not supported")]
     EncryptedDocument,
+    #[error("encrypted OOXML package detected inside an OLE2 container")]
+    EncryptedPackage,
     #[error("{backend} backend failed: {message}")]
     BackendFailure { backend: String, message: String },
     #[error("{operation} is not supported for {format} documents")]
@@ -81,7 +100,7 @@ impl DocsightError {
             Self::InvalidArgument { .. } => 2,
             Self::UnsupportedFormat | Self::UnsupportedOperation { .. } => 10,
             Self::MalformedDocument { .. } => 11,
-            Self::EncryptedDocument => 12,
+            Self::EncryptedDocument | Self::EncryptedPackage => 12,
             Self::ResourceLimit { .. } => 13,
             Self::UnsupportedFeature { .. } => 20,
             Self::ObjectNotFound { .. } => 21,
@@ -99,17 +118,15 @@ impl DocsightError {
                 "the requested operation was not performed",
             ),
             Self::UnsupportedFeature { .. } => (
-                "UNSUPPORTED_FEATURE",
-                "the requested operation was not performed",
+                "LAYOUT_PARTIAL",
+                "the requested result requires unsupported layout or rendering behavior",
             ),
             Self::MalformedDocument { .. } => (
                 "MALFORMED_DOCUMENT",
                 "the document was rejected during parsing",
             ),
-            Self::EncryptedDocument => (
-                "ENCRYPTED_DOCUMENT",
-                "the document was rejected before inspection",
-            ),
+            Self::EncryptedDocument => ("ENCRYPTED", "the document was rejected before inspection"),
+            Self::EncryptedPackage => ("ENCRYPTED", "the document was rejected before inspection"),
             Self::ResourceLimit { .. } => {
                 ("RESOURCE_LIMIT", "the document was rejected before parsing")
             }
@@ -125,6 +142,8 @@ impl DocsightError {
             severity: DiagnosticSeverity::Error,
             message: self.to_string(),
             effect: effect.to_owned(),
+            object: None,
+            page: None,
         }
     }
 }
@@ -303,7 +322,24 @@ fn sniff_format(bytes: &[u8]) -> Result<DocumentFormat, DocsightError> {
     {
         return Ok(DocumentFormat::Docx);
     }
+    if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        if contains_utf16le(bytes, "EncryptedPackage") {
+            return Err(DocsightError::EncryptedPackage);
+        }
+        return Err(DocsightError::UnsupportedFormat);
+    }
     Err(DocsightError::UnsupportedFormat)
+}
+
+fn contains_utf16le(haystack: &[u8], needle: &str) -> bool {
+    let encoded: Vec<u8> = needle
+        .chars()
+        .flat_map(|character| {
+            let code = character as u32;
+            vec![(code & 0xFF) as u8, ((code >> 8) & 0xFF) as u8]
+        })
+        .collect();
+    contains_bytes(haystack, &encoded)
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -346,6 +382,54 @@ mod tests {
     fn rejects_extension_like_content_without_magic_bytes() {
         let error = DocumentSource::from_bytes(b"report.docx".to_vec());
         assert!(matches!(error, Err(DocsightError::UnsupportedFormat)));
+    }
+
+    #[test]
+    fn identifies_encrypted_ooxml_package_inside_ole2_container() {
+        let mut bytes = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+        for character in "EncryptedPackage".chars() {
+            let code = character as u32;
+            bytes.push((code & 0xFF) as u8);
+            bytes.push(((code >> 8) & 0xFF) as u8);
+        }
+        let error = DocumentSource::from_bytes(bytes);
+        match error {
+            Err(error @ DocsightError::EncryptedPackage) => assert_eq!(error.exit_code(), 12),
+            _ => unreachable!("expected EncryptedPackage"),
+        }
+    }
+
+    #[test]
+    fn rejects_legacy_ole2_documents_as_unsupported_format() {
+        let bytes = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x01];
+        let error = DocumentSource::from_bytes(bytes);
+        match error {
+            Err(error @ DocsightError::UnsupportedFormat) => assert_eq!(error.exit_code(), 10),
+            _ => unreachable!("expected UnsupportedFormat"),
+        }
+    }
+
+    #[test]
+    fn maps_exit_twenty_to_layout_partial_code() {
+        let diagnostic = DocsightError::UnsupportedFeature {
+            feature: "FlateDecode".to_owned(),
+        }
+        .diagnostic();
+        assert_eq!(diagnostic.code, "LAYOUT_PARTIAL");
+        assert_eq!(
+            DocsightError::UnsupportedFeature {
+                feature: "FlateDecode".to_owned()
+            }
+            .exit_code(),
+            20
+        );
+    }
+
+    #[test]
+    fn maps_encrypted_package_to_encrypted_code() {
+        let diagnostic = DocsightError::EncryptedPackage.diagnostic();
+        assert_eq!(diagnostic.code, "ENCRYPTED");
+        assert_eq!(DocsightError::EncryptedPackage.exit_code(), 12);
     }
 
     #[test]

@@ -40,13 +40,12 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     let mut header_names = Vec::new();
     let mut footer_names = Vec::new();
     for index in 0..archive.len() {
-        if let Ok(file) = archive.by_index(index) {
-            let name = file.name();
-            if name.starts_with("word/header") && name.ends_with(".xml") {
-                header_names.push(name.to_owned());
-            } else if name.starts_with("word/footer") && name.ends_with(".xml") {
-                footer_names.push(name.to_owned());
-            }
+        let file = archive.by_index(index).map_err(zip_error)?;
+        let name = file.name();
+        if name.starts_with("word/header") && name.ends_with(".xml") {
+            header_names.push(name.to_owned());
+        } else if name.starts_with("word/footer") && name.ends_with(".xml") {
+            footer_names.push(name.to_owned());
         }
     }
 

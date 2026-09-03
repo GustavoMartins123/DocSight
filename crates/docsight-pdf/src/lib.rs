@@ -564,6 +564,8 @@ fn base14_warning(page: u32) -> Diagnostic {
         message: format!("page {page} uses DOCSIGHT's initial Helvetica bitmap implementation"),
         effect: "glyph shapes and text metrics can differ from a full PDF font implementation"
             .to_owned(),
+        object: None,
+        page: Some(page),
     }
 }
 
@@ -573,6 +575,8 @@ fn renderer_warning(page: u32) -> Diagnostic {
         severity: DiagnosticSeverity::Warning,
         message: format!("page {page} was rasterized by DOCSIGHT's initial native renderer"),
         effect: "supported paths and glyphs are rasterized without antialiasing".to_owned(),
+        object: None,
+        page: Some(page),
     }
 }
 

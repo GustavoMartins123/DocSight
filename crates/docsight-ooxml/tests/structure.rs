@@ -322,3 +322,121 @@ fn parses_figures_headers_footers_notes_links_and_comments()
 
     Ok(())
 }
+
+#[test]
+fn preserves_unknown_body_elements_as_opaque_blocks() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body>
+        <w:p><w:r><w:t>Before</w:t></w:r></w:p>
+        <w:bgPict><w:shapeId w:val="7"/></w:bgPict>
+        <w:p><w:r><w:t>After</w:t></w:r></w:p>
+        <w:sectPr/>
+        </w:body></w:document>"#
+    );
+    let bytes = package(&document, None, None)?;
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+
+    let unknown: Vec<_> = doc
+        .blocks
+        .iter()
+        .filter(|block| block.kind == BlockKind::Unknown)
+        .collect();
+    assert_eq!(unknown.len(), 1);
+    assert!(unknown[0].id.as_str().starts_with("unk_"));
+    let docsight_core::BlockContent::Unknown(block) = &unknown[0].content else {
+        unreachable!("expected unknown content");
+    };
+    assert_eq!(block.raw_tag, "bgPict");
+    assert_eq!(block.details.as_deref(), Some("shapeId"));
+    let diagnostic = doc
+        .warnings
+        .iter()
+        .find(|warning| warning.code == "DOCX_BODY_ELEMENT_UNSUPPORTED")
+        .ok_or("missing opaque element diagnostic")?;
+    assert_eq!(diagnostic.object.as_ref(), Some(&unknown[0].id));
+
+    Ok(())
+}
+
+#[test]
+fn warns_when_section_is_defaulted_and_run_content_is_uninterpreted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body>
+        <w:p><w:r><w:t>Body</w:t></w:r><w:r><w:object w:dxaOrig="1"/></w:r></w:p>
+        </w:body></w:document>"#
+    );
+    let bytes = package(&document, None, None)?;
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+
+    assert!(
+        doc.warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_SECTION_DEFAULTED")
+    );
+    let run_warning = doc
+        .warnings
+        .iter()
+        .find(|warning| warning.code == "DOCX_RUN_ELEMENT_UNSUPPORTED")
+        .ok_or("missing run element diagnostic")?;
+    assert!(run_warning.message.contains("r/object"));
+
+    Ok(())
+}
+
+#[test]
+fn reads_table_grid_widths_and_header_rows() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body>
+        <w:tbl>
+          <w:tblGrid><w:gridCol w:w="2880"/><w:gridCol w:w="1440"/></w:tblGrid>
+          <w:tr><w:tc><w:tcPr><w:tblHeader/></w:tcPr><w:p><w:r><w:t>Head</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r></w:p></w:tc></w:tr>
+          <w:tr><w:tc><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>
+        </w:tbl>
+        <w:sectPr/>
+        </w:body></w:document>"#
+    );
+    let bytes = package(&document, None, None)?;
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+
+    let (_, table) = doc.tables().next().ok_or("missing table")?;
+    assert_eq!(table.header_rows, 1);
+    let widths = table.column_widths_pt.as_ref().ok_or("missing widths")?;
+    assert_eq!(widths.len(), 2);
+    assert!((widths[0] - 144.0).abs() < 0.01, "{widths:?}");
+    assert!((widths[1] - 72.0).abs() < 0.01, "{widths:?}");
+
+    Ok(())
+}
+
+#[test]
+fn header_without_reference_is_not_assigned() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body>
+        <w:p><w:r><w:t>Body</w:t></w:r></w:p>
+        <w:sectPr/>
+        </w:body></w:document>"#
+    );
+    let header = format!(
+        r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:t>Orphan header</w:t></w:r></w:p></w:hdr>"#
+    );
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    writer.start_file("word/header1.xml", options)?;
+    writer.write_all(header.as_bytes())?;
+    let bytes = writer.finish()?.into_inner();
+
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+    assert_eq!(doc.sections[0].header_text, None);
+
+    Ok(())
+}
