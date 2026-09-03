@@ -97,6 +97,7 @@ pub(crate) fn reconstruct_page_semantics(
                     "pdf::page[{page_num}]::p[{:.0}_{:.0}]",
                     bbox.x0, bbox.y0
                 )),
+                flags: docsight_core::LayoutFlags::default(),
                 confidence: 0.85,
                 content: BlockContent::Paragraph(ParagraphBlock {
                     text,
@@ -157,6 +158,7 @@ pub(crate) fn reconstruct_page_semantics(
                     "pdf::page[{page}]::h[{:.0}_{:.0}]",
                     line.bbox.x0, line.bbox.y0
                 )),
+                flags: docsight_core::LayoutFlags::default(),
                 confidence: 0.90,
                 content: BlockContent::Heading(HeadingBlock {
                     level,

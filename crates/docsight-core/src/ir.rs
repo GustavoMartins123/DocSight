@@ -122,6 +122,8 @@ pub struct NoteBlock {
     pub kind: NoteKind,
     pub note_id: String,
     pub text: String,
+    #[serde(default)]
+    pub anchor_path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -143,6 +145,18 @@ pub enum BlockContent {
     Unknown(UnknownBlock),
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LayoutFlags {
+    #[serde(default)]
+    pub page_break_before: bool,
+    #[serde(default)]
+    pub break_after: bool,
+    #[serde(default)]
+    pub keep_with_next: bool,
+    #[serde(default)]
+    pub keep_lines: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub id: ObjectId,
@@ -153,6 +167,8 @@ pub struct Block {
     pub reading_order: u32,
     pub source: SourceSpan,
     pub confidence: f32,
+    #[serde(default)]
+    pub flags: LayoutFlags,
     pub content: BlockContent,
 }
 
@@ -296,6 +312,8 @@ pub struct Hyperlink {
     pub target: String,
     pub is_external: bool,
     pub page: Option<u32>,
+    #[serde(default)]
+    pub anchor_path: Option<String>,
     pub source: SourceSpan,
 }
 
@@ -306,6 +324,8 @@ pub struct Comment {
     pub date: Option<String>,
     pub text: String,
     pub page: Option<u32>,
+    #[serde(default)]
+    pub anchor_path: Option<String>,
     pub source: SourceSpan,
 }
 

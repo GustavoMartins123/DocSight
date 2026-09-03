@@ -4,6 +4,8 @@ use docsight_core::{
     Overlay, OverlayKind, Page, Rect, SourceSpan,
 };
 
+const MAX_LAYOUT_PAGES: u32 = 10_000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextRunLayout {
     pub text: String,
@@ -34,6 +36,11 @@ pub struct LaidOutDocument {
     pub pages: Vec<LaidOutPage>,
 }
 
+struct Placement {
+    page: u32,
+    y: f32,
+}
+
 pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> {
     let (page_width, page_height, margin_top, margin_bottom, margin_left, margin_right) =
         if let Some(section) = doc.sections.first() {
@@ -51,6 +58,7 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
 
     let content_width = (page_width - margin_left - margin_right).max(100.0);
     let content_height = (page_height - margin_top - margin_bottom).max(100.0);
+    let content_bottom = margin_top + content_height;
 
     let mut warnings = vec![
         Diagnostic {
@@ -69,101 +77,193 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             object: None,
             page: None,
         },
+        Diagnostic {
+            code: "DOCX_PAGINATION_BLOCK_GRANULAR".to_owned(),
+            severity: DiagnosticSeverity::Warning,
+            message: "pagination never splits a block across pages".to_owned(),
+            effect: "widow, orphan and keep-lines rules are approximated by whole-block moves; page breaks can occur earlier than in Word"
+                .to_owned(),
+            object: None,
+            page: None,
+        },
     ];
 
-    let mut laid_pages = Vec::new();
-    let mut doc_pages = Vec::new();
+    let block_count = doc.blocks.len();
+    let mut heights = Vec::with_capacity(block_count);
+    for block in &doc.blocks {
+        heights.push(measure_height(block, content_width)?);
+    }
+
+    let mut placements: Vec<Placement> = Vec::with_capacity(block_count);
     let mut current_page_number = 1_u32;
     let mut current_y = margin_top;
-    let mut current_block_ids = Vec::new();
-    let mut current_runs = Vec::new();
-    let mut current_borders = Vec::new();
+    let mut page_has_content = false;
 
-    let mut updated_blocks = Vec::with_capacity(doc.blocks.len());
-
-    for (index, mut block) in doc.blocks.into_iter().enumerate() {
-        let (height, runs, borders) =
-            measure_and_layout_block(&mut block, content_width, margin_left, current_y)?;
-
-        if current_y + height > margin_top + content_height && current_y > margin_top {
-            doc_pages.push(Page {
-                number: current_page_number,
-                width_pt: page_width,
-                height_pt: page_height,
-                block_ids: std::mem::take(&mut current_block_ids),
-                overlays: Vec::new(),
-            });
-            laid_pages.push(LaidOutPage {
-                number: current_page_number,
-                width_pt: page_width,
-                height_pt: page_height,
-                runs: std::mem::take(&mut current_runs),
-                borders: std::mem::take(&mut current_borders),
-            });
-            current_page_number =
-                current_page_number
-                    .checked_add(1)
-                    .ok_or_else(|| DocsightError::ResourceLimit {
-                        resource: "page count".to_owned(),
-                        limit: u32::MAX as u64,
-                    })?;
+    for index in 0..block_count {
+        let flags = doc.blocks[index].flags;
+        if flags.page_break_before && page_has_content {
+            current_page_number = advance_page(current_page_number)?;
             current_y = margin_top;
-
-            let (re_height, re_runs, re_borders) =
-                measure_and_layout_block(&mut block, content_width, margin_left, current_y)?;
-            let block_bbox = Rect::new(
-                margin_left,
-                current_y,
-                margin_left + content_width,
-                current_y + re_height,
-            )?;
-            block.page = Some(current_page_number);
-            block.bbox = Some(block_bbox);
-            block.reading_order = (index + 1) as u32;
-            block.confidence = 0.95;
-
-            current_block_ids.push(block.id.clone());
-            current_runs.extend(re_runs);
-            current_borders.extend(re_borders);
-            current_y += re_height;
-        } else {
-            let block_bbox = Rect::new(
-                margin_left,
-                current_y,
-                margin_left + content_width,
-                current_y + height,
-            )?;
-            block.page = Some(current_page_number);
-            block.bbox = Some(block_bbox);
-            block.reading_order = (index + 1) as u32;
-            block.confidence = 0.95;
-
-            current_block_ids.push(block.id.clone());
-            current_runs.extend(runs);
-            current_borders.extend(borders);
-            current_y += height;
+            page_has_content = false;
         }
+
+        let mut chain_end = index;
+        while chain_end + 1 < block_count && doc.blocks[chain_end].flags.keep_with_next {
+            chain_end += 1;
+        }
+        let chain_height: f32 = heights[index..=chain_end].iter().sum();
+        let remaining = content_bottom - current_y;
+        let block_fits = heights[index] <= remaining;
+        let chain_fits = chain_end == index || chain_height <= remaining;
+
+        if page_has_content && (!block_fits || !chain_fits) {
+            current_page_number = advance_page(current_page_number)?;
+            current_y = margin_top;
+        }
+
+        if heights[index] > content_height {
+            warnings.push(Diagnostic {
+                code: "DOCX_BLOCK_TALLER_THAN_PAGE".to_owned(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!(
+                    "block {} is taller than the content area and overflows the page",
+                    doc.blocks[index].id
+                ),
+                effect: "the block geometry extends beyond the page bottom edge".to_owned(),
+                object: Some(doc.blocks[index].id.clone()),
+                page: Some(current_page_number),
+            });
+        }
+
+        placements.push(Placement {
+            page: current_page_number,
+            y: current_y,
+        });
+        current_y += heights[index];
+        page_has_content = true;
+
+        if flags.break_after {
+            current_page_number = advance_page(current_page_number)?;
+            current_y = margin_top;
+            page_has_content = false;
+        }
+    }
+
+    let total_pages = placements
+        .last()
+        .map(|placement| placement.page)
+        .unwrap_or(current_page_number);
+
+    let mut laid_pages: Vec<LaidOutPage> = Vec::with_capacity(total_pages as usize);
+    let mut doc_pages: Vec<Page> = Vec::with_capacity(total_pages as usize);
+    for number in 1..=total_pages {
+        laid_pages.push(LaidOutPage {
+            number,
+            width_pt: page_width,
+            height_pt: page_height,
+            runs: Vec::new(),
+            borders: Vec::new(),
+        });
+        doc_pages.push(Page {
+            number,
+            width_pt: page_width,
+            height_pt: page_height,
+            block_ids: Vec::new(),
+            overlays: Vec::new(),
+        });
+    }
+
+    let mut updated_blocks: Vec<Block> = Vec::with_capacity(block_count);
+    let source_blocks = std::mem::take(&mut doc.blocks);
+    for (placement_index, (mut block, placement)) in
+        source_blocks.into_iter().zip(placements.iter()).enumerate()
+    {
+        let (height, runs, borders) = emit_block(
+            &mut block,
+            content_width,
+            margin_left,
+            placement.y,
+            &mut warnings,
+        )?;
+        block.page = Some(placement.page);
+        block.bbox = Some(Rect::new(
+            margin_left,
+            placement.y,
+            margin_left + content_width,
+            placement.y + height,
+        )?);
+        block.reading_order = (placement_index + 1) as u32;
+        block.confidence = 0.95;
+
+        let laid_page = &mut laid_pages[(placement.page - 1) as usize];
+        let doc_page = &mut doc_pages[(placement.page - 1) as usize];
+        doc_page.block_ids.push(block.id.clone());
+        laid_page.runs.extend(runs);
+        laid_page.borders.extend(borders);
 
         updated_blocks.push(block);
     }
 
-    doc_pages.push(Page {
-        number: current_page_number,
-        width_pt: page_width,
-        height_pt: page_height,
-        block_ids: current_block_ids,
-        overlays: Vec::new(),
-    });
-    laid_pages.push(LaidOutPage {
-        number: current_page_number,
-        width_pt: page_width,
-        height_pt: page_height,
-        runs: current_runs,
-        borders: current_borders,
-    });
+    anchor_links_and_comments(
+        &doc.sha256,
+        &updated_blocks,
+        &mut doc.links,
+        &mut doc.comments,
+        &mut doc_pages,
+        &mut warnings,
+    );
 
-    let header_template = doc.sections.first().and_then(|s| s.header_text.clone());
-    let footer_template = doc.sections.first().and_then(|s| s.footer_text.clone());
+    project_headers_footers(
+        &doc.sha256,
+        &doc.sections,
+        &mut doc_pages,
+        &mut laid_pages,
+        page_height,
+        margin_top,
+        margin_bottom,
+        margin_left,
+        content_width,
+    );
+
+    doc.pages = doc_pages;
+    doc.blocks = updated_blocks;
+    doc.warnings.append(&mut warnings);
+
+    Ok(LaidOutDocument {
+        document: doc,
+        pages: laid_pages,
+    })
+}
+
+fn advance_page(current: u32) -> Result<u32, DocsightError> {
+    if current >= MAX_LAYOUT_PAGES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "layout page count".to_owned(),
+            limit: u64::from(MAX_LAYOUT_PAGES),
+        });
+    }
+    current
+        .checked_add(1)
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "page count".to_owned(),
+            limit: u32::MAX as u64,
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_headers_footers(
+    document_digest: &str,
+    sections: &[docsight_core::Section],
+    doc_pages: &mut [Page],
+    laid_pages: &mut [LaidOutPage],
+    page_height: f32,
+    margin_top: f32,
+    margin_bottom: f32,
+    margin_left: f32,
+    content_width: f32,
+) {
+    let header_template = sections.first().and_then(|s| s.header_text.clone());
+    let footer_template = sections.first().and_then(|s| s.footer_text.clone());
 
     for (page_idx, page) in doc_pages.iter_mut().enumerate() {
         if let Some(ref hdr) = header_template {
@@ -175,8 +275,11 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
                 margin_left + content_width,
                 hdr_bottom,
             ) {
-                let overlay_id =
-                    ObjectId::new("hdr", &doc.sha256, &format!("page[{}]/header", page.number));
+                let overlay_id = ObjectId::new(
+                    "hdr",
+                    document_digest,
+                    &format!("page[{}]/header", page.number),
+                );
                 page.overlays.push(Overlay {
                     id: overlay_id,
                     kind: OverlayKind::Header,
@@ -205,8 +308,11 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
                 margin_left + content_width,
                 ftr_bottom,
             ) {
-                let overlay_id =
-                    ObjectId::new("ftr", &doc.sha256, &format!("page[{}]/footer", page.number));
+                let overlay_id = ObjectId::new(
+                    "ftr",
+                    document_digest,
+                    &format!("page[{}]/footer", page.number),
+                );
                 page.overlays.push(Overlay {
                     id: overlay_id,
                     kind: OverlayKind::Footer,
@@ -225,33 +331,91 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             }
         }
     }
-
-    for link in &mut doc.links {
-        let matched_page = updated_blocks.iter().find_map(|b| {
-            if b.text().contains(&link.text) {
-                b.page
-            } else {
-                None
-            }
-        });
-        link.page = matched_page.or(Some(1));
-    }
-
-    doc.pages = doc_pages;
-    doc.blocks = updated_blocks;
-    doc.warnings.append(&mut warnings);
-
-    Ok(LaidOutDocument {
-        document: doc,
-        pages: laid_pages,
-    })
 }
 
-fn measure_and_layout_block(
+fn anchor_links_and_comments(
+    document_digest: &str,
+    blocks: &[Block],
+    links: &mut [docsight_core::Hyperlink],
+    comments: &mut [docsight_core::Comment],
+    doc_pages: &mut [Page],
+    warnings: &mut Vec<Diagnostic>,
+) {
+    for link in links.iter_mut() {
+        let anchor_page = link
+            .anchor_path
+            .as_deref()
+            .and_then(|path| blocks.iter().find(|b| b.source.path == path))
+            .and_then(|block| block.page);
+        match anchor_page {
+            Some(page) => link.page = Some(page),
+            None => warnings.push(Diagnostic {
+                code: "DOCX_LINK_PAGE_UNRESOLVED".to_owned(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!(
+                    "hyperlink {} could not be anchored to a placed block",
+                    link.id
+                ),
+                effect: "the link has no page attribution; geometry is unknown".to_owned(),
+                object: Some(link.id.clone()),
+                page: None,
+            }),
+        }
+    }
+    for comment in comments.iter_mut() {
+        let anchor = comment
+            .anchor_path
+            .as_deref()
+            .and_then(|path| blocks.iter().find(|b| b.source.path == path));
+        let anchor_page = anchor.and_then(|block| block.page);
+        comment.page = anchor_page;
+        if let (Some(page), Some(anchor_block)) = (anchor_page, anchor) {
+            let bbox_top = anchor_block
+                .bbox
+                .as_ref()
+                .map(|bbox| bbox.y0)
+                .unwrap_or(0.0);
+            let bbox_bottom = (bbox_top + 10.0).min(
+                anchor_block
+                    .bbox
+                    .as_ref()
+                    .map_or(0.0, |b| b.y1)
+                    .max(bbox_top + 10.0),
+            );
+            let bbox = Rect::new(0.0, bbox_top, 12.0, bbox_bottom).ok();
+            if let Some(doc_page) = doc_pages
+                .iter_mut()
+                .find(|candidate| candidate.number == page)
+            {
+                doc_page.overlays.push(Overlay {
+                    id: ObjectId::new(
+                        "cmt",
+                        document_digest,
+                        &format!("page[{page}]/{}", comment.id),
+                    ),
+                    kind: OverlayKind::CommentMarker,
+                    page,
+                    bbox,
+                    text: comment.text.clone(),
+                    source: comment.source.clone(),
+                });
+            }
+        }
+    }
+}
+
+fn measure_height(block: &Block, content_width: f32) -> Result<f32, DocsightError> {
+    let mut copy = block.clone();
+    let (height, _, _) = emit_block(&mut copy, content_width, 0.0, 0.0, &mut Vec::new())?;
+    Ok(height)
+}
+
+fn emit_block(
     block: &mut Block,
     content_width: f32,
     margin_left: f32,
     base_y: f32,
+    warnings: &mut Vec<Diagnostic>,
 ) -> Result<(f32, Vec<TextRunLayout>, Vec<BorderLayout>), DocsightError> {
     match &mut block.content {
         BlockContent::Paragraph(p) => {
@@ -364,7 +528,37 @@ fn measure_and_layout_block(
         }
         BlockContent::Table(tbl) => {
             let cols = tbl.columns.max(1);
-            let col_w = content_width / cols as f32;
+            let col_widths = match tbl.column_widths_pt.as_ref() {
+                Some(widths) if widths.len() == cols as usize => {
+                    let sum: f32 = widths.iter().sum();
+                    if sum > 0.0 {
+                        widths.iter().map(|w| w / sum * content_width).collect()
+                    } else {
+                        vec![content_width / cols as f32; cols as usize]
+                    }
+                }
+                Some(widths) => {
+                    warnings.push(Diagnostic {
+                        code: "DOCX_TABLE_GRID_WIDTHS_UNUSABLE".to_owned(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: format!(
+                            "table grid declares {} columns but layout computed {cols}",
+                            widths.len()
+                        ),
+                        effect: "columns fall back to equal widths".to_owned(),
+                        object: Some(block.id.clone()),
+                        page: block.page,
+                    });
+                    vec![content_width / cols as f32; cols as usize]
+                }
+                None => vec![content_width / cols as f32; cols as usize],
+            };
+            let col_w = |index: u32| -> f32 {
+                col_widths
+                    .get(index as usize)
+                    .copied()
+                    .unwrap_or(content_width / cols as f32)
+            };
             let padding = 4.0_f32;
             let font_size = 9.5_f32;
             let line_height = 12.0_f32;
@@ -373,7 +567,9 @@ fn measure_and_layout_block(
             let mut row_heights = vec![18.0_f32; row_count];
 
             for cell in &tbl.cells {
-                let cell_w = col_w * cell.column_span as f32;
+                let cell_w = (cell.column..cell.column + cell.column_span)
+                    .map(col_w)
+                    .sum::<f32>();
                 let usable_w = (cell_w - padding * 2.0).max(10.0);
                 let lines = wrap_text(&cell.text, font_size, usable_w);
                 let cell_h = lines.len() as f32 * line_height + padding * 2.0;
@@ -399,8 +595,11 @@ fn measure_and_layout_block(
             let mut borders = Vec::new();
 
             for cell in &mut tbl.cells {
-                let cell_x0 = margin_left + cell.column as f32 * col_w;
-                let cell_x1 = cell_x0 + cell.column_span as f32 * col_w;
+                let cell_x0 = margin_left + (0..cell.column).map(col_w).sum::<f32>();
+                let cell_x1 = cell_x0
+                    + (cell.column..cell.column + cell.column_span)
+                        .map(col_w)
+                        .sum::<f32>();
                 let r0 = (cell.row as usize).min(row_y.len() - 1);
                 let r1 = ((cell.row + cell.row_span) as usize).min(row_y.len() - 1);
                 let cell_y0 = row_y[r0];

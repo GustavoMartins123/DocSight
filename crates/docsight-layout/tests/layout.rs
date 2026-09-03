@@ -1,6 +1,6 @@
 use docsight_core::{
-    Block, BlockContent, Document, DocumentFormat, DocumentMetadata, HeadingBlock, ObjectId,
-    ParagraphBlock, Section, SourceSpan, TableBlock, TableCell,
+    Block, BlockContent, Document, DocumentFormat, DocumentMetadata, HeadingBlock, LayoutFlags,
+    ObjectId, ParagraphBlock, Section, SourceSpan, TableBlock, TableCell,
 };
 use docsight_layout::{layout_docx, text_width, wrap_text};
 
@@ -50,6 +50,7 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         reading_order: 1,
         source: SourceSpan::new("/word/document.xml::body/p[1]"),
         confidence: 1.0,
+        flags: Default::default(),
         content: BlockContent::Heading(HeadingBlock {
             level: 1,
             text: "Document Title".to_owned(),
@@ -65,6 +66,7 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         reading_order: 2,
         source: SourceSpan::new("/word/document.xml::body/p[2]"),
         confidence: 1.0,
+        flags: Default::default(),
         content: BlockContent::Paragraph(ParagraphBlock {
             text: "This is a sample paragraph describing the deterministic layout implementation."
                 .to_owned(),
@@ -126,6 +128,7 @@ fn paginates_large_content_into_multiple_pages() -> Result<(), Box<dyn std::erro
             reading_order: i,
             source: SourceSpan::new(format!("/word/document.xml::body/p[{i}]")),
             confidence: 1.0,
+            flags: Default::default(),
             content: BlockContent::Paragraph(ParagraphBlock {
                 text: format!("Paragraph {i}: This is substantial content to fill space on the page and force deterministic pagination breaks."),
                 style_id: None,
@@ -215,6 +218,7 @@ fn lays_out_tables_with_cells_and_borders() -> Result<(), Box<dyn std::error::Er
         reading_order: 1,
         source: SourceSpan::new("/word/document.xml::body/tbl[1]"),
         confidence: 1.0,
+        flags: Default::default(),
         content: BlockContent::Table(TableBlock {
             rows: 2,
             columns: 2,
@@ -250,6 +254,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         reading_order: 1,
         source: SourceSpan::new("/word/document.xml::fig[1]"),
         confidence: 1.0,
+        flags: Default::default(),
         content: BlockContent::Figure(docsight_core::FigureBlock {
             alt_text: Some("Chart Diagram".to_owned()),
             caption: None,
@@ -268,10 +273,12 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         reading_order: 2,
         source: SourceSpan::new("/word/footnotes.xml::fn[1]"),
         confidence: 1.0,
+        flags: Default::default(),
         content: BlockContent::Note(docsight_core::NoteBlock {
             kind: docsight_core::NoteKind::Footnote,
             note_id: "1".to_owned(),
             text: "Footnote explanation text.".to_owned(),
+            anchor_path: None,
         }),
     };
 
@@ -295,6 +302,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         target: "https://example.com".to_owned(),
         is_external: true,
         page: None,
+        anchor_path: Some("/word/document.xml::fig[1]".to_owned()),
         source: SourceSpan::new("link[1]"),
     });
 
@@ -317,5 +325,127 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
     assert_eq!(laid_out.document.links[0].page, Some(1));
     assert_eq!(laid_out.pages[0].borders.len(), 1);
 
+    Ok(())
+}
+
+fn paragraph_block(index: u32, text: &str, flags: LayoutFlags) -> Block {
+    let source_path = format!("/word/document.xml::body/p[{index}]");
+    Block {
+        id: ObjectId::new("p", DIGEST, &source_path),
+        kind: docsight_core::BlockKind::Paragraph,
+        page: None,
+        bbox: None,
+        z_index: 0,
+        reading_order: index,
+        source: SourceSpan::new(source_path),
+        confidence: 1.0,
+        flags,
+        content: BlockContent::Paragraph(ParagraphBlock {
+            text: text.to_owned(),
+            style_id: None,
+        }),
+    }
+}
+
+#[test]
+fn explicit_page_break_before_moves_block_to_next_page() -> Result<(), Box<dyn std::error::Error>> {
+    let flags = LayoutFlags {
+        page_break_before: true,
+        ..Default::default()
+    };
+    let doc = dummy_document(
+        vec![
+            paragraph_block(1, "First page body text.", LayoutFlags::default()),
+            paragraph_block(2, "Second page body text.", flags),
+        ],
+        None,
+    );
+    let laid_out = layout_docx(doc)?;
+    assert_eq!(laid_out.pages.len(), 2);
+    assert_eq!(laid_out.document.blocks[0].page, Some(1));
+    assert_eq!(laid_out.document.blocks[1].page, Some(2));
+    Ok(())
+}
+
+#[test]
+fn break_after_flushes_the_current_page() -> Result<(), Box<dyn std::error::Error>> {
+    let flags = LayoutFlags {
+        break_after: true,
+        ..Default::default()
+    };
+    let doc = dummy_document(
+        vec![
+            paragraph_block(1, "Before the explicit break.", flags),
+            paragraph_block(2, "After the explicit break.", LayoutFlags::default()),
+        ],
+        None,
+    );
+    let laid_out = layout_docx(doc)?;
+    assert_eq!(laid_out.pages.len(), 2);
+    assert_eq!(laid_out.document.blocks[0].page, Some(1));
+    assert_eq!(laid_out.document.blocks[1].page, Some(2));
+    Ok(())
+}
+
+#[test]
+fn keep_with_next_moves_heading_with_its_follower() -> Result<(), Box<dyn std::error::Error>> {
+    let keep = LayoutFlags {
+        keep_with_next: true,
+        ..Default::default()
+    };
+    let long_text = "filler paragraph ".repeat(292);
+    let doc = dummy_document(
+        vec![
+            paragraph_block(1, &long_text, LayoutFlags::default()),
+            paragraph_block(2, "Heading kept with next", keep),
+            paragraph_block(3, "Follower body paragraph.", LayoutFlags::default()),
+        ],
+        None,
+    );
+    let laid_out = layout_docx(doc)?;
+    assert_eq!(laid_out.pages.len(), 2);
+    assert_eq!(laid_out.document.blocks[0].page, Some(1));
+    assert_eq!(laid_out.document.blocks[1].page, Some(2));
+    assert_eq!(laid_out.document.blocks[2].page, Some(2));
+    Ok(())
+}
+
+#[test]
+fn block_taller_than_page_overflows_with_diagnostic() -> Result<(), Box<dyn std::error::Error>> {
+    let huge = "overflow line of text ".repeat(2000);
+    let doc = dummy_document(
+        vec![paragraph_block(1, &huge, LayoutFlags::default())],
+        None,
+    );
+    let laid_out = layout_docx(doc)?;
+    assert_eq!(laid_out.pages.len(), 1);
+    assert!(
+        laid_out
+            .document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_BLOCK_TALLER_THAN_PAGE")
+    );
+    Ok(())
+}
+
+#[test]
+fn block_granular_pagination_is_diagnosed() -> Result<(), Box<dyn std::error::Error>> {
+    let doc = dummy_document(
+        vec![paragraph_block(
+            1,
+            "Single paragraph.",
+            LayoutFlags::default(),
+        )],
+        None,
+    );
+    let laid_out = layout_docx(doc)?;
+    assert!(
+        laid_out
+            .document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_PAGINATION_BLOCK_GRANULAR")
+    );
     Ok(())
 }

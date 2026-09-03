@@ -2,7 +2,7 @@ use crate::package::read_parts;
 use docsight_core::{
     Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
     Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
-    Hyperlink, ListItemBlock, NoteBlock, NoteKind, ObjectId, ParagraphBlock, Resource,
+    Hyperlink, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId, ParagraphBlock, Resource,
     ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell, TrackedChanges, UnknownBlock,
 };
 use roxmltree::{Document as XmlDocument, Node};
@@ -79,9 +79,15 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     let mut unknown_index = 0_u32;
     let mut link_counter = 0_usize;
     let mut reading_order = 0_u32;
+    let mut note_anchors: BTreeMap<String, String> = BTreeMap::new();
+    let mut comment_anchors: BTreeMap<String, String> = BTreeMap::new();
 
     for child in body.children().filter(Node::is_element) {
         if child.has_tag_name((W_NS, "p")) {
+            paragraph_index = paragraph_index
+                .checked_add(1)
+                .ok_or_else(block_count_error)?;
+            let paragraph_path = format!("/word/document.xml::body/p[{paragraph_index}]");
             let child_figures = extract_figures(
                 child,
                 source,
@@ -90,21 +96,32 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut figure_index,
                 &mut resources,
             );
-            extract_hyperlinks(child, source, &rels, &mut link_counter, &mut links);
-            paragraph_index = paragraph_index
-                .checked_add(1)
-                .ok_or_else(block_count_error)?;
-            reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
-            blocks.push(parse_paragraph(
+            extract_hyperlinks(
+                child,
+                source,
+                &rels,
+                &mut link_counter,
+                &mut links,
+                &paragraph_path,
+            );
+            let paragraph_blocks = parse_paragraph(
                 child,
                 paragraph_index,
                 source,
                 &styles,
                 &numbering,
-                reading_order,
+                &mut reading_order,
                 &mut warnings,
-            )?);
+            )?;
+            blocks.extend(paragraph_blocks);
+            figure_warnings(child_figures.iter(), &mut warnings);
             blocks.extend(child_figures);
+            collect_anchor_ids(
+                child,
+                &paragraph_path,
+                &mut note_anchors,
+                &mut comment_anchors,
+            );
         } else if child.has_tag_name((W_NS, "tbl")) {
             table_index = table_index.checked_add(1).ok_or_else(block_count_error)?;
             reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
@@ -130,6 +147,18 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut warnings,
             ));
         }
+    }
+
+    if body
+        .descendants()
+        .filter(|node| node.has_tag_name((W_NS, "pPr")))
+        .any(|properties| child_element(properties, "sectPr").is_some())
+    {
+        warnings.push(Diagnostic::warning(
+            "DOCX_SECTIONS_COLLAPSED",
+            "document has paragraph-level section breaks that were collapsed".to_owned(),
+            "only the first section geometry is applied to every page",
+        ));
     }
 
     if sections.is_empty() {
@@ -158,6 +187,7 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         "footnote",
         NoteKind::Footnote,
         &mut reading_order,
+        &note_anchors,
     )?);
     blocks.extend(parse_notes(
         parts.endnotes.as_deref(),
@@ -165,9 +195,10 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         "endnote",
         NoteKind::Endnote,
         &mut reading_order,
+        &note_anchors,
     )?);
 
-    let comments = parse_comments(parts.comments.as_deref(), source)?;
+    let comments = parse_comments(parts.comments.as_deref(), source, &comment_anchors)?;
     let insertions = body
         .descendants()
         .filter(|n| n.has_tag_name((W_NS, "ins")))
@@ -451,6 +482,7 @@ fn extract_figures(
             reading_order: *reading_order,
             source: SourceSpan::new(&source_path),
             confidence: 1.0,
+            flags: LayoutFlags::default(),
             content: BlockContent::Figure(FigureBlock {
                 alt_text,
                 caption: None,
@@ -461,6 +493,55 @@ fn extract_figures(
         });
     }
     figures
+}
+
+fn figure_warnings<'a>(figures: impl Iterator<Item = &'a Block>, warnings: &mut Vec<Diagnostic>) {
+    for figure in figures {
+        warnings.push(Diagnostic {
+            code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "embedded image for figure {} is not rasterized; a placeholder box is rendered",
+                figure.id
+            ),
+            effect: "visual evidence for this figure does not include the original image pixels"
+                .to_owned(),
+            object: Some(figure.id.clone()),
+            page: None,
+        });
+    }
+}
+
+fn collect_anchor_ids(
+    paragraph: Node<'_, '_>,
+    paragraph_path: &str,
+    note_anchors: &mut BTreeMap<String, String>,
+    comment_anchors: &mut BTreeMap<String, String>,
+) {
+    for descendant in paragraph.descendants().filter(Node::is_element) {
+        let name = descendant.tag_name().name();
+        if name != "footnoteReference" && name != "endnoteReference" && name != "commentRangeStart"
+        {
+            continue;
+        }
+        let Some(id) = descendant
+            .attribute((W_NS, "id"))
+            .or_else(|| descendant.attribute("w:id"))
+        else {
+            continue;
+        };
+        if id == "-1" || id == "0" {
+            continue;
+        }
+        let target = if name == "commentRangeStart" {
+            &mut *comment_anchors
+        } else {
+            &mut *note_anchors
+        };
+        target
+            .entry(id.to_owned())
+            .or_insert_with(|| paragraph_path.to_owned());
+    }
 }
 
 fn guess_mime_type(path: &str) -> Option<String> {
@@ -486,6 +567,7 @@ fn extract_hyperlinks(
     rels: &BTreeMap<String, (String, String)>,
     link_counter: &mut usize,
     links: &mut Vec<Hyperlink>,
+    paragraph_path: &str,
 ) {
     for link in node
         .descendants()
@@ -514,6 +596,7 @@ fn extract_hyperlinks(
                     is_external: !target.starts_with('#'),
                     target,
                     page: None,
+                    anchor_path: Some(paragraph_path.to_owned()),
                     source: SourceSpan::new(source_path),
                 });
             }
@@ -527,6 +610,7 @@ fn parse_notes(
     tag_name: &str,
     note_kind: NoteKind,
     reading_order: &mut u32,
+    note_anchors: &BTreeMap<String, String>,
 ) -> Result<Vec<Block>, DocsightError> {
     let mut blocks = Vec::new();
     let Some(xml) = xml_opt else {
@@ -561,6 +645,7 @@ fn parse_notes(
             NoteKind::Endnote => "en",
         };
         let source_path = format!("/word/{tag_name}s.xml::{tag_name}[{id}]");
+        let anchor_path = note_anchors.get(id).cloned();
         blocks.push(Block {
             id: source.object_id(prefix, &source_path),
             kind: BlockKind::Note,
@@ -570,10 +655,12 @@ fn parse_notes(
             reading_order: *reading_order,
             source: SourceSpan::new(source_path),
             confidence: 1.0,
+            flags: LayoutFlags::default(),
             content: BlockContent::Note(NoteBlock {
                 kind: note_kind,
                 note_id: id.to_owned(),
                 text,
+                anchor_path,
             }),
         });
     }
@@ -583,6 +670,7 @@ fn parse_notes(
 fn parse_comments(
     xml_opt: Option<&str>,
     source: &DocumentSource,
+    comment_anchors: &BTreeMap<String, String>,
 ) -> Result<Vec<Comment>, DocsightError> {
     let mut comments = Vec::new();
     let Some(xml) = xml_opt else {
@@ -620,6 +708,7 @@ fn parse_comments(
             date,
             text,
             page: None,
+            anchor_path: comment_anchors.get(id).cloned(),
             source: SourceSpan::new(source_path),
         });
     }
@@ -664,6 +753,7 @@ fn parse_unknown_body_element(
         reading_order,
         source: SourceSpan::new(source_path),
         confidence: 1.0,
+        flags: LayoutFlags::default(),
         content: BlockContent::Unknown(UnknownBlock { raw_tag, details }),
     }
 }
@@ -743,16 +833,115 @@ fn unsupported_run_elements(node: Node<'_, '_>) -> Vec<String> {
     unknown.into_iter().collect()
 }
 
+struct ParagraphSegments {
+    texts: Vec<String>,
+    leading_page_break: bool,
+    trailing_page_break: bool,
+}
+
+fn paragraph_segments(node: Node<'_, '_>) -> ParagraphSegments {
+    let mut texts = vec![String::new()];
+    let mut leading_page_break = false;
+    for descendant in node.descendants().filter(Node::is_element) {
+        if descendant
+            .ancestors()
+            .any(|ancestor| ancestor.has_tag_name((W_NS, "del")))
+        {
+            continue;
+        }
+        if descendant.ancestors().any(|ancestor| {
+            ancestor != descendant
+                && ancestor.tag_name().name() == "fldSimple"
+                && ancestor.attributes().any(|attribute| {
+                    (attribute.name() == "instr" || attribute.name().ends_with(":instr"))
+                        && attribute.value().to_uppercase().contains("PAGE")
+                })
+        }) {
+            continue;
+        }
+        if descendant.tag_name().name() == "fldSimple" {
+            let is_page = descendant.attributes().any(|attribute| {
+                (attribute.name() == "instr" || attribute.name().ends_with(":instr"))
+                    && attribute.value().to_uppercase().contains("PAGE")
+            });
+            if is_page {
+                if let Some(last) = texts.last_mut() {
+                    last.push_str("[PAGE]");
+                }
+            }
+            continue;
+        }
+        if descendant.has_tag_name((W_NS, "t")) {
+            if let Some(value) = descendant.text() {
+                if let Some(last) = texts.last_mut() {
+                    last.push_str(value);
+                }
+            }
+        } else if descendant.has_tag_name((W_NS, "tab")) {
+            if let Some(last) = texts.last_mut() {
+                last.push('\t');
+            }
+        } else if descendant.has_tag_name((W_NS, "br")) || descendant.has_tag_name((W_NS, "cr")) {
+            let is_page_break = descendant.has_tag_name((W_NS, "br"))
+                && descendant
+                    .attribute((W_NS, "type"))
+                    .or_else(|| descendant.attribute("w:type"))
+                    .is_some_and(|value| value == "page");
+            if is_page_break {
+                let first_segment_empty = texts.len() == 1 && texts[0].trim().is_empty();
+                if first_segment_empty {
+                    leading_page_break = true;
+                } else {
+                    texts.push(String::new());
+                }
+            } else if let Some(last) = texts.last_mut() {
+                last.push('\n');
+            }
+        }
+    }
+    let mut trailing_page_break = false;
+    if texts.len() > 1 && texts.last().is_some_and(|text| text.trim().is_empty()) {
+        texts.pop();
+        trailing_page_break = true;
+    }
+    ParagraphSegments {
+        texts,
+        leading_page_break,
+        trailing_page_break,
+    }
+}
+
+fn on_off_value(value: Option<&str>) -> bool {
+    match value {
+        None => true,
+        Some(value) => !matches!(value, "0" | "false" | "off"),
+    }
+}
+
+fn paragraph_layout_flags(node: Node<'_, '_>) -> LayoutFlags {
+    let mut flags = LayoutFlags::default();
+    let Some(properties) = child_element(node, "pPr") else {
+        return flags;
+    };
+    flags.page_break_before = child_element(properties, "pageBreakBefore")
+        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
+    flags.keep_with_next = child_element(properties, "keepNext")
+        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
+    flags.keep_lines = child_element(properties, "keepLines")
+        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
+    flags
+}
+
 fn parse_paragraph(
     node: Node<'_, '_>,
     index: u32,
     source: &DocumentSource,
     styles: &BTreeMap<String, StyleDefinition>,
     numbering: &NumberingDefinitions,
-    reading_order: u32,
+    reading_order: &mut u32,
     warnings: &mut Vec<Diagnostic>,
-) -> Result<Block, DocsightError> {
-    let source_path = format!("/word/document.xml::body/p[{index}]");
+) -> Result<Vec<Block>, DocsightError> {
+    let base_path = format!("/word/document.xml::body/p[{index}]");
     let style_id = paragraph_property(node, "pStyle").and_then(|property| word_value(property));
     let direct_outline = child_element(node, "pPr")
         .map(outline_level)
@@ -766,54 +955,82 @@ fn parse_paragraph(
     let inherited_numbering = resolve_style_numbering(style_id.as_deref(), styles)?;
     let list_reference = merge_numbering(direct_numbering, inherited_numbering);
     let list = resolve_list_marker(list_reference, numbering, warnings);
-    let text = paragraph_text(node);
+    let segments = paragraph_segments(node);
+    let paragraph_flags = paragraph_layout_flags(node);
+    let segment_count = segments.texts.len();
+    let last_segment = segment_count.saturating_sub(1);
 
-    let (kind, prefix, content) = if let Some(level) = heading_level {
-        (
-            BlockKind::Heading,
-            "h",
-            BlockContent::Heading(HeadingBlock {
-                level,
-                text,
-                style_id,
-            }),
-        )
-    } else if let Some(list) = list {
-        (
-            BlockKind::ListItem,
-            "li",
-            BlockContent::ListItem(ListItemBlock {
-                level: list.level,
-                marker: list.pattern.clone(),
-                format: list.format,
-                pattern: list.pattern,
-                ordered: list.ordered,
-                text,
-                style_id,
-            }),
-        )
-    } else {
-        (
-            BlockKind::Paragraph,
-            "p",
-            BlockContent::Paragraph(ParagraphBlock { text, style_id }),
-        )
-    };
+    let mut blocks = Vec::with_capacity(segment_count);
+    for (segment_index, text) in segments.texts.into_iter().enumerate() {
+        *reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
+        let source_path = if segment_index == 0 {
+            base_path.clone()
+        } else {
+            let part = segment_index + 1;
+            format!("{base_path}::part[{part}]")
+        };
+        let mut flags = paragraph_flags;
+        if segment_index > 0 || segments.leading_page_break {
+            flags.page_break_before = true;
+        }
+        if segment_index == last_segment && segments.trailing_page_break {
+            flags.break_after = true;
+        }
 
-    let id = source.object_id(prefix, &source_path);
-    warn_unsupported_run_content(node, &id, warnings);
+        let (kind, prefix, content) = if let Some(level) = heading_level {
+            (
+                BlockKind::Heading,
+                "h",
+                BlockContent::Heading(HeadingBlock {
+                    level,
+                    text,
+                    style_id: style_id.clone(),
+                }),
+            )
+        } else if let Some(list) = &list {
+            (
+                BlockKind::ListItem,
+                "li",
+                BlockContent::ListItem(ListItemBlock {
+                    level: list.level,
+                    marker: list.pattern.clone(),
+                    format: list.format.clone(),
+                    pattern: list.pattern.clone(),
+                    ordered: list.ordered,
+                    text,
+                    style_id: style_id.clone(),
+                }),
+            )
+        } else {
+            (
+                BlockKind::Paragraph,
+                "p",
+                BlockContent::Paragraph(ParagraphBlock {
+                    text,
+                    style_id: style_id.clone(),
+                }),
+            )
+        };
 
-    Ok(Block {
-        id,
-        kind,
-        page: None,
-        bbox: None,
-        z_index: 0,
-        reading_order,
-        source: SourceSpan::new(source_path),
-        confidence: 1.0,
-        content,
-    })
+        let id = source.object_id(prefix, &source_path);
+        if segment_index == 0 {
+            warn_unsupported_run_content(node, &id, warnings);
+        }
+
+        blocks.push(Block {
+            id,
+            kind,
+            page: None,
+            bbox: None,
+            z_index: 0,
+            reading_order: *reading_order,
+            source: SourceSpan::new(source_path),
+            confidence: 1.0,
+            flags,
+            content,
+        });
+    }
+    Ok(blocks)
 }
 
 fn warn_unsupported_run_content(
@@ -855,6 +1072,7 @@ fn parse_table(
         reading_order,
         source: span,
         confidence: 1.0,
+        flags: LayoutFlags::default(),
         content: BlockContent::Table(table_block),
     })
 }
@@ -919,6 +1137,7 @@ fn parse_table_at(
                         reading_order: 0,
                         source: nested_span,
                         confidence: 1.0,
+                        flags: LayoutFlags::default(),
                         content: BlockContent::Table(nested_table),
                     })
                 })

@@ -54,6 +54,7 @@ fn sample_document() -> Document {
             reading_order: 1,
             source: SourceSpan::new("/body/p[1]"),
             confidence: 1.0,
+            flags: Default::default(),
             content: BlockContent::Heading(HeadingBlock {
                 level: 1,
                 text: "Introduction".to_owned(),
@@ -69,6 +70,7 @@ fn sample_document() -> Document {
             reading_order: 2,
             source: SourceSpan::new("/body/p[2]"),
             confidence: 1.0,
+            flags: Default::default(),
             content: BlockContent::Paragraph(ParagraphBlock {
                 text: "This is a paragraph.".to_owned(),
                 style_id: None,
@@ -83,6 +85,7 @@ fn sample_document() -> Document {
             reading_order: 3,
             source: SourceSpan::new("/body/tbl[1]"),
             confidence: 1.0,
+            flags: Default::default(),
             content: BlockContent::Table(table_block),
         },
     ];

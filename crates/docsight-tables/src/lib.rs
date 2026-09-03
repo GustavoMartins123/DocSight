@@ -1,5 +1,5 @@
 use docsight_core::{
-    Block, BlockContent, BlockKind, ObjectId, Rect, SourceSpan, TableBlock, TableCell,
+    Block, BlockContent, BlockKind, LayoutFlags, ObjectId, Rect, SourceSpan, TableBlock, TableCell,
 };
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,7 @@ impl InferredTable {
                 self.page, self.detector
             )),
             confidence: self.confidence,
+            flags: LayoutFlags::default(),
             content: BlockContent::Table(table_block),
         }
     }
