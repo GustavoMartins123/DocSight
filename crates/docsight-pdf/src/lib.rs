@@ -6,11 +6,12 @@ mod syntax;
 use content::{DisplayCommand, TextRun, fonts_from_resources, parse_content};
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
-    DocumentSource, ObjectId, Page, Rect,
+    DocumentSource, ObjectId, Page, Rect, SourceSpan,
 };
 use raster::{MAX_DPI, MIN_DPI};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Take};
 use syntax::{ObjectRef, StreamValue, Value, Xref, malformed, parse_object, parse_xref};
 
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
@@ -41,12 +42,14 @@ pub struct PdfTextSpan {
     pub bbox: Rect,
     pub reading_order: u32,
     pub font_size_pt: f32,
+    pub font_name: String,
+    pub baseline_y_pt: f32,
     pub argb: u32,
     pub bold: bool,
     pub clipped: bool,
     pub synthetic: bool,
     pub confidence: f32,
-    pub source: String,
+    pub source: SourceSpan,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -309,16 +312,16 @@ impl<'a> PdfDocument<'a> {
                 Value::Stream(stream) => stream,
                 _ => return Err(malformed("Contents must resolve to a stream")),
             };
-            reject_stream_filters(&stream)?;
+            let data = decode_stream(&stream)?;
             let projected = combined
                 .len()
-                .checked_add(stream.data.len())
+                .checked_add(data.len())
                 .and_then(|length| length.checked_add(1))
                 .ok_or_else(content_limit)?;
             if projected > docsight_core::MAX_INSPECT_BYTES as usize {
                 return Err(content_limit());
             }
-            combined.extend_from_slice(&stream.data);
+            combined.extend_from_slice(&data);
             combined.push(b'\n');
         }
         Ok(combined)
@@ -351,19 +354,21 @@ impl<'a> PdfDocument<'a> {
             resource: format!("text spans on PDF page {page}"),
             limit: u64::from(u32::MAX),
         })?;
-        let source = format!("/pdf/page[{page}]/content/span[{ordinal}]");
+        let source_path = format!("/pdf/page[{page}]/content/span[{ordinal}]");
         Ok(PdfTextSpan {
-            id: self.source.object_id("span", &source),
+            id: self.source.object_id("span", &source_path),
             text: run.text,
             bbox: run.bbox,
             reading_order: ordinal,
             font_size_pt: run.font_size,
+            font_name: run.font_name,
+            baseline_y_pt: run.baseline_y,
             argb: run.argb,
             bold: run.bold,
             clipped: false,
             synthetic: false,
             confidence: if approximated { 0.75 } else { 1.0 },
-            source,
+            source: SourceSpan::with_range(source_path, run.source_offset, run.source_length),
         })
     }
 }
@@ -543,18 +548,35 @@ fn pdf_number(value: &Value) -> Result<f32, DocsightError> {
     }
 }
 
-fn reject_stream_filters(stream: &StreamValue) -> Result<(), DocsightError> {
-    if let Some(filter) = stream.dict.get("Filter") {
-        let name = match filter {
-            Value::Name(value) => value.clone(),
-            Value::Array(_) => "filter chains".to_owned(),
-            _ => return Err(malformed("stream Filter must be a name or array")),
-        };
-        return Err(DocsightError::UnsupportedFeature {
+const MAX_FLATE_OUTPUT_BYTES: u64 = docsight_core::MAX_INSPECT_BYTES;
+
+fn decode_stream(stream: &StreamValue) -> Result<Vec<u8>, DocsightError> {
+    let Some(filter) = stream.dict.get("Filter") else {
+        return Ok(stream.data.clone());
+    };
+    match filter {
+        Value::Name(name) if name == "FlateDecode" => inflate_zlib(&stream.data),
+        Value::Name(name) => Err(DocsightError::UnsupportedFeature {
             feature: format!("PDF stream filter {name}"),
-        });
+        }),
+        _ => Err(malformed("stream Filter must be a name")),
     }
-    Ok(())
+}
+
+fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, DocsightError> {
+    let bounded: Take<flate2::read::ZlibDecoder<&[u8]>> =
+        flate2::read::ZlibDecoder::new(data).take(MAX_FLATE_OUTPUT_BYTES + 1);
+    let mut decoder = bounded;
+    let mut output = Vec::new();
+    decoder
+        .read_to_end(&mut output)
+        .map_err(|error| DocsightError::MalformedDocument {
+            message: format!("FlateDecode stream is invalid: {error}"),
+        })?;
+    if output.len() as u64 > MAX_FLATE_OUTPUT_BYTES {
+        return Err(content_limit());
+    }
+    Ok(output)
 }
 
 fn base14_warning(page: u32) -> Diagnostic {

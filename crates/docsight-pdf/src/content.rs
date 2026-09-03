@@ -32,9 +32,13 @@ pub(crate) enum PathSegment {
 pub(crate) struct TextRun {
     pub text: String,
     pub bbox: Rect,
+    pub baseline_y: f32,
     pub font_size: f32,
+    pub font_name: String,
     pub bold: bool,
     pub argb: u32,
+    pub source_offset: u64,
+    pub source_length: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +58,7 @@ pub(crate) enum DisplayCommand {
 #[derive(Clone, Debug)]
 pub(crate) struct FontInfo {
     pub bold: bool,
+    pub base_font: String,
 }
 
 pub(crate) struct ParsedContent {
@@ -89,7 +94,7 @@ pub(crate) fn parse_content(
                 }
                 operands.push(value);
             }
-            ContentToken::Operator(operator) => {
+            ContentToken::Operator(operator, token_start, token_end) => {
                 operations += 1;
                 if operations > MAX_OPERATIONS {
                     return Err(DocsightError::ResourceLimit {
@@ -97,6 +102,8 @@ pub(crate) fn parse_content(
                         limit: MAX_OPERATIONS as u64,
                     });
                 }
+                let anchor_offset = token_start as u64;
+                let anchor_length = (token_end - token_start) as u64;
                 match operator.as_str() {
                     "q" => {
                         require_empty(&operands, &operator)?;
@@ -258,6 +265,7 @@ pub(crate) fn parse_content(
                         state.text.font = Some(FontSelection {
                             size,
                             bold: font.bold,
+                            font_name: font.base_font.clone(),
                         });
                         approximated_base14_font = true;
                     }
@@ -313,6 +321,8 @@ pub(crate) fn parse_content(
                             &mut state,
                             page_left,
                             page_height,
+                            anchor_offset,
+                            anchor_length,
                             &mut commands,
                             &mut text_runs,
                         )?;
@@ -327,6 +337,8 @@ pub(crate) fn parse_content(
                                     &mut state,
                                     page_left,
                                     page_height,
+                                    anchor_offset,
+                                    anchor_length,
                                     &mut commands,
                                     &mut text_runs,
                                 )?,
@@ -353,6 +365,8 @@ pub(crate) fn parse_content(
                             &mut state,
                             page_left,
                             page_height,
+                            anchor_offset,
+                            anchor_length,
                             &mut commands,
                             &mut text_runs,
                         )?;
@@ -398,11 +412,14 @@ pub(crate) fn parse_content(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_text(
     bytes: &[u8],
     state: &mut GraphicsState,
     page_left: f32,
     page_height: f32,
+    anchor_offset: u64,
+    anchor_length: u64,
     commands: &mut Vec<DisplayCommand>,
     text_runs: &mut Vec<TextRun>,
 ) -> Result<(), DocsightError> {
@@ -419,6 +436,8 @@ fn append_text(
         + spaces * state.text.word_spacing;
     let combined = state.ctm.concat(state.text.matrix);
     validate_text_matrix(&combined)?;
+    let baseline = combined.transform(0.0, 0.0);
+    let baseline_y = page_height - baseline.y;
     let lower_left = combined.transform(0.0, -font.size * 0.2);
     let upper_right = combined.transform(width, font.size * 0.8);
     let bbox = Rect::new(
@@ -435,9 +454,13 @@ fn append_text(
     let run = TextRun {
         text,
         bbox,
+        baseline_y,
         font_size: font.size,
+        font_name: font.font_name.clone(),
         bold: font.bold,
         argb,
+        source_offset: anchor_offset,
+        source_length: anchor_length,
     };
     commands.push(DisplayCommand::Text(run.clone()));
     text_runs.push(run);
@@ -680,6 +703,7 @@ impl Default for TextState {
 struct FontSelection {
     size: f32,
     bold: bool,
+    font_name: String,
 }
 
 #[derive(Clone, Copy)]
@@ -762,7 +786,7 @@ enum ContentValue {
 
 enum ContentToken {
     Operand(ContentValue),
-    Operator(String),
+    Operator(String, usize, usize),
 }
 
 struct ContentLexer<'a> {
@@ -788,7 +812,12 @@ impl<'a> ContentLexer<'a> {
             b'+' | b'-' | b'.' | b'0'..=b'9' => {
                 ContentToken::Operand(ContentValue::Number(self.parse_number()?))
             }
-            _ => ContentToken::Operator(self.parse_operator()?),
+            _ => {
+                let start = self.cursor;
+                let operator = self.parse_operator()?;
+                let end = self.cursor;
+                ContentToken::Operator(operator, start, end)
+            }
         };
         Ok(Some(token))
     }
@@ -978,7 +1007,7 @@ pub(crate) fn fonts_from_resources(
         _ => return Err(malformed("Font resource must be a dictionary")),
     };
     let mut fonts = BTreeMap::new();
-    for (name, value) in font_dict {
+    for (resource_name, value) in font_dict {
         let value = resolve(&value)?;
         let dict = match value {
             Value::Dict(dict) => dict,
@@ -1008,7 +1037,13 @@ pub(crate) fn fonts_from_resources(
                 });
             }
         };
-        fonts.insert(name, FontInfo { bold });
+        fonts.insert(
+            resource_name,
+            FontInfo {
+                bold,
+                base_font: base_font.to_owned(),
+            },
+        );
     }
     Ok(fonts)
 }
