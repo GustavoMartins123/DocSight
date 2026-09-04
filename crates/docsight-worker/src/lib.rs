@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub const SANDBOX_CHILD_ENV: &str = "DOCSIGHT_SANDBOX_CHILD";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
     pub max_memory_bytes: u64,
@@ -19,6 +21,86 @@ impl Default for SandboxPolicy {
             isolated_temp_dir: true,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxLimitsReport {
+    pub memory_enforced: bool,
+    pub cpu_enforced: bool,
+    pub network_isolated: bool,
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod sys {
+    use super::{SandboxLimitsReport, SandboxPolicy};
+    use docsight_core::DocsightError;
+
+    pub fn apply_resource_limits(
+        policy: &SandboxPolicy,
+    ) -> Result<SandboxLimitsReport, DocsightError> {
+        let mut report = SandboxLimitsReport {
+            memory_enforced: false,
+            cpu_enforced: false,
+            network_isolated: false,
+        };
+
+        let memory_limit = libc::rlimit {
+            rlim_cur: policy.max_memory_bytes,
+            rlim_max: policy.max_memory_bytes,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_AS, &memory_limit) } == 0 {
+            report.memory_enforced = true;
+        }
+
+        let cpu_hard = policy.cpu_timeout_secs.saturating_add(5);
+        let cpu_limit = libc::rlimit {
+            rlim_cur: policy.cpu_timeout_secs,
+            rlim_max: cpu_hard,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_CPU, &cpu_limit) } == 0 {
+            report.cpu_enforced = true;
+        }
+
+        if unsafe { libc::unshare(libc::CLONE_NEWUSER) } == 0
+            && unsafe { libc::unshare(libc::CLONE_NEWNET) } == 0
+        {
+            report.network_isolated = true;
+        }
+
+        if !report.memory_enforced || !report.cpu_enforced {
+            return Err(DocsightError::BackendFailure {
+                backend: "sandbox".to_owned(),
+                message: "failed to enforce memory or CPU limits on this platform".to_owned(),
+            });
+        }
+        Ok(report)
+    }
+}
+
+#[cfg(not(unix))]
+mod sys {
+    use super::{SandboxLimitsReport, SandboxPolicy};
+    use docsight_core::DocsightError;
+
+    pub fn apply_resource_limits(
+        _policy: &SandboxPolicy,
+    ) -> Result<SandboxLimitsReport, DocsightError> {
+        Ok(SandboxLimitsReport {
+            memory_enforced: false,
+            cpu_enforced: false,
+            network_isolated: false,
+        })
+    }
+}
+
+pub fn apply_sandbox_limits_if_child(
+    policy: &SandboxPolicy,
+) -> Result<Option<SandboxLimitsReport>, DocsightError> {
+    if std::env::var_os(SANDBOX_CHILD_ENV).is_none() {
+        return Ok(None);
+    }
+    sys::apply_resource_limits(policy).map(Some)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +145,15 @@ pub fn run_in_sandbox(
     policy: &SandboxPolicy,
     args: &[String],
 ) -> Result<WorkerOutput, DocsightError> {
+    run_in_sandbox_with_env(worker_exe, policy, args, &[])
+}
+
+pub fn run_in_sandbox_with_env(
+    worker_exe: Option<&Path>,
+    policy: &SandboxPolicy,
+    args: &[String],
+    extra_env: &[(String, String)],
+) -> Result<WorkerOutput, DocsightError> {
     let binary = match worker_exe {
         Some(p) => p.to_path_buf(),
         None => find_worker_binary()?,
@@ -73,6 +164,9 @@ pub fn run_in_sandbox(
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
 
     let _temp_guard = if policy.isolated_temp_dir {
         let temp_dir = tempfile::tempdir().map_err(|e| DocsightError::Io {

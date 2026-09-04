@@ -33,7 +33,7 @@ pub struct RenderMetadata {
     pub media_type: &'static str,
 }
 
-pub use docx_raster::encode_png;
+pub use docx_raster::{encode_png, raster_font_fingerprint};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedImage {

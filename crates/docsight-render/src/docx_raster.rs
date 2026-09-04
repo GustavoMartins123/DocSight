@@ -257,6 +257,21 @@ fn crc32(bytes: &[u8]) -> u32 {
     !value
 }
 
+pub fn raster_font_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"docsight-render-glyph-table-v1");
+    for code in 32_u32..127 {
+        let Some(character) = char::from_u32(code) else {
+            continue;
+        };
+        hasher.update(code.to_le_bytes());
+        hasher.update(glyph(character));
+    }
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn glyph(character: char) -> [u8; 7] {
     match character {
         'A' => [14, 17, 17, 31, 17, 17, 17],

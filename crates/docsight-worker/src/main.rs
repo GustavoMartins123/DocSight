@@ -21,6 +21,9 @@ struct WorkerCli {
     #[arg(long)]
     crash_for_test: bool,
 
+    #[arg(long)]
+    memory_hog_for_test: bool,
+
     #[command(subcommand)]
     command: WorkerCommand,
 }
@@ -59,9 +62,22 @@ struct WorkerInspectResult {
 }
 
 fn main() -> ExitCode {
+    if let Err(error) =
+        docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
+    {
+        let code = error.exit_code();
+        let _ = writeln!(io::stderr(), "{}: {}", error.diagnostic().code, error);
+        return ExitCode::from(code);
+    }
     let cli = WorkerCli::parse();
     if cli.crash_for_test {
         std::process::abort();
+    }
+    if cli.memory_hog_for_test {
+        let mut buffer: Vec<u8> = Vec::new();
+        loop {
+            buffer.resize(buffer.len().saturating_add(16 * 1024 * 1024), 0xAB);
+        }
     }
     match execute_worker(&cli) {
         Ok(()) => ExitCode::SUCCESS,

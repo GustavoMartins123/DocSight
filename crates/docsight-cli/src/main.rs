@@ -331,16 +331,42 @@ struct LinksResult {
 }
 
 fn main() -> ExitCode {
+    if let Err(error) =
+        docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
+    {
+        let exit_code = error.exit_code();
+        let _ = emit_error(&error, false);
+        return ExitCode::from(exit_code);
+    }
     let cli = Cli::parse();
     if cli.sandbox {
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(error) => {
+                let error = DocsightError::Io {
+                    path: std::env::args()
+                        .next()
+                        .map(PathBuf::from)
+                        .unwrap_or_default(),
+                    source: error,
+                };
+                let exit_code = error.exit_code();
+                let _ = emit_error(&error, cli.json_errors);
+                return ExitCode::from(exit_code);
+            }
+        };
         let raw_args: Vec<String> = std::env::args()
             .skip(1)
             .filter(|arg| arg != "--sandbox")
             .collect();
-        match docsight_worker::run_in_sandbox(
-            None,
+        match docsight_worker::run_in_sandbox_with_env(
+            Some(&exe),
             &docsight_worker::SandboxPolicy::default(),
             &raw_args,
+            &[(
+                docsight_worker::SANDBOX_CHILD_ENV.to_owned(),
+                "1".to_owned(),
+            )],
         ) {
             Ok(output) => {
                 let _ = io::stdout().write_all(&output.stdout);
@@ -1526,7 +1552,9 @@ fn fingerprint(
     let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
     let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));
     let raster_engine = format!("docsight-render {}", env!("CARGO_PKG_VERSION"));
-    let fonts = "1cb9d8f572a1e809".to_owned();
+    let layout_font = docsight_layout::font_fingerprint();
+    let raster_font = docsight_render::raster_font_fingerprint();
+    let fonts = format!("layout:{layout_font}|raster:{raster_font}");
     let layout_profile = "agent-fidelity-v1".to_owned();
 
     let mut hasher = sha2::Sha256::new();
@@ -1541,6 +1569,8 @@ fn fingerprint(
     hasher.update(raster_engine.as_bytes());
     hasher.update(b"|");
     hasher.update(fonts.as_bytes());
+    hasher.update(b"|");
+    hasher.update(layout_profile.as_bytes());
     hasher.update(b"|");
     let hash = hasher.finalize();
     let mut result_fingerprint = String::with_capacity(64);

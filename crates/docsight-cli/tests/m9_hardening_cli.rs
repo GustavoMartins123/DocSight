@@ -176,12 +176,13 @@ fn sandbox_worker_inspect_runs_isolated_process() -> Result<(), Box<dyn std::err
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
 
     let output = docsight()
-        .args(["inspect", doc_str, "--sandbox"])
+        .args(["inspect", doc_str, "--sandbox", "--json"])
         .output()?;
     assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("Format:     docx"));
-    assert!(stdout.contains("Pages:      3"));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(value["schema"], "docsight.agent/v1");
+    assert_eq!(value["result"]["format"], "docx");
+    assert_eq!(value["result"]["pages"], 3);
 
     Ok(())
 }
@@ -243,5 +244,228 @@ fn fingerprint_command_matches_specification_contract() -> Result<(), Box<dyn st
             .is_empty()
     );
 
+    Ok(())
+}
+
+#[test]
+fn fuzz_numbering_rejects_broken_definitions() -> Result<(), Box<dyn std::error::Error>> {
+    let doc_xml = "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:numPr><w:numId w:val=\"7\"/><w:ilvl w:val=\"0\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p></w:body></w:document>";
+    let numbering_xml = "<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:abstractNum w:abstractNumId=\"1\"><w:lvl w:ilvl=\"0\"></w:lvl></w:abstractNum><w:num w:numId=\"7\"><w:abstractNumId w:val=\"1\"/></w:num></w:numbering>";
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("[Content_Types].xml", options)?;
+        zip.write_all(b"<Types/>")?;
+        zip.start_file("word/document.xml", options)?;
+        zip.write_all(doc_xml.as_bytes())?;
+        zip.start_file("word/numbering.xml", options)?;
+        zip.write_all(numbering_xml.as_bytes())?;
+        zip.finish()?;
+    }
+    let source = DocumentSource::from_bytes(cursor.into_inner())?;
+    let doc = parse_docx(&source)?;
+    assert!(
+        doc.warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_NUMBERING_FORMAT_MISSING")
+    );
+    Ok(())
+}
+
+#[test]
+fn fuzz_table_grid_rejects_invalid_spans() -> Result<(), Box<dyn std::error::Error>> {
+    for span_value in ["0", "abc", "-1", "999999999999999999999999"] {
+        let doc_xml = format!(
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"{span_value}\"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>"
+        );
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("[Content_Types].xml", options)?;
+            zip.write_all(b"<Types/>")?;
+            zip.start_file("word/document.xml", options)?;
+            zip.write_all(doc_xml.as_bytes())?;
+            zip.finish()?;
+        }
+        let source = DocumentSource::from_bytes(cursor.into_inner())?;
+        let result = parse_docx(&source);
+        assert!(result.is_err(), "span {span_value} must be rejected");
+    }
+    Ok(())
+}
+
+#[test]
+fn fuzz_layout_paragraph_never_panics_on_random_text() -> Result<(), Box<dyn std::error::Error>> {
+    use docsight_layout::layout_docx;
+    let mut state = 42_u64;
+    let mut next = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 33) as u8
+    };
+    for _ in 0..25 {
+        let text: String = (0..120)
+            .map(|_| {
+                let code = 32 + (next() % 95);
+                let character = char::from(code);
+                if matches!(character, '<' | '>' | '&' | '\'' | '"') {
+                    'x'
+                } else {
+                    character
+                }
+            })
+            .collect();
+        let doc_xml = format!(
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"
+        );
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("[Content_Types].xml", options)?;
+            zip.write_all(b"<Types/>")?;
+            zip.start_file("word/document.xml", options)?;
+            zip.write_all(doc_xml.as_bytes())?;
+            zip.finish()?;
+        }
+        let source = DocumentSource::from_bytes(cursor.into_inner())?;
+        let parsed = parse_docx(&source)?;
+        let laid_out = layout_docx(parsed)?;
+        assert!(!laid_out.document.pages.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn fuzz_pdf_span_cluster_is_deterministic_and_safe() {
+    use docsight_tables::{RulingSegment, TextSpanItem, detect_tables};
+    let mut state = 7_u64;
+    let mut next = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 33) as u8
+    };
+    for _ in 0..25 {
+        let span_count = (next() as usize % 12) + 1;
+        let spans: Vec<TextSpanItem> = (0..span_count)
+            .map(|index| TextSpanItem {
+                text: format!("cell {index}"),
+                bbox: match docsight_core::Rect::new(
+                    (next() % 200) as f32,
+                    (next() % 200) as f32,
+                    ((next() % 200) as f32) + 201.0,
+                    ((next() % 200) as f32) + 201.0,
+                ) {
+                    Ok(rect) => rect,
+                    Err(_) => docsight_core::Rect::new(0.0, 0.0, 10.0, 10.0)
+                        .unwrap_or_else(|_| unreachable!("static rect is valid")),
+                },
+                font_size: 10.0,
+                bold: false,
+            })
+            .collect();
+        let first = detect_tables(1, &spans, &[], 595.0, 842.0);
+        let second = detect_tables(1, &spans, &[], 595.0, 842.0);
+        assert_eq!(first.len(), second.len());
+        for (left, right) in first.iter().zip(&second) {
+            assert_eq!(left.bbox, right.bbox);
+            assert_eq!(left.cells.len(), right.cells.len());
+        }
+    }
+    let rulings = vec![
+        RulingSegment {
+            x0: 10.0,
+            y0: 10.0,
+            x1: 200.0,
+            y1: 10.4,
+        },
+        RulingSegment {
+            x0: 10.0,
+            y0: 40.0,
+            x1: 200.0,
+            y1: 40.4,
+        },
+        RulingSegment {
+            x0: 10.0,
+            y0: 10.0,
+            x1: 10.4,
+            y1: 40.0,
+        },
+        RulingSegment {
+            x0: 200.0,
+            y0: 10.0,
+            x1: 200.4,
+            y1: 40.4,
+        },
+    ];
+    let tables = detect_tables(
+        1,
+        &[TextSpanItem {
+            text: "only".to_owned(),
+            bbox: match docsight_core::Rect::new(20.0, 15.0, 60.0, 35.0) {
+                Ok(rect) => rect,
+                Err(_) => unreachable!("static rect is valid"),
+            },
+            font_size: 10.0,
+            bold: false,
+        }],
+        &rulings,
+        595.0,
+        842.0,
+    );
+    assert!(tables.len() <= 1);
+}
+
+#[test]
+fn sandbox_memory_limit_kills_worker_as_backend_failure() -> Result<(), Box<dyn std::error::Error>>
+{
+    let worker_exe = find_worker_binary()?;
+    let policy = SandboxPolicy {
+        max_memory_bytes: 256 * 1024 * 1024,
+        cpu_timeout_secs: 30,
+        isolated_temp_dir: false,
+    };
+    let res = docsight_worker::run_in_sandbox_with_env(
+        Some(&worker_exe),
+        &policy,
+        &["--memory-hog-for-test".to_owned(), "inspect".to_owned()],
+        &[(
+            docsight_worker::SANDBOX_CHILD_ENV.to_owned(),
+            "1".to_owned(),
+        )],
+    );
+    match res {
+        Err(error) => assert_eq!(error.exit_code(), 30),
+        Ok(output) => assert_ne!(
+            output.exit_code, 0,
+            "the memory hog must not exit successfully under the sandbox limit"
+        ),
+    }
+    Ok(())
+}
+
+#[test]
+fn sandbox_runs_every_subcommand_through_isolation() -> Result<(), Box<dyn std::error::Error>> {
+    let doc_path = fixture("sample_headings.docx");
+    let doc_str = doc_path.to_str().ok_or("invalid path")?;
+    for subcommand in [
+        vec!["tables", doc_str],
+        vec!["outline", doc_str, "--json"],
+        vec!["text", doc_str, "--json"],
+    ] {
+        let output = docsight()
+            .args({
+                let mut args = subcommand.clone();
+                args.push("--sandbox");
+                args
+            })
+            .output()?;
+        assert!(
+            output.status.success(),
+            "sandboxed {:?} failed: {}",
+            subcommand,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     Ok(())
 }

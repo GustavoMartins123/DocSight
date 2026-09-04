@@ -21,6 +21,21 @@ pub fn char_width(c: char, size_pt: f32) -> f32 {
     (units as f32 / 1000.0) * size_pt
 }
 
+pub fn font_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"docsight-layout-font-table-v1");
+    for code in 32_u32..127 {
+        let character = char::from_u32(code);
+        hasher.update(code.to_le_bytes());
+        if let Some(character) = character {
+            hasher.update(char_width(character, 1000.0).to_le_bytes());
+        }
+    }
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 pub fn text_width(text: &str, size_pt: f32) -> f32 {
     text.chars().map(|c| char_width(c, size_pt)).sum()
 }
