@@ -5,6 +5,29 @@ use docsight_core::{DocsightError, DocumentSource, Rect};
 use docsight_pdf::PdfDocument;
 use pdf_fixture::{build_pdf, sample_pdf};
 
+fn build_pdf_with_objects(objects: &[String]) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
 #[test]
 fn inspects_page_geometry_and_text_spans() -> Result<(), DocsightError> {
     let source = DocumentSource::from_bytes(sample_pdf())?;
@@ -17,7 +40,7 @@ fn inspects_page_geometry_and_text_spans() -> Result<(), DocsightError> {
     assert_eq!(page.number, 1);
     assert!(page.spans.iter().any(|span| span.text == "Hello DOCSIGHT"));
     assert!(page.spans.iter().all(|span| span.confidence == 0.75));
-    assert_eq!(page.warnings[0].code, "APPROXIMATED_BASE14_FONT");
+    assert_eq!(page.warnings[0].code, "APPROXIMATED_PDF_FONT");
     Ok(())
 }
 
@@ -226,5 +249,26 @@ fn rejects_unknown_content_operators() -> Result<(), DocsightError> {
         error,
         Err(DocsightError::UnsupportedFeature { feature }) if feature.contains("unsupported")
     ));
+    Ok(())
+}
+
+#[test]
+fn decodes_simple_truetype_text_through_to_unicode() -> Result<(), DocsightError> {
+    let content = "BT /F1 12 Tf 20 70 Td (\\001\\002) Tj ET";
+    let cmap = "begincmap\n2 beginbfchar\n<01> <00E9>\n<02> <4F60>\nendbfchar\nendcmap";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Example-Bold /ToUnicode 6 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(page.spans[0].text, "é你");
+    assert_eq!(page.spans[0].font_name, "Example-Bold");
+    assert!(page.spans[0].bold);
+    assert_eq!(page.warnings[0].code, "APPROXIMATED_PDF_FONT");
     Ok(())
 }

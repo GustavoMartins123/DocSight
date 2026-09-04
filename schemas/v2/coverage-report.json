@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/coverage-report.json",
+  "title": "CoverageReport",
+  "type": "object",
+  "required": [
+    "document_sha256",
+    "format",
+    "global",
+    "pages",
+    "affected_objects_count",
+    "reason_codes"
+  ],
+  "properties": {
+    "document_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "format": { "type": "string" },
+    "global": {
+      "$ref": "#/$defs/page_coverage"
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/page_coverage"
+      }
+    },
+    "affected_objects_count": { "type": "integer" },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "coverage_metric": {
+      "type": "object",
+      "required": ["score", "status", "reason_codes"],
+      "properties": {
+        "score": { "type": "number" },
+        "status": { "type": "string", "enum": ["exact", "inferred", "approximated", "unsupported"] },
+        "reason_codes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "page_coverage": {
+      "type": "object",
+      "required": ["page", "text", "structure", "geometry", "visual", "overall_fidelity"],
+      "properties": {
+        "page": { "type": "integer" },
+        "text": { "$ref": "#/$defs/coverage_metric" },
+        "structure": { "$ref": "#/$defs/coverage_metric" },
+        "geometry": { "$ref": "#/$defs/coverage_metric" },
+        "visual": { "$ref": "#/$defs/coverage_metric" },
+        "overall_fidelity": { "type": "number" },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["page", "status", "reason_code", "description"],
+            "properties": {
+              "page": { "type": "integer" },
+              "object_id": { "type": "string" },
+              "bbox": { "type": "object" },
+              "status": { "type": "string" },
+              "reason_code": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

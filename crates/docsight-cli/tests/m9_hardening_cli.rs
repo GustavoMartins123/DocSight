@@ -5,6 +5,7 @@ use docsight_worker::{SandboxPolicy, find_worker_binary, run_in_sandbox};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 fn docsight() -> Command {
     Command::new(env!("CARGO_BIN_EXE_docsight"))
@@ -180,7 +181,7 @@ fn sandbox_worker_inspect_runs_isolated_process() -> Result<(), Box<dyn std::err
         .output()?;
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(value["schema"], "docsight.agent/v1");
+    assert_eq!(value["schema"], "docsight.agent/v2");
     assert_eq!(value["result"]["format"], "docx");
     assert_eq!(value["result"]["pages"], 3);
 
@@ -234,7 +235,7 @@ fn fingerprint_command_matches_specification_contract() -> Result<(), Box<dyn st
         .output()?;
     assert!(json_out.status.success());
     let val: serde_json::Value = serde_json::from_slice(&json_out.stdout)?;
-    assert_eq!(val["schema"], "docsight.agent/v1");
+    assert_eq!(val["schema"], "docsight.agent/v2");
     let result = &val["result"];
     assert!(!result["file_sha256"].as_str().ok_or("missing")?.is_empty());
     assert!(
@@ -424,6 +425,7 @@ fn sandbox_memory_limit_kills_worker_as_backend_failure() -> Result<(), Box<dyn 
         max_memory_bytes: 256 * 1024 * 1024,
         cpu_timeout_secs: 30,
         isolated_temp_dir: false,
+        max_output_bytes: 64 * 1024 * 1024,
     };
     let res = docsight_worker::run_in_sandbox_with_env(
         Some(&worker_exe),
@@ -441,6 +443,38 @@ fn sandbox_memory_limit_kills_worker_as_backend_failure() -> Result<(), Box<dyn 
             "the memory hog must not exit successfully under the sandbox limit"
         ),
     }
+    Ok(())
+}
+
+#[test]
+fn sandbox_output_limit_drains_worker_without_deadlock() -> Result<(), Box<dyn std::error::Error>> {
+    let worker_exe = find_worker_binary()?;
+    let doc_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("Projeto_DOCSIGHT_Especificacao.docx");
+    let policy = SandboxPolicy {
+        max_output_bytes: 1024,
+        ..SandboxPolicy::default()
+    };
+    let start = Instant::now();
+    let result = docsight_worker::run_in_sandbox_with_env(
+        Some(&worker_exe),
+        &policy,
+        &["text".to_owned(), doc_path.to_string_lossy().into_owned()],
+        &[(
+            docsight_worker::SANDBOX_CHILD_ENV.to_owned(),
+            "1".to_owned(),
+        )],
+    );
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert!(
+        matches!(
+            &result,
+            Err(docsight_core::DocsightError::ResourceLimit { .. })
+        ),
+        "{result:?}"
+    );
     Ok(())
 }
 

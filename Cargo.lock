@@ -256,6 +256,7 @@ dependencies = [
  "docsight-core",
  "roxmltree",
  "serde",
+ "sha2",
  "zip",
 ]
 

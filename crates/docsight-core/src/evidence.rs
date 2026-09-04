@@ -11,18 +11,15 @@ const GEOMETRY_WARNING_CODES: &[&str] = &[
     "DOCX_BLOCK_TALLER_THAN_PAGE",
 ];
 
-const GLOBAL_GEOMETRY_PENALTIES: &[(&str, f32)] = &[
-    ("DOCX_FONT_SUBSTITUTED", 0.060),
-    ("DOCX_PAGINATION_BLOCK_GRANULAR", 0.020),
-    ("APPROXIMATED_BASE14_FONT", 0.040),
+const GLOBAL_GEOMETRY_APPROXIMATION_CODES: &[&str] = &[
+    "DOCX_FONT_SUBSTITUTED",
+    "DOCX_PAGINATION_BLOCK_GRANULAR",
+    "APPROXIMATED_PDF_FONT",
 ];
 
-const GLOBAL_VISUAL_PENALTIES: &[(&str, f32)] = &[
-    ("DOCX_FONT_SUBSTITUTED", 0.100),
-    ("APPROXIMATED_BASE14_FONT", 0.060),
-];
+const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] =
+    &["DOCX_FONT_SUBSTITUTED", "APPROXIMATED_PDF_FONT"];
 
-const FIGURE_PLACEHOLDER_VISUAL_PENALTY: f32 = 0.900;
 const UNKNOWN_STRUCTURE_PENALTY: f32 = 1.000;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -48,7 +45,21 @@ pub struct FidelityInputs<'a> {
 
 fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityProfile {
     let total = inputs.blocks.len();
-    let reasons: BTreeSet<String> = doc.warnings.iter().map(|w| w.code.clone()).collect();
+    let block_ids: BTreeSet<&ObjectId> = inputs.blocks.iter().map(|block| &block.id).collect();
+    let relevant_warnings: Vec<_> = doc
+        .warnings
+        .iter()
+        .filter(|warning| {
+            warning
+                .object
+                .as_ref()
+                .is_none_or(|object| block_ids.contains(object))
+        })
+        .collect();
+    let reasons: BTreeSet<String> = relevant_warnings
+        .iter()
+        .map(|warning| warning.code.clone())
+        .collect();
 
     let text_loss_objects: BTreeSet<&ObjectId> = doc
         .warnings
@@ -129,16 +140,19 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
         .iter()
         .filter(|block| geometry_warning_objects.contains(&block.id))
         .count();
-    let mut geometry_penalty = 0.0_f32;
-    for (code, penalty) in GLOBAL_GEOMETRY_PENALTIES {
-        if reasons.contains(*code) {
-            geometry_penalty += penalty;
-        }
-    }
-    if total > 0 {
-        geometry_penalty += 0.500 * geometry_affected as f32 / total as f32;
-    }
-    let geometry = placed_ratio * (1.0 - geometry_penalty.min(1.0));
+    let geometry_exact_ratio = if total == 0 {
+        1.0
+    } else {
+        1.0 - geometry_affected as f32 / total as f32
+    };
+    let geometry = if GLOBAL_GEOMETRY_APPROXIMATION_CODES
+        .iter()
+        .any(|code| reasons.contains(*code))
+    {
+        0.0
+    } else {
+        placed_ratio * geometry_exact_ratio
+    };
 
     let figures_total = inputs
         .blocks
@@ -156,19 +170,19 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
             })
         })
         .count();
-    let placeholder_share = if figures_total == 0 || total == 0 {
+    let placeholder_share = if figures_total == 0 {
         0.0
     } else {
-        placeholder_figures as f32 / total as f32
+        placeholder_figures as f32 / figures_total as f32
     };
-    let mut visual_penalty = 0.0_f32;
-    for (code, penalty) in GLOBAL_VISUAL_PENALTIES {
-        if reasons.contains(*code) {
-            visual_penalty += penalty;
-        }
-    }
-    visual_penalty += FIGURE_PLACEHOLDER_VISUAL_PENALTY * placeholder_share;
-    let visual = inputs.glyph_coverage * (1.0 - visual_penalty.min(1.0));
+    let visual = if GLOBAL_VISUAL_UNSUPPORTED_CODES
+        .iter()
+        .any(|code| reasons.contains(*code))
+    {
+        0.0
+    } else {
+        inputs.glyph_coverage * (1.0 - placeholder_share)
+    };
 
     FidelityProfile {
         text,
@@ -372,6 +386,37 @@ fn page_coverage(
 
     let mut regions = Vec::new();
 
+    for code in GLOBAL_GEOMETRY_APPROXIMATION_CODES
+        .iter()
+        .chain(GLOBAL_VISUAL_UNSUPPORTED_CODES.iter())
+    {
+        if fidelity.reasons.iter().any(|reason| reason == code) {
+            for block in page_blocks {
+                affected_ids.insert(block.id.to_string());
+            }
+            if include_regions
+                && !regions
+                    .iter()
+                    .any(|region: &CoverageRegion| region.reason_code == *code)
+            {
+                let status = if GLOBAL_VISUAL_UNSUPPORTED_CODES.contains(code) {
+                    CoverageStatus::Unsupported
+                } else {
+                    CoverageStatus::Approximated
+                };
+                regions.push(CoverageRegion {
+                    page,
+                    object_id: None,
+                    bbox: None,
+                    status,
+                    reason_code: (*code).to_owned(),
+                    description: "the page is not backed by source-faithful geometry or rendering"
+                        .to_owned(),
+                });
+            }
+        }
+    }
+
     for block in page_blocks {
         if block.kind == BlockKind::Unknown {
             affected_ids.insert(block.id.to_string());
@@ -427,6 +472,23 @@ fn page_coverage(
                 });
             }
         }
+        for warning in doc.warnings.iter().filter(|warning| {
+            GEOMETRY_WARNING_CODES.contains(&warning.code.as_str())
+                && warning.object.as_ref() == Some(&block.id)
+        }) {
+            affected_ids.insert(block.id.to_string());
+            all_reason_codes.insert(warning.code.clone());
+            if include_regions {
+                regions.push(CoverageRegion {
+                    page,
+                    object_id: Some(block.id.clone()),
+                    bbox: block.bbox,
+                    status: CoverageStatus::Approximated,
+                    reason_code: warning.code.clone(),
+                    description: warning.effect.clone(),
+                });
+            }
+        }
         if doc.format == DocumentFormat::Pdf && block.confidence < 0.95 {
             affected_ids.insert(block.id.to_string());
             let reason = if block.kind == BlockKind::Table {
@@ -469,10 +531,16 @@ fn page_coverage(
         &fidelity,
         &[
             "DOCX_FONT_SUBSTITUTED",
-            "APPROXIMATED_BASE14_FONT",
+            "APPROXIMATED_PDF_FONT",
             "DOCX_FIGURE_RASTER_PLACEHOLDER",
         ],
     );
+    let geometry_unsupported = GLOBAL_GEOMETRY_APPROXIMATION_CODES
+        .iter()
+        .any(|code| fidelity.reasons.iter().any(|reason| reason == code));
+    let visual_unsupported = GLOBAL_VISUAL_UNSUPPORTED_CODES
+        .iter()
+        .any(|code| fidelity.reasons.iter().any(|reason| reason == code));
 
     PageCoverage {
         page,
@@ -495,14 +563,14 @@ fn page_coverage(
             CoverageStatus::Exact,
             CoverageStatus::Approximated,
             geometry_reasons,
-            false,
+            geometry_unsupported,
         ),
         visual: coverage_metric(
             fidelity.visual,
             CoverageStatus::Exact,
             CoverageStatus::Approximated,
             visual_reasons,
-            false,
+            visual_unsupported,
         ),
         overall_fidelity: fidelity.overall(),
         regions,

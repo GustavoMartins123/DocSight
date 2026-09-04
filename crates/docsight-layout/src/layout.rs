@@ -1,7 +1,7 @@
 use crate::font::{text_width, wrap_text};
 use docsight_core::{
     Block, BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, ObjectId,
-    Overlay, OverlayKind, Page, Rect, SourceSpan,
+    Overlay, OverlayKind, Page, Rect, SourceSpan, Style,
 };
 
 const MAX_LAYOUT_PAGES: u32 = 10_000;
@@ -56,8 +56,17 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             (612.0, 792.0, 72.0, 72.0, 72.0, 72.0)
         };
 
-    let content_width = (page_width - margin_left - margin_right).max(100.0);
-    let content_height = (page_height - margin_top - margin_bottom).max(100.0);
+    let content_width = page_width - margin_left - margin_right;
+    let content_height = page_height - margin_top - margin_bottom;
+    if !content_width.is_finite()
+        || !content_height.is_finite()
+        || content_width <= 0.0
+        || content_height <= 0.0
+    {
+        return Err(DocsightError::MalformedDocument {
+            message: "DOCX section margins leave no positive page content area".to_owned(),
+        });
+    }
     let content_bottom = margin_top + content_height;
 
     let mut warnings = vec![
@@ -89,9 +98,10 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
     ];
 
     let block_count = doc.blocks.len();
+    let styles = doc.styles.clone();
     let mut heights = Vec::with_capacity(block_count);
     for block in &doc.blocks {
-        heights.push(measure_height(block, content_width)?);
+        heights.push(measure_height(block, content_width, &styles)?);
     }
 
     let mut placements: Vec<Placement> = Vec::with_capacity(block_count);
@@ -111,7 +121,17 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
         while chain_end + 1 < block_count && doc.blocks[chain_end].flags.keep_with_next {
             chain_end += 1;
         }
-        let chain_height: f32 = heights[index..=chain_end].iter().sum();
+        let chain_height =
+            heights[index..=chain_end]
+                .iter()
+                .try_fold(0.0_f32, |total, height| {
+                    let next = total + height;
+                    next.is_finite().then_some(next).ok_or_else(|| {
+                        DocsightError::MalformedDocument {
+                            message: "DOCX keep-with-next chain height is non-finite".to_owned(),
+                        }
+                    })
+                })?;
         let remaining = content_bottom - current_y;
         let block_fits = heights[index] <= remaining;
         let chain_fits = chain_end == index || chain_height <= remaining;
@@ -154,8 +174,13 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
         .map(|placement| placement.page)
         .unwrap_or(current_page_number);
 
-    let mut laid_pages: Vec<LaidOutPage> = Vec::with_capacity(total_pages as usize);
-    let mut doc_pages: Vec<Page> = Vec::with_capacity(total_pages as usize);
+    let total_pages_capacity =
+        usize::try_from(total_pages).map_err(|_| DocsightError::ResourceLimit {
+            resource: "DOCX layout pages".to_owned(),
+            limit: u64::from(MAX_LAYOUT_PAGES),
+        })?;
+    let mut laid_pages: Vec<LaidOutPage> = Vec::with_capacity(total_pages_capacity);
+    let mut doc_pages: Vec<Page> = Vec::with_capacity(total_pages_capacity);
     for number in 1..=total_pages {
         laid_pages.push(LaidOutPage {
             number,
@@ -184,6 +209,7 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             margin_left,
             placement.y,
             &mut warnings,
+            &styles,
         )?;
         block.page = Some(placement.page);
         block.bbox = Some(Rect::new(
@@ -192,11 +218,34 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             margin_left + content_width,
             placement.y + height,
         )?);
-        block.reading_order = (placement_index + 1) as u32;
-        block.confidence = 0.95;
+        block.reading_order =
+            u32::try_from(placement_index + 1).map_err(|_| DocsightError::ResourceLimit {
+                resource: "DOCX layout blocks".to_owned(),
+                limit: u64::from(u32::MAX),
+            })?;
 
-        let laid_page = &mut laid_pages[(placement.page - 1) as usize];
-        let doc_page = &mut doc_pages[(placement.page - 1) as usize];
+        let page_index = usize::try_from(placement.page.checked_sub(1).ok_or_else(|| {
+            DocsightError::MalformedDocument {
+                message: "DOCX layout produced page zero".to_owned(),
+            }
+        })?)
+        .map_err(|_| DocsightError::ResourceLimit {
+            resource: "DOCX layout page index".to_owned(),
+            limit: u64::from(MAX_LAYOUT_PAGES),
+        })?;
+        let laid_page =
+            laid_pages
+                .get_mut(page_index)
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: "DOCX layout page index is outside the allocated page set".to_owned(),
+                })?;
+        let doc_page =
+            doc_pages
+                .get_mut(page_index)
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: "DOCX document page index is outside the allocated page set"
+                        .to_owned(),
+                })?;
         doc_page.block_ids.push(block.id.clone());
         laid_page.runs.extend(runs);
         laid_page.borders.extend(borders);
@@ -404,9 +453,13 @@ fn anchor_links_and_comments(
     }
 }
 
-fn measure_height(block: &Block, content_width: f32) -> Result<f32, DocsightError> {
+fn measure_height(
+    block: &Block,
+    content_width: f32,
+    styles: &[Style],
+) -> Result<f32, DocsightError> {
     let mut copy = block.clone();
-    let (height, _, _) = emit_block(&mut copy, content_width, 0.0, 0.0, &mut Vec::new())?;
+    let (height, _, _) = emit_block(&mut copy, content_width, 0.0, 0.0, &mut Vec::new(), styles)?;
     Ok(height)
 }
 
@@ -416,11 +469,14 @@ fn emit_block(
     margin_left: f32,
     base_y: f32,
     warnings: &mut Vec<Diagnostic>,
+    styles: &[Style],
 ) -> Result<(f32, Vec<TextRunLayout>, Vec<BorderLayout>), DocsightError> {
     match &mut block.content {
         BlockContent::Paragraph(p) => {
-            let font_size = 11.0_f32;
-            let line_height = 14.0_f32;
+            let style = find_style(styles, p.style_id.as_deref());
+            let font_size = style.and_then(|value| value.font_size_pt).unwrap_or(11.0);
+            let bold = style.and_then(|value| value.bold).unwrap_or(false);
+            let line_height = (font_size * 1.27).max(font_size + 2.0);
             let space_after = 4.0_f32;
             let lines = wrap_text(&p.text, font_size, content_width);
             let height = (lines.len() as f32 * line_height + space_after).max(1.0);
@@ -440,7 +496,7 @@ fn emit_block(
                 runs.push(TextRunLayout {
                     text: line,
                     font_size,
-                    bold: false,
+                    bold,
                     bbox,
                     color_argb: 0xFF000000,
                 });
@@ -448,11 +504,21 @@ fn emit_block(
             Ok((height, runs, Vec::new()))
         }
         BlockContent::Heading(h) => {
-            let (font_size, line_height, space_before, space_after) = match h.level {
+            let (default_font_size, default_line_height, space_before, space_after) = match h.level
+            {
                 1 => (16.0_f32, 20.0_f32, 10.0_f32, 5.0_f32),
                 2 => (13.0_f32, 17.0_f32, 8.0_f32, 4.0_f32),
                 _ => (12.0_f32, 15.0_f32, 6.0_f32, 3.0_f32),
             };
+            let style = find_style(styles, h.style_id.as_deref());
+            let font_size = style
+                .and_then(|value| value.font_size_pt)
+                .unwrap_or(default_font_size);
+            let line_height = style
+                .and_then(|value| value.font_size_pt)
+                .map(|size| (size * 1.25).max(size + 2.0))
+                .unwrap_or(default_line_height);
+            let bold = style.and_then(|value| value.bold).unwrap_or(true);
             let lines = wrap_text(&h.text, font_size, content_width);
             let height = (lines.len() as f32 * line_height + space_before + space_after).max(1.0);
             let mut runs = Vec::with_capacity(lines.len());
@@ -471,7 +537,7 @@ fn emit_block(
                 runs.push(TextRunLayout {
                     text: line,
                     font_size,
-                    bold: true,
+                    bold,
                     bbox,
                     color_argb: 0xFF000000,
                 });
@@ -479,8 +545,10 @@ fn emit_block(
             Ok((height, runs, Vec::new()))
         }
         BlockContent::ListItem(li) => {
-            let font_size = 11.0_f32;
-            let line_height = 14.0_f32;
+            let style = find_style(styles, li.style_id.as_deref());
+            let font_size = style.and_then(|value| value.font_size_pt).unwrap_or(11.0);
+            let bold = style.and_then(|value| value.bold).unwrap_or(false);
+            let line_height = (font_size * 1.27).max(font_size + 2.0);
             let space_after = 3.0_f32;
             let indent = (li.level as f32 + 1.0) * 18.0;
             let item_w = (content_width - indent).max(50.0);
@@ -519,7 +587,7 @@ fn emit_block(
                 runs.push(TextRunLayout {
                     text: line,
                     font_size,
-                    bold: false,
+                    bold,
                     bbox,
                     color_argb: 0xFF000000,
                 });
@@ -715,4 +783,9 @@ fn emit_block(
             Ok((height, Vec::new(), Vec::new()))
         }
     }
+}
+
+fn find_style<'a>(styles: &'a [Style], style_id: Option<&str>) -> Option<&'a Style> {
+    let id = style_id?;
+    styles.iter().find(|style| style.id == id)
 }

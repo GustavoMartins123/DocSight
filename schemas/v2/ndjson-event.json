@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/ndjson-event.json",
+  "title": "NdjsonEvent",
+  "type": "object",
+  "required": [
+    "seq",
+    "type"
+  ],
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "meta",
+        "done",
+        "warning",
+        "page.begin",
+        "page.end",
+        "inspect",
+        "heading",
+        "span",
+        "overlay",
+        "block",
+        "table",
+        "render",
+        "crop",
+        "image",
+        "link",
+        "diff.summary",
+        "diff.semantic",
+        "fingerprint",
+        "evidence",
+        "coverage.global",
+        "coverage.page",
+        "hit"
+      ]
+    }
+  }
+}

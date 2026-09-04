@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -26,7 +25,7 @@ fn diff_identical_documents_reports_zero_changes() -> Result<(), Box<dyn std::er
     assert!(output.status.success());
 
     let val: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(val["schema"], "docsight.agent/v1");
+    assert_eq!(val["schema"], "docsight.agent/v2");
     let result = &val["result"];
     assert_eq!(result["summary"]["semantic_changes"], 0);
     assert_eq!(
@@ -81,7 +80,7 @@ fn diff_docx_json_envelope_and_projections() -> Result<(), Box<dyn std::error::E
     assert!(output.status.success());
 
     let val: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(val["schema"], "docsight.agent/v1");
+    assert_eq!(val["schema"], "docsight.agent/v2");
     let result = &val["result"];
     assert_eq!(result["format_before"], "docx");
     assert_eq!(result["format_after"], "docx");
@@ -113,7 +112,8 @@ fn diff_docx_json_envelope_and_projections() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
-fn diff_visual_writes_page_png_artifacts() -> Result<(), Box<dyn std::error::Error>> {
+fn diff_visual_fails_closed_for_approximate_docx_rendering()
+-> Result<(), Box<dyn std::error::Error>> {
     let before = fixture("sample_headings.docx");
     let after = fixture("sample_tables.docx");
     let before_str = before.to_str().ok_or("invalid path")?;
@@ -132,15 +132,14 @@ fn diff_visual_writes_page_png_artifacts() -> Result<(), Box<dyn std::error::Err
             out_dir.to_str().ok_or("invalid out dir")?,
         ])
         .output()?;
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(20));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("LAYOUT_PARTIAL"));
 
     let p1 = out_dir.join("diff_p0001.png");
     let p2 = out_dir.join("diff_p0002.png");
-    assert!(p1.exists());
-    assert!(p2.exists());
-
-    let p1_bytes = fs::read(&p1)?;
-    assert_eq!(&p1_bytes[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(!p1.exists());
+    assert!(!p2.exists());
 
     Ok(())
 }
@@ -268,7 +267,50 @@ fn diff_reports_single_insertion_without_cascade() -> Result<(), Box<dyn std::er
         assert!(entry["before_object"].as_str().is_some());
         assert!(entry["after_object"].as_str().is_some());
     }
-    let _ = std::fs::remove_file(before);
-    let _ = std::fs::remove_file(after);
+    std::fs::remove_file(before)?;
+    std::fs::remove_file(after)?;
+    Ok(())
+}
+
+#[test]
+fn diff_detects_changed_embedded_image_bytes() -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use zip::ZipArchive;
+    use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
+
+    let before = fixture("sample_features.docx");
+    let temp_dir = tempfile::tempdir()?;
+    let after = temp_dir.path().join("changed-image.docx");
+    let mut archive = ZipArchive::new(File::open(&before)?)?;
+    let mut writer = ZipWriter::new(File::create(&after)?);
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        writer.start_file(entry.name(), options)?;
+        if entry.name().starts_with("word/media/") {
+            writer.write_all(b"different embedded image bytes")?;
+        } else {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            writer.write_all(&bytes)?;
+        }
+    }
+    writer.finish()?;
+
+    let output = docsight()
+        .args([
+            "diff",
+            before.to_str().ok_or("invalid before path")?,
+            after.to_str().ok_or("invalid after path")?,
+            "--json",
+        ])
+        .output()?;
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(value["result"]["semantic"]["images"]["modified"], 1);
+    assert_eq!(value["result"]["semantic"]["images"]["added"], 0);
+    assert_eq!(value["result"]["semantic"]["images"]["removed"], 0);
     Ok(())
 }

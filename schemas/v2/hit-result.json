@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/hit-result.json",
+  "title": "HitResult",
+  "type": "object",
+  "required": [
+    "query_page",
+    "total_hits",
+    "targets"
+  ],
+  "properties": {
+    "query_page": { "type": "integer" },
+    "query_point": {
+      "type": ["array", "null"],
+      "items": { "type": "number" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "query_bbox": {
+      "type": ["object", "null"],
+      "properties": {
+        "x0": { "type": "number" },
+        "y0": { "type": "number" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" }
+      },
+      "required": ["x0", "y0", "x1", "y1"]
+    },
+    "total_hits": { "type": "integer" },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "object_id",
+          "kind",
+          "page",
+          "bbox",
+          "z_index",
+          "reading_order",
+          "source_path",
+          "text_snippet"
+        ],
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "pattern": "^[a-z]+_[0-9a-f]{32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "paragraph",
+              "heading",
+              "list_item",
+              "table",
+              "figure",
+              "shape",
+              "note",
+              "unknown",
+              "header",
+              "footer",
+              "watermark",
+              "comment_marker",
+              "annotation"
+            ]
+          },
+          "page": { "type": "integer" },
+          "bbox": {
+            "type": "object",
+            "required": ["x0", "y0", "x1", "y1"],
+            "properties": {
+              "x0": { "type": "number" },
+              "y0": { "type": "number" },
+              "x1": { "type": "number" },
+              "y1": { "type": "number" }
+            }
+          },
+          "z_index": { "type": "integer" },
+          "reading_order": { "type": "integer" },
+          "source_path": { "type": "string" },
+          "confidence": { "type": ["number", "null"] },
+          "cell": {
+            "type": ["object", "null"],
+            "properties": {
+              "row": { "type": "integer" },
+              "column": { "type": "integer" },
+              "row_span": { "type": "integer" },
+              "column_span": { "type": "integer" },
+              "bbox": { "type": ["object", "null"] }
+            },
+            "required": ["row", "column", "row_span", "column_span"]
+          },
+          "text_snippet": { "type": "string" }
+        }
+      }
+    }
+  }
+}

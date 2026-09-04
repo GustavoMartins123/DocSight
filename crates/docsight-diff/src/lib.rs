@@ -774,20 +774,30 @@ pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff
     let figure_items = |document: &Document| -> Vec<AlignItem> {
         document
             .figures()
-            .map(|(block, figure)| AlignItem {
-                object_id: block.id.to_string(),
-                page: block.page,
-                key: normalize_text(&format!(
-                    "{}|{}|{}",
-                    figure.resource_id.as_deref().unwrap_or(""),
-                    figure.alt_text.as_deref().unwrap_or(""),
-                    figure.caption.as_deref().unwrap_or("")
-                )),
-                display: figure
-                    .caption
-                    .clone()
-                    .or_else(|| figure.alt_text.clone())
-                    .unwrap_or_else(|| figure.resource_id.clone().unwrap_or_default()),
+            .map(|(block, figure)| {
+                let relationship = figure.resource_id.as_deref().unwrap_or("<none>");
+                let digest = document
+                    .resources
+                    .iter()
+                    .find(|resource| resource.name == relationship)
+                    .and_then(|resource| resource.content_sha256.as_deref());
+                let digest = digest.unwrap_or("<unavailable>");
+                let alt_text = figure.alt_text.as_deref().unwrap_or("<none>");
+                let caption = figure.caption.as_deref().unwrap_or("<none>");
+                let display = match (&figure.caption, &figure.alt_text, &figure.resource_id) {
+                    (Some(value), _, _) | (None, Some(value), _) | (None, None, Some(value)) => {
+                        value.clone()
+                    }
+                    (None, None, None) => "unidentified figure".to_owned(),
+                };
+                AlignItem {
+                    object_id: block.id.to_string(),
+                    page: block.page,
+                    key: normalize_text(&format!(
+                        "resource {relationship} digest {digest} alt {alt_text} caption {caption}"
+                    )),
+                    display,
+                }
             })
             .collect()
     };
@@ -890,8 +900,34 @@ pub fn diff_visual(
     threshold: u8,
     out_dir: Option<&Path>,
 ) -> Result<VisualDiff, DocsightError> {
-    let pages_before = doc_before.pages.len() as u32;
-    let pages_after = doc_after.pages.len() as u32;
+    if doc_before
+        .warnings
+        .iter()
+        .chain(doc_after.warnings.iter())
+        .any(|warning| {
+            matches!(
+                warning.code.as_str(),
+                "DOCX_FIGURE_RASTER_PLACEHOLDER"
+                    | "DOCX_FONT_SUBSTITUTED"
+                    | "APPROXIMATED_PDF_FONT"
+            )
+        })
+    {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "source-faithful visual diff while fonts or images are not rasterized"
+                .to_owned(),
+        });
+    }
+    let pages_before =
+        u32::try_from(doc_before.pages.len()).map_err(|_| DocsightError::ResourceLimit {
+            resource: "visual diff pages".to_owned(),
+            limit: u64::from(u32::MAX),
+        })?;
+    let pages_after =
+        u32::try_from(doc_after.pages.len()).map_err(|_| DocsightError::ResourceLimit {
+            resource: "visual diff pages".to_owned(),
+            limit: u64::from(u32::MAX),
+        })?;
     let max_pages = pages_before.max(pages_after);
 
     let (largest_drift_pt, largest_drift_page) = calculate_largest_drift(doc_before, doc_after);
@@ -917,9 +953,21 @@ pub fn diff_visual(
 
             let w = img_a.metadata.width_px.max(img_b.metadata.width_px);
             let h = img_a.metadata.height_px.max(img_b.metadata.height_px);
-            let total_pixels = w.saturating_mul(h);
+            let total_pixels = w
+                .checked_mul(h)
+                .ok_or_else(|| DocsightError::ResourceLimit {
+                    resource: "visual diff pixels".to_owned(),
+                    limit: u64::from(u32::MAX),
+                })?;
 
-            let mut diff_canvas = vec![245_u8; (total_pixels as usize) * 3];
+            let canvas_bytes = usize::try_from(total_pixels)
+                .ok()
+                .and_then(|pixels| pixels.checked_mul(3))
+                .ok_or_else(|| DocsightError::ResourceLimit {
+                    resource: "visual diff raster bytes".to_owned(),
+                    limit: u64::from(u32::MAX) * 3,
+                })?;
+            let mut diff_canvas = vec![245_u8; canvas_bytes];
             let mut changed_pixels = 0_u32;
 
             let mut min_x_pt = f32::INFINITY;
@@ -940,14 +988,14 @@ pub fn diff_visual(
             for y in 0..h {
                 for x in 0..w {
                     let rgb_a = if x < wa && y < ha {
-                        let idx = (y * wa + x) as usize * 3;
+                        let idx = rgb_index(x, y, wa)?;
                         (px_a[idx], px_a[idx + 1], px_a[idx + 2])
                     } else {
                         (255, 255, 255)
                     };
 
                     let rgb_b = if x < wb && y < hb {
-                        let idx = (y * wb + x) as usize * 3;
+                        let idx = rgb_index(x, y, wb)?;
                         (px_b[idx], px_b[idx + 1], px_b[idx + 2])
                     } else {
                         (255, 255, 255)
@@ -958,9 +1006,14 @@ pub fn diff_visual(
                     let diff_b = rgb_a.2.abs_diff(rgb_b.2);
                     let max_diff = diff_r.max(diff_g).max(diff_b);
 
-                    let out_idx = (y * w + x) as usize * 3;
+                    let out_idx = rgb_index(x, y, w)?;
                     if max_diff > threshold {
-                        changed_pixels += 1;
+                        changed_pixels = changed_pixels.checked_add(1).ok_or_else(|| {
+                            DocsightError::ResourceLimit {
+                                resource: "changed visual diff pixels".to_owned(),
+                                limit: u64::from(u32::MAX),
+                            }
+                        })?;
                         diff_canvas[out_idx] = 235;
                         diff_canvas[out_idx + 1] = 40;
                         diff_canvas[out_idx + 2] = 40;
@@ -984,15 +1037,18 @@ pub fn diff_visual(
 
             let mut changed_regions = Vec::new();
             if changed_pixels > 0 {
-                layout_changed_pages += 1;
-                if let Ok(rect) = Rect::new(
+                layout_changed_pages = layout_changed_pages.checked_add(1).ok_or_else(|| {
+                    DocsightError::ResourceLimit {
+                        resource: "visually changed pages".to_owned(),
+                        limit: u64::from(u32::MAX),
+                    }
+                })?;
+                changed_regions.push(Rect::new(
                     min_x_pt,
                     min_y_pt,
                     max_x_pt.max(min_x_pt + 1.0),
                     max_y_pt.max(min_y_pt + 1.0),
-                ) {
-                    changed_regions.push(rect);
-                }
+                )?);
             }
 
             let change_fraction = if total_pixels > 0 {
@@ -1024,7 +1080,12 @@ pub fn diff_visual(
                 diff_png,
             });
         } else {
-            layout_changed_pages += 1;
+            layout_changed_pages = layout_changed_pages.checked_add(1).ok_or_else(|| {
+                DocsightError::ResourceLimit {
+                    resource: "visually changed pages".to_owned(),
+                    limit: u64::from(u32::MAX),
+                }
+            })?;
             page_diffs.push(PageVisualDiff {
                 page: p,
                 changed_pixels: 0,
@@ -1044,6 +1105,23 @@ pub fn diff_visual(
         largest_drift_page,
         page_diffs,
     })
+}
+
+fn rgb_index(x: u32, y: u32, width: u32) -> Result<usize, DocsightError> {
+    let pixel = y
+        .checked_mul(width)
+        .and_then(|row| row.checked_add(x))
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "visual diff pixel index".to_owned(),
+            limit: u64::from(u32::MAX),
+        })?;
+    usize::try_from(pixel)
+        .ok()
+        .and_then(|index| index.checked_mul(3))
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "visual diff raster index".to_owned(),
+            limit: u64::from(u32::MAX) * 3,
+        })
 }
 
 #[cfg(test)]

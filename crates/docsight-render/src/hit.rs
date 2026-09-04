@@ -1,6 +1,6 @@
 use docsight_core::{
     BlockContent, BlockKind, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
-    Rect,
+    OverlayKind, Rect,
 };
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
@@ -20,7 +20,7 @@ pub struct HitCell {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HitTarget {
     pub object_id: ObjectId,
-    pub kind: BlockKind,
+    pub kind: HitKind,
     pub page: u32,
     pub bbox: Rect,
     pub z_index: i32,
@@ -31,6 +31,51 @@ pub struct HitTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell: Option<HitCell>,
     pub text_snippet: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HitKind {
+    Paragraph,
+    Heading,
+    ListItem,
+    Table,
+    Figure,
+    Shape,
+    Note,
+    Unknown,
+    Header,
+    Footer,
+    Watermark,
+    CommentMarker,
+    Annotation,
+}
+
+impl From<BlockKind> for HitKind {
+    fn from(kind: BlockKind) -> Self {
+        match kind {
+            BlockKind::Paragraph => Self::Paragraph,
+            BlockKind::Heading => Self::Heading,
+            BlockKind::ListItem => Self::ListItem,
+            BlockKind::Table => Self::Table,
+            BlockKind::Figure => Self::Figure,
+            BlockKind::Shape => Self::Shape,
+            BlockKind::Note => Self::Note,
+            BlockKind::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<OverlayKind> for HitKind {
+    fn from(kind: OverlayKind) -> Self {
+        match kind {
+            OverlayKind::Header => Self::Header,
+            OverlayKind::Footer => Self::Footer,
+            OverlayKind::Watermark => Self::Watermark,
+            OverlayKind::CommentMarker => Self::CommentMarker,
+            OverlayKind::Annotation => Self::Annotation,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,8 +119,9 @@ pub fn hit_test(
     page_number: u32,
     query: &HitQuery,
 ) -> Result<HitResult, DocsightError> {
-    let page_exists = document.pages.iter().any(|p| p.number == page_number);
-    if !page_exists {
+    validate_query(query)?;
+    let page = document.pages.iter().find(|p| p.number == page_number);
+    let Some(page) = page else {
         return Err(DocsightError::InvalidArgument {
             message: format!(
                 "page number {} exceeds document page count {}",
@@ -83,7 +129,7 @@ pub fn hit_test(
                 document.pages.len()
             ),
         });
-    }
+    };
 
     let mut hits = Vec::new();
 
@@ -123,22 +169,18 @@ pub fn hit_test(
                             column_span: cell.column_span,
                             bbox: Some(cell_box),
                         });
-                        let cell_text: Vec<String> = cell.blocks.iter().map(|b| b.text()).collect();
-                        snippet = cell_text.join(" ");
+                        snippet = cell.text.clone();
                         break;
                     }
                 }
             }
         }
 
-        if snippet.len() > 120 {
-            snippet.truncate(117);
-            snippet.push_str("...");
-        }
+        snippet = truncate_snippet(&snippet);
 
         hits.push(HitTarget {
             object_id: block.id.clone(),
-            kind: block.kind,
+            kind: block.kind.into(),
             page: page_number,
             bbox,
             z_index: block.z_index,
@@ -151,6 +193,46 @@ pub fn hit_test(
             },
             cell: hit_cell,
             text_snippet: snippet,
+        });
+    }
+
+    let base_reading_order = document
+        .blocks
+        .iter()
+        .map(|block| block.reading_order)
+        .fold(0, u32::max);
+    for (index, overlay) in page.overlays.iter().enumerate() {
+        let Some(bbox) = overlay.bbox else {
+            continue;
+        };
+        let intersects = match query {
+            HitQuery::Point(x, y) => bbox.contains_point(*x, *y),
+            HitQuery::BBox(rect) => bbox.intersects(*rect),
+        };
+        if !intersects {
+            continue;
+        }
+        let overlay_index = u32::try_from(index + 1).map_err(|_| DocsightError::ResourceLimit {
+            resource: "page overlay reading order".to_owned(),
+            limit: u64::from(u32::MAX),
+        })?;
+        let overlay_order = base_reading_order
+            .checked_add(overlay_index)
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: "page overlay reading order".to_owned(),
+                limit: u64::from(u32::MAX),
+            })?;
+        hits.push(HitTarget {
+            object_id: overlay.id.clone(),
+            kind: overlay.kind.into(),
+            page: page_number,
+            bbox,
+            z_index: 1,
+            reading_order: overlay_order,
+            source_path: overlay.source.path.clone(),
+            confidence: None,
+            cell: None,
+            text_snippet: truncate_snippet(&overlay.text),
         });
     }
 
@@ -173,4 +255,25 @@ pub fn hit_test(
         total_hits: hits.len(),
         targets: hits,
     })
+}
+
+fn validate_query(query: &HitQuery) -> Result<(), DocsightError> {
+    match query {
+        HitQuery::Point(x, y) if !x.is_finite() || !y.is_finite() => {
+            Err(DocsightError::InvalidArgument {
+                message: "point coordinates must be finite".to_owned(),
+            })
+        }
+        HitQuery::BBox(rect) => Rect::new(rect.x0, rect.y0, rect.x1, rect.y1).map(|_| ()),
+        HitQuery::Point(_, _) => Ok(()),
+    }
+}
+
+fn truncate_snippet(text: &str) -> String {
+    if text.chars().count() <= 120 {
+        return text.to_owned();
+    }
+    let mut snippet: String = text.chars().take(117).collect();
+    snippet.push_str("...");
+    snippet
 }

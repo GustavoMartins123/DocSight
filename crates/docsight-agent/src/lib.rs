@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 
-pub const AGENT_SCHEMA: &str = "docsight.agent/v1";
+pub const AGENT_SCHEMA: &str = "docsight.agent/v2";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DocumentReference {
@@ -23,12 +23,18 @@ impl From<&DocumentSource> for DocumentReference {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutputLimits {
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub text_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuation_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_items: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub returned_items: Option<usize>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -211,25 +217,46 @@ pub fn apply_text_limit(text: &str, limit: Option<usize>) -> (String, bool) {
     (text.to_owned(), false)
 }
 
-pub fn truncate_json_strings(val: &mut serde_json::Value, max_len: usize) {
+pub fn truncate_json_text_fields(val: &mut serde_json::Value, max_len: usize) -> bool {
     match val {
-        serde_json::Value::String(s) => {
-            if s.chars().count() > max_len {
-                *s = s.chars().take(max_len).collect();
-            }
-        }
+        serde_json::Value::String(_) => false,
         serde_json::Value::Array(arr) => {
+            let mut truncated = false;
             for item in arr {
-                truncate_json_strings(item, max_len);
+                truncated = truncate_json_text_fields(item, max_len) || truncated;
             }
+            truncated
         }
         serde_json::Value::Object(map) => {
-            for v in map.values_mut() {
-                truncate_json_strings(v, max_len);
+            let mut truncated = false;
+            for (key, value) in map {
+                if is_text_field(key) {
+                    if let serde_json::Value::String(text) = value {
+                        if text.chars().count() > max_len {
+                            *text = text.chars().take(max_len).collect();
+                            truncated = true;
+                        }
+                    } else {
+                        truncated = truncate_json_text_fields(value, max_len) || truncated;
+                    }
+                } else if matches!(
+                    value,
+                    serde_json::Value::Array(_) | serde_json::Value::Object(_)
+                ) {
+                    truncated = truncate_json_text_fields(value, max_len) || truncated;
+                }
             }
+            truncated
         }
-        _ => {}
+        _ => false,
     }
+}
+
+fn is_text_field(field: &str) -> bool {
+    matches!(
+        field,
+        "text" | "text_fragment" | "alt_text" | "caption" | "label" | "details"
+    )
 }
 
 pub fn project_json(val: &serde_json::Value, select: &[String]) -> serde_json::Value {
@@ -325,6 +352,7 @@ pub fn apply_collection_limits<T: Clone>(
             Vec::new(),
             OutputLimits {
                 truncated: false,
+                text_truncated: false,
                 continuation_token: None,
                 total_items: Some(total_items),
                 returned_items: Some(0),
@@ -352,6 +380,7 @@ pub fn apply_collection_limits<T: Clone>(
         selected,
         OutputLimits {
             truncated,
+            text_truncated: false,
             continuation_token,
             total_items: Some(total_items),
             returned_items: Some(count),
@@ -392,8 +421,9 @@ where
     loop {
         let current_slice = available[..count].to_vec();
         let mut val = wrap_result(current_slice)?;
+        let mut text_truncated = false;
         if let Some(text_limit) = limits.text_limit {
-            truncate_json_strings(&mut val, text_limit);
+            text_truncated = truncate_json_text_fields(&mut val, text_limit);
         }
         if let Some(ref select) = limits.select {
             validate_projection(&val, select)?;
@@ -414,6 +444,7 @@ where
 
         let output_limits = OutputLimits {
             truncated,
+            text_truncated,
             continuation_token,
             total_items: Some(total_items),
             returned_items: Some(count),
@@ -426,7 +457,7 @@ where
                 serde_json::to_string(&envelope).map_err(|e| DocsightError::MalformedDocument {
                     message: e.to_string(),
                 })?;
-            if serialized.len() > max_bytes {
+            if serialized.len().saturating_add(1) > max_bytes {
                 if count > 0 {
                     count -= 1;
                     continue;
@@ -453,6 +484,9 @@ pub struct NdjsonWriter<W: Write> {
     items_emitted: usize,
     truncated: bool,
     continuation_offset: usize,
+    total_items: usize,
+    text_truncated: bool,
+    page_end_reserve: Option<usize>,
 }
 
 impl<W: Write> NdjsonWriter<W> {
@@ -461,6 +495,7 @@ impl<W: Write> NdjsonWriter<W> {
         limits: QueryLimits,
         command: String,
         sha256: String,
+        total_items: usize,
     ) -> Result<Self, DocsightError> {
         let continuation_offset = if let Some(ref token) = limits.continue_token {
             ContinuationToken::decode(token, &command, &sha256)?
@@ -478,6 +513,9 @@ impl<W: Write> NdjsonWriter<W> {
             items_emitted: 0,
             truncated: false,
             continuation_offset,
+            total_items,
+            text_truncated: false,
+            page_end_reserve: None,
         })
     }
 
@@ -485,10 +523,13 @@ impl<W: Write> NdjsonWriter<W> {
         self.continuation_offset
     }
 
-    fn write_json_line(&mut self, val: &serde_json::Value) -> Result<(), DocsightError> {
-        let line = serde_json::to_string(val).map_err(|e| DocsightError::MalformedDocument {
+    fn serialized_line(val: &serde_json::Value) -> Result<String, DocsightError> {
+        serde_json::to_string(val).map_err(|e| DocsightError::MalformedDocument {
             message: e.to_string(),
-        })?;
+        })
+    }
+
+    fn write_serialized_line(&mut self, line: &str) -> Result<(), DocsightError> {
         let bytes = line.len() + 1;
         self.writer
             .write_all(line.as_bytes())
@@ -501,6 +542,77 @@ impl<W: Write> NdjsonWriter<W> {
         Ok(())
     }
 
+    fn maximum_done_bytes(&self) -> Result<usize, DocsightError> {
+        let continuation_token = if self.total_items > 0 {
+            Some(ContinuationToken::encode(
+                &self.command,
+                self.total_items.saturating_sub(1),
+                &self.sha256,
+            ))
+        } else {
+            None
+        };
+        let limits = OutputLimits {
+            truncated: true,
+            text_truncated: self.text_truncated,
+            continuation_token,
+            total_items: Some(self.total_items),
+            returned_items: Some(self.total_items),
+        };
+        let line = serde_json::json!({
+            "seq": u64::MAX,
+            "type": "done",
+            "limits": limits,
+        });
+        Ok(Self::serialized_line(&line)?.len() + 1)
+    }
+
+    fn fits(
+        &self,
+        additional_bytes: usize,
+        additional_reserve: usize,
+    ) -> Result<bool, DocsightError> {
+        let Some(max_bytes) = self.limits.max_bytes else {
+            return Ok(true);
+        };
+        let reserved = self.page_end_reserve.unwrap_or(0);
+        let done = self.maximum_done_bytes()?;
+        let required = self
+            .bytes_written
+            .checked_add(additional_bytes)
+            .and_then(|value| value.checked_add(additional_reserve))
+            .and_then(|value| value.checked_add(reserved))
+            .and_then(|value| value.checked_add(done))
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: "NDJSON output bytes".to_owned(),
+                limit: max_bytes as u64,
+            })?;
+        Ok(required <= max_bytes)
+    }
+
+    fn write_required_line(&mut self, val: &serde_json::Value) -> Result<(), DocsightError> {
+        let line = Self::serialized_line(val)?;
+        if !self.fits(line.len() + 1, 0)? {
+            let max_bytes = self.limits.max_bytes.unwrap_or(0);
+            return Err(DocsightError::InvalidArgument {
+                message: format!(
+                    "--max-bytes {max_bytes} is smaller than the minimum NDJSON envelope"
+                ),
+            });
+        }
+        self.write_serialized_line(&line)
+    }
+
+    fn write_optional_line(&mut self, val: &serde_json::Value) -> Result<bool, DocsightError> {
+        let line = Self::serialized_line(val)?;
+        if !self.fits(line.len() + 1, 0)? {
+            self.truncated = true;
+            return Ok(false);
+        }
+        self.write_serialized_line(&line)?;
+        Ok(true)
+    }
+
     pub fn write_meta(&mut self, doc_ref: &DocumentReference) -> Result<(), DocsightError> {
         self.seq += 1;
         let line = serde_json::json!({
@@ -510,37 +622,67 @@ impl<W: Write> NdjsonWriter<W> {
             "engine": env!("CARGO_PKG_VERSION"),
             "document": doc_ref,
         });
-        self.write_json_line(&line)
+        self.write_required_line(&line)
     }
 
-    pub fn write_page_begin(&mut self, page: u32) -> Result<(), DocsightError> {
-        self.seq += 1;
+    pub fn write_page_begin(&mut self, page: u32) -> Result<bool, DocsightError> {
+        let begin_seq = self.seq.saturating_add(1);
         let line = serde_json::json!({
-            "seq": self.seq,
+            "seq": begin_seq,
             "type": "page.begin",
             "page": page,
         });
-        self.write_json_line(&line)
+        let end = serde_json::json!({
+            "seq": u64::MAX,
+            "type": "page.end",
+            "page": page,
+        });
+        let begin_line = Self::serialized_line(&line)?;
+        let end_reserve = Self::serialized_line(&end)?.len() + 1;
+        if !self.fits(begin_line.len() + 1, end_reserve)? {
+            self.truncated = true;
+            return Ok(false);
+        }
+        self.seq = begin_seq;
+        self.write_serialized_line(&begin_line)?;
+        self.page_end_reserve = Some(end_reserve);
+        Ok(true)
     }
 
-    pub fn write_page_end(&mut self, page: u32) -> Result<(), DocsightError> {
+    pub fn write_page_end(&mut self, page: u32) -> Result<bool, DocsightError> {
+        let Some(reserved) = self.page_end_reserve.take() else {
+            return Ok(false);
+        };
         self.seq += 1;
         let line = serde_json::json!({
             "seq": self.seq,
             "type": "page.end",
             "page": page,
         });
-        self.write_json_line(&line)
+        let serialized = Self::serialized_line(&line)?;
+        if serialized.len() + 1 > reserved {
+            return Err(DocsightError::ResourceLimit {
+                resource: "NDJSON page boundary bytes".to_owned(),
+                limit: reserved as u64,
+            });
+        }
+        self.write_serialized_line(&serialized)?;
+        Ok(true)
     }
 
-    pub fn write_warning(&mut self, diag: &Diagnostic) -> Result<(), DocsightError> {
-        self.seq += 1;
+    pub fn write_warning(&mut self, diag: &Diagnostic) -> Result<bool, DocsightError> {
+        let seq = self.seq.saturating_add(1);
         let line = serde_json::json!({
-            "seq": self.seq,
+            "seq": seq,
             "type": "warning",
             "diagnostic": diag,
         });
-        self.write_json_line(&line)
+        if self.write_optional_line(&line)? {
+            self.seq = seq;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub fn write_item(
@@ -567,7 +709,8 @@ impl<W: Write> NdjsonWriter<W> {
         };
 
         if let Some(text_limit) = self.limits.text_limit {
-            truncate_json_strings(&mut projected, text_limit);
+            self.text_truncated =
+                truncate_json_text_fields(&mut projected, text_limit) || self.text_truncated;
         }
 
         let obj = match projected {
@@ -579,9 +722,9 @@ impl<W: Write> NdjsonWriter<W> {
             }
         };
 
-        self.seq += 1;
+        let seq = self.seq.saturating_add(1);
         let mut ordered_obj = serde_json::Map::new();
-        ordered_obj.insert("seq".to_owned(), serde_json::json!(self.seq));
+        ordered_obj.insert("seq".to_owned(), serde_json::json!(seq));
         ordered_obj.insert("type".to_owned(), serde_json::json!(item_type));
         for (k, v) in obj {
             ordered_obj.insert(k, v);
@@ -594,12 +737,9 @@ impl<W: Write> NdjsonWriter<W> {
             })?;
         let line_bytes = line_str.len() + 1;
 
-        if let Some(max_bytes) = self.limits.max_bytes {
-            let estimated_done_bytes = 120;
-            if self.bytes_written + line_bytes + estimated_done_bytes > max_bytes {
-                self.truncated = true;
-                return Ok(false);
-            }
+        if !self.fits(line_bytes, 0)? {
+            self.truncated = true;
+            return Ok(false);
         }
 
         self.writer
@@ -611,14 +751,16 @@ impl<W: Write> NdjsonWriter<W> {
             })?;
 
         self.bytes_written += line_bytes;
+        self.seq = seq;
         self.items_emitted += 1;
         self.continuation_offset += 1;
 
         Ok(true)
     }
 
-    pub fn finish(mut self, total_items: usize) -> Result<OutputLimits, DocsightError> {
-        let continuation_token = if self.truncated && self.continuation_offset < total_items {
+    pub fn finish(mut self) -> Result<OutputLimits, DocsightError> {
+        let truncated = self.truncated || self.continuation_offset < self.total_items;
+        let continuation_token = if truncated && self.continuation_offset < self.total_items {
             Some(ContinuationToken::encode(
                 &self.command,
                 self.continuation_offset,
@@ -630,9 +772,10 @@ impl<W: Write> NdjsonWriter<W> {
 
         self.seq += 1;
         let limits = OutputLimits {
-            truncated: self.truncated,
+            truncated,
+            text_truncated: self.text_truncated,
             continuation_token,
-            total_items: Some(total_items),
+            total_items: Some(self.total_items),
             returned_items: Some(self.items_emitted),
         };
         let line = serde_json::json!({
@@ -640,7 +783,23 @@ impl<W: Write> NdjsonWriter<W> {
             "type": "done",
             "limits": limits,
         });
-        self.write_json_line(&line)?;
+        let serialized = Self::serialized_line(&line)?;
+        if let Some(max_bytes) = self.limits.max_bytes {
+            let projected = self
+                .bytes_written
+                .checked_add(serialized.len() + 1)
+                .ok_or_else(|| DocsightError::ResourceLimit {
+                    resource: "NDJSON output bytes".to_owned(),
+                    limit: max_bytes as u64,
+                })?;
+            if projected > max_bytes {
+                return Err(DocsightError::ResourceLimit {
+                    resource: "NDJSON output bytes".to_owned(),
+                    limit: max_bytes as u64,
+                });
+            }
+        }
+        self.write_serialized_line(&serialized)?;
         Ok(limits)
     }
 }
@@ -740,7 +899,7 @@ mod tests {
             max_items: Some(1),
             ..Default::default()
         };
-        let mut writer = NdjsonWriter::new(&mut buf, limits, "outline".into(), digest)?;
+        let mut writer = NdjsonWriter::new(&mut buf, limits, "outline".into(), digest, 2)?;
         let doc_ref = DocumentReference {
             id: "doc_123".into(),
             sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
@@ -750,7 +909,7 @@ mod tests {
         let item2 = serde_json::json!({"id": "h_2", "text": "Second title"});
         assert!(writer.write_item("heading", &item1)?);
         assert!(!writer.write_item("heading", &item2)?);
-        let out_limits = writer.finish(2)?;
+        let out_limits = writer.finish()?;
         assert!(out_limits.truncated);
 
         let lines: Vec<&str> = std::str::from_utf8(&buf)?.lines().collect();
@@ -782,8 +941,10 @@ mod tests {
         assert!(projected.get("score").is_none());
 
         let mut projected_copy = projected.clone();
-        truncate_json_strings(&mut projected_copy, 9);
+        let truncated = truncate_json_text_fields(&mut projected_copy, 9);
         assert_eq!(projected_copy["text"], "Extremely");
+        assert!(truncated);
+        assert_eq!(projected_copy["id"], "item_1");
     }
 
     #[test]

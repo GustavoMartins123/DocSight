@@ -24,6 +24,9 @@ struct WorkerCli {
     #[arg(long)]
     memory_hog_for_test: bool,
 
+    #[arg(long, hide = true)]
+    network_probe_for_test: bool,
+
     #[command(subcommand)]
     command: WorkerCommand,
 }
@@ -66,8 +69,11 @@ fn main() -> ExitCode {
         docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
     {
         let code = error.exit_code();
-        let _ = writeln!(io::stderr(), "{}: {}", error.diagnostic().code, error);
-        return ExitCode::from(code);
+        return if writeln!(io::stderr(), "{}: {}", error.diagnostic().code, error).is_ok() {
+            ExitCode::from(code)
+        } else {
+            ExitCode::from(40)
+        };
     }
     let cli = WorkerCli::parse();
     if cli.crash_for_test {
@@ -79,14 +85,33 @@ fn main() -> ExitCode {
             buffer.resize(buffer.len().saturating_add(16 * 1024 * 1024), 0xAB);
         }
     }
+    if cli.network_probe_for_test {
+        return network_probe_exit_code();
+    }
     match execute_worker(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             let code = err.exit_code();
-            let _ = writeln!(io::stderr(), "{}: {}", err.diagnostic().code, err);
-            ExitCode::from(code)
+            if writeln!(io::stderr(), "{}: {}", err.diagnostic().code, err).is_ok() {
+                ExitCode::from(code)
+            } else {
+                ExitCode::from(40)
+            }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn network_probe_exit_code() -> ExitCode {
+    match std::net::TcpStream::connect("127.0.0.1:9") {
+        Err(error) if error.raw_os_error() == Some(libc::EPERM) => ExitCode::SUCCESS,
+        _ => ExitCode::from(30),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn network_probe_exit_code() -> ExitCode {
+    ExitCode::from(30)
 }
 
 fn execute_worker(cli: &WorkerCli) -> Result<(), DocsightError> {

@@ -19,6 +19,18 @@ struct StyleDefinition {
     based_on: Option<String>,
     outline_level: Option<u8>,
     numbering: Option<NumberingProperties>,
+    font_family: Option<String>,
+    font_size_pt: Option<f32>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ResolvedStyleFormatting {
+    font_family: Option<String>,
+    font_size_pt: Option<f32>,
+    bold: Option<bool>,
+    italic: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -95,7 +107,8 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut reading_order,
                 &mut figure_index,
                 &mut resources,
-            );
+                &parts.binary_part_digests,
+            )?;
             extract_hyperlinks(
                 child,
                 source,
@@ -213,17 +226,20 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     };
 
     let converted_styles: Vec<Style> = styles
-        .into_iter()
-        .map(|(style_id, style_def)| Style {
-            id: style_id,
-            name: style_def.name,
-            based_on: style_def.based_on,
-            font_family: None,
-            font_size_pt: None,
-            bold: None,
-            italic: None,
+        .iter()
+        .map(|(style_id, style_def)| {
+            let formatting = resolve_style_formatting(style_id, &styles)?;
+            Ok(Style {
+                id: style_id.clone(),
+                name: style_def.name.clone(),
+                based_on: style_def.based_on.clone(),
+                font_family: formatting.font_family,
+                font_size_pt: formatting.font_size_pt,
+                bold: formatting.bold,
+                italic: formatting.italic,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, DocsightError>>()?;
 
     Ok(Document {
         id: source.id(),
@@ -352,15 +368,17 @@ fn parse_section(
 }
 
 fn normalize_internal_target(target: &str) -> Option<String> {
-    if target.contains("://") || target.contains('\\') || target.contains("..") {
+    if target.starts_with('/') || target.contains("://") || target.contains('\\') {
         return None;
     }
-    let relative = target.strip_prefix('/').unwrap_or(target);
     let source_dir = "word";
     let mut segments: Vec<&str> = source_dir.split('/').collect();
-    for segment in relative.split('/') {
+    for segment in target.split('/') {
         match segment {
             "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
             other => segments.push(other),
         }
     }
@@ -382,9 +400,53 @@ fn parse_relationships(
         .descendants()
         .filter(|n| n.tag_name().name() == "Relationship")
     {
-        if let (Some(id), Some(target)) = (rel.attribute("Id"), rel.attribute("Target")) {
-            let rel_type = rel.attribute("Type").unwrap_or("").to_owned();
-            map.insert(id.to_owned(), (rel_type, target.to_owned()));
+        let id = rel
+            .attribute("Id")
+            .ok_or_else(|| DocsightError::MalformedDocument {
+                message: "relationship has no Id".to_owned(),
+            })?;
+        let target = rel
+            .attribute("Target")
+            .ok_or_else(|| DocsightError::MalformedDocument {
+                message: format!("relationship {id} has no Target"),
+            })?;
+        let rel_type = rel
+            .attribute("Type")
+            .ok_or_else(|| DocsightError::MalformedDocument {
+                message: format!("relationship {id} has no Type"),
+            })?;
+        if target.is_empty() {
+            return Err(DocsightError::MalformedDocument {
+                message: format!("relationship {id} has an empty Target"),
+            });
+        }
+        let looks_external = target.contains("://") || target.starts_with("mailto:");
+        match rel.attribute("TargetMode") {
+            Some("External") => {}
+            None if !looks_external && normalize_internal_target(target).is_some() => {}
+            None if !looks_external => {
+                return Err(DocsightError::MalformedDocument {
+                    message: format!("relationship {id} has an invalid internal target"),
+                });
+            }
+            None => {
+                return Err(DocsightError::MalformedDocument {
+                    message: format!("relationship {id} has an external target without TargetMode"),
+                });
+            }
+            Some(mode) => {
+                return Err(DocsightError::MalformedDocument {
+                    message: format!("relationship {id} has unsupported TargetMode {mode}"),
+                });
+            }
+        }
+        if map
+            .insert(id.to_owned(), (rel_type.to_owned(), target.to_owned()))
+            .is_some()
+        {
+            return Err(DocsightError::MalformedDocument {
+                message: format!("duplicate relationship Id: {id}"),
+            });
         }
     }
     Ok(map)
@@ -414,14 +476,15 @@ fn extract_figures(
     reading_order: &mut u32,
     figure_index: &mut u32,
     resources: &mut Vec<Resource>,
-) -> Vec<Block> {
+    binary_part_digests: &BTreeMap<String, String>,
+) -> Result<Vec<Block>, DocsightError> {
     let mut figures = Vec::new();
     for drawing in node
         .descendants()
         .filter(|n| n.has_tag_name((W_NS, "drawing")) || n.has_tag_name((W_NS, "pict")))
     {
-        *figure_index += 1;
-        *reading_order += 1;
+        *figure_index = figure_index.checked_add(1).ok_or_else(block_count_error)?;
+        *reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
         let mut width_pt = None;
         let mut height_pt = None;
         let mut alt_text = None;
@@ -431,11 +494,11 @@ fn extract_figures(
             .descendants()
             .find(|n| n.tag_name().name() == "extent")
         {
-            if let Some(cx) = extent.attribute("cx").and_then(|v| v.parse::<f32>().ok()) {
-                width_pt = Some(cx / 12700.0);
+            if let Some(cx) = extent.attribute("cx") {
+                width_pt = Some(emu_to_points(cx, "figure width")?);
             }
-            if let Some(cy) = extent.attribute("cy").and_then(|v| v.parse::<f32>().ok()) {
-                height_pt = Some(cy / 12700.0);
+            if let Some(cy) = extent.attribute("cy") {
+                height_pt = Some(emu_to_points(cy, "figure height")?);
             }
         }
         if let Some(doc_pr) = drawing
@@ -457,17 +520,40 @@ fn extract_figures(
                 .or_else(|| blip.attribute("r:embed"))
             {
                 resource_id = Some(embed.to_owned());
-                if let Some((_, target)) = rels.get(embed) {
-                    let res_id = source.object_id("res", target);
-                    if !resources.iter().any(|r| r.id == res_id) {
-                        resources.push(Resource {
-                            id: res_id,
-                            kind: ResourceKind::Image,
-                            name: target.clone(),
-                            target: target.clone(),
-                            mime_type: guess_mime_type(target),
-                        });
+                let (relationship_type, target) =
+                    rels.get(embed)
+                        .ok_or_else(|| DocsightError::MalformedDocument {
+                            message: format!("drawing references missing relationship {embed}"),
+                        })?;
+                if !relationship_type.ends_with("/image") {
+                    return Err(DocsightError::MalformedDocument {
+                        message: format!("drawing relationship {embed} is not an image"),
+                    });
+                }
+                let normalized_target = normalize_internal_target(target).ok_or_else(|| {
+                    DocsightError::MalformedDocument {
+                        message: format!("invalid internal image relationship target: {target}"),
                     }
+                })?;
+                let resource_target = normalized_target.as_str();
+                let content_sha256 = binary_part_digests
+                    .get(resource_target)
+                    .ok_or_else(|| DocsightError::MalformedDocument {
+                        message: format!(
+                            "image relationship {embed} targets missing part {resource_target}"
+                        ),
+                    })?
+                    .clone();
+                let res_id = source.object_id("res", resource_target);
+                if !resources.iter().any(|r| r.id == res_id) {
+                    resources.push(Resource {
+                        id: res_id,
+                        kind: ResourceKind::Image,
+                        name: embed.to_owned(),
+                        target: resource_target.to_owned(),
+                        mime_type: guess_mime_type(target),
+                        content_sha256: Some(content_sha256),
+                    });
                 }
             }
         }
@@ -492,7 +578,21 @@ fn extract_figures(
             }),
         });
     }
-    figures
+    Ok(figures)
+}
+
+fn emu_to_points(value: &str, field: &str) -> Result<f32, DocsightError> {
+    let emu = value
+        .parse::<u32>()
+        .map_err(|_| DocsightError::MalformedDocument {
+            message: format!("{field} is not a supported positive EMU value: {value}"),
+        })?;
+    if emu == 0 {
+        return Err(DocsightError::MalformedDocument {
+            message: format!("{field} must be positive"),
+        });
+    }
+    Ok(emu as f32 / 12_700.0)
 }
 
 fn figure_warnings<'a>(figures: impl Iterator<Item = &'a Block>, warnings: &mut Vec<Diagnostic>) {
@@ -1343,6 +1443,25 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
             .transpose()?
             .flatten();
         let numbering = style_numbering_properties(node)?;
+        let run_properties = child_element(node, "rPr");
+        let font_family = run_properties
+            .and_then(|properties| child_element(properties, "rFonts"))
+            .and_then(|fonts| {
+                fonts
+                    .attribute((W_NS, "ascii"))
+                    .or_else(|| fonts.attribute((W_NS, "hAnsi")))
+                    .map(str::to_owned)
+            });
+        let font_size_pt = run_properties
+            .and_then(|properties| child_element(properties, "sz"))
+            .map(parse_half_point_size)
+            .transpose()?;
+        let bold = run_properties
+            .and_then(|properties| child_element(properties, "b"))
+            .map(|value| on_off_value(word_value(value).as_deref()));
+        let italic = run_properties
+            .and_then(|properties| child_element(properties, "i"))
+            .map(|value| on_off_value(word_value(value).as_deref()));
         styles.insert(
             style_id.to_owned(),
             StyleDefinition {
@@ -1350,10 +1469,74 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
                 based_on,
                 outline_level,
                 numbering,
+                font_family,
+                font_size_pt,
+                bold,
+                italic,
             },
         );
     }
     Ok(styles)
+}
+
+fn parse_half_point_size(node: Node<'_, '_>) -> Result<f32, DocsightError> {
+    let value = word_value(node).ok_or_else(|| DocsightError::MalformedDocument {
+        message: "style font size has no value".to_owned(),
+    })?;
+    let half_points = value
+        .parse::<u32>()
+        .map_err(|_| DocsightError::MalformedDocument {
+            message: format!("style font size is not an unsigned integer: {value}"),
+        })?;
+    if !(1..=3276).contains(&half_points) {
+        return Err(DocsightError::MalformedDocument {
+            message: format!("style font size is invalid: {value}"),
+        });
+    }
+    Ok(half_points as f32 / 2.0)
+}
+
+fn resolve_style_formatting(
+    style_id: &str,
+    styles: &BTreeMap<String, StyleDefinition>,
+) -> Result<ResolvedStyleFormatting, DocsightError> {
+    let mut chain = Vec::new();
+    let mut current = Some(style_id);
+    let mut visited = BTreeSet::new();
+    while let Some(id) = current {
+        if !visited.insert(id.to_owned()) {
+            return Err(DocsightError::MalformedDocument {
+                message: format!("cycle detected in style inheritance: {id}"),
+            });
+        }
+        if chain.len() >= MAX_STYLE_DEPTH {
+            return Err(DocsightError::ResourceLimit {
+                resource: "style inheritance depth".to_owned(),
+                limit: MAX_STYLE_DEPTH as u64,
+            });
+        }
+        let Some(definition) = styles.get(id) else {
+            break;
+        };
+        chain.push(definition);
+        current = definition.based_on.as_deref();
+    }
+    let mut resolved = ResolvedStyleFormatting::default();
+    for definition in chain.into_iter().rev() {
+        if let Some(value) = &definition.font_family {
+            resolved.font_family = Some(value.clone());
+        }
+        if let Some(value) = definition.font_size_pt {
+            resolved.font_size_pt = Some(value);
+        }
+        if let Some(value) = definition.bold {
+            resolved.bold = Some(value);
+        }
+        if let Some(value) = definition.italic {
+            resolved.italic = Some(value);
+        }
+    }
+    Ok(resolved)
 }
 
 fn heading_level_from_label(label: &str) -> Option<u8> {

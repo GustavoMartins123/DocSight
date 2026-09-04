@@ -201,7 +201,7 @@ impl DocumentSource {
     }
 
     pub fn id(&self) -> String {
-        format!("doc_{}", &self.digest[..12])
+        format!("doc_{}", &self.digest[..32])
     }
 
     pub fn size_bytes(&self) -> u64 {
@@ -224,7 +224,7 @@ impl ObjectId {
         hasher.update([0]);
         hasher.update(source_path.as_bytes());
         let digest = hasher.finalize();
-        let suffix: String = digest[..8]
+        let suffix: String = digest[..16]
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
@@ -438,6 +438,8 @@ mod tests {
         let second = DocumentSource::from_bytes(b"%PDF-1.7\nstable".to_vec())?;
         assert_eq!(first.id(), second.id());
         assert_eq!(first.sha256(), second.sha256());
+        assert_eq!(first.id().len(), 36);
+        assert_eq!(first.object_id("p", "page[1]").as_str().len(), 34);
         Ok(())
     }
 

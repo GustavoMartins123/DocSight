@@ -198,6 +198,8 @@ fn package_full(
         writer.start_file("word/comments.xml", options)?;
         writer.write_all(comments.as_bytes())?;
     }
+    writer.start_file("word/media/diagram.png", options)?;
+    writer.write_all(b"fixture image bytes")?;
     Ok(writer.finish()?.into_inner())
 }
 
@@ -247,7 +249,7 @@ fn parses_figures_headers_footers_notes_links_and_comments()
       <Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
       <Relationship Id="rIdF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
       <Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/diagram.png"/>
-      <Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://docsight.dev"/>
+      <Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://docsight.dev" TargetMode="External"/>
     </Relationships>"#;
     let header = format!(
         r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:r><w:t>Company Confidential</w:t></w:r></w:p></w:hdr>"#
@@ -293,8 +295,13 @@ fn parses_figures_headers_footers_notes_links_and_comments()
     assert_eq!(fig.resource_id.as_deref(), Some("rIdImg"));
 
     assert_eq!(doc.resources.len(), 1);
-    assert_eq!(doc.resources[0].name, "media/diagram.png");
+    assert_eq!(doc.resources[0].name, "rIdImg");
+    assert_eq!(doc.resources[0].target, "word/media/diagram.png");
     assert_eq!(doc.resources[0].mime_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        doc.resources[0].content_sha256.as_ref().map(String::len),
+        Some(64)
+    );
 
     assert_eq!(doc.links.len(), 2);
     assert_eq!(doc.links[0].text, "Docsight Website");

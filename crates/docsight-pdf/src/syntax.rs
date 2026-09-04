@@ -136,8 +136,9 @@ pub(crate) fn parse_object(
     bytes: &[u8],
     offset: usize,
     expected: ObjectRef,
+    entries: &BTreeMap<ObjectRef, usize>,
 ) -> Result<Value, DocsightError> {
-    let mut parser = Parser::new(bytes, offset);
+    let mut parser = Parser::with_entries(bytes, offset, entries);
     let number = parser.parse_u32()?;
     let generation = parser.parse_u16()?;
     if number != expected.number || generation != expected.generation {
@@ -154,11 +155,28 @@ pub(crate) fn parse_object(
 struct Parser<'a> {
     bytes: &'a [u8],
     cursor: usize,
+    entries: Option<&'a BTreeMap<ObjectRef, usize>>,
 }
 
 impl<'a> Parser<'a> {
     fn new(bytes: &'a [u8], cursor: usize) -> Self {
-        Self { bytes, cursor }
+        Self {
+            bytes,
+            cursor,
+            entries: None,
+        }
+    }
+
+    fn with_entries(
+        bytes: &'a [u8],
+        cursor: usize,
+        entries: &'a BTreeMap<ObjectRef, usize>,
+    ) -> Self {
+        Self {
+            bytes,
+            cursor,
+            entries: Some(entries),
+        }
     }
 
     fn parse_value(&mut self, depth: usize) -> Result<Value, DocsightError> {
@@ -208,11 +226,7 @@ impl<'a> Parser<'a> {
         let length = match dict.get("Length") {
             Some(Value::Int(value)) if *value >= 0 => usize::try_from(*value)
                 .map_err(|_| malformed("stream length is outside the supported range"))?,
-            Some(Value::Ref(_)) => {
-                return Err(DocsightError::UnsupportedFeature {
-                    feature: "indirect PDF stream lengths".to_owned(),
-                });
-            }
+            Some(Value::Ref(reference)) => self.parse_indirect_length(*reference)?,
             _ => return Err(malformed("stream has no valid direct length")),
         };
         let end = self
@@ -227,6 +241,38 @@ impl<'a> Parser<'a> {
         self.skip_line_ending();
         self.require_keyword(b"endstream")?;
         Ok(Value::Stream(StreamValue { dict, data }))
+    }
+
+    fn parse_indirect_length(&self, reference: ObjectRef) -> Result<usize, DocsightError> {
+        let entries = self
+            .entries
+            .ok_or_else(|| malformed("indirect stream length cannot be resolved here"))?;
+        let offset = entries.get(&reference).copied().ok_or_else(|| {
+            malformed(format!(
+                "missing xref entry for stream length object {}",
+                reference.number
+            ))
+        })?;
+        let mut parser = Parser::new(self.bytes, offset);
+        let number = parser.parse_u32()?;
+        let generation = parser.parse_u16()?;
+        if number != reference.number || generation != reference.generation {
+            return Err(malformed(
+                "stream length xref entry does not match object header",
+            ));
+        }
+        parser.require_keyword(b"obj")?;
+        let length = match parser.parse_value(0)? {
+            Value::Int(value) if value >= 0 => usize::try_from(value)
+                .map_err(|_| malformed("stream length is outside the supported range"))?,
+            _ => {
+                return Err(malformed(
+                    "indirect stream length must resolve to an integer",
+                ));
+            }
+        };
+        parser.require_keyword(b"endobj")?;
+        Ok(length)
     }
 
     fn parse_array(&mut self, depth: usize) -> Result<Value, DocsightError> {

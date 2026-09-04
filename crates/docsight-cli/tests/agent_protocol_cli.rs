@@ -13,6 +13,31 @@ fn headings_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/validation/sample_headings.docx")
 }
 
+fn tables_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/validation/sample_tables.docx")
+}
+
+fn assert_ndjson_event(
+    output: std::process::Output,
+    event_type: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    assert_eq!(records.first().ok_or("missing meta")?["type"], "meta");
+    assert!(records.iter().any(|record| record["type"] == event_type));
+    assert_eq!(records.last().ok_or("missing done")?["type"], "done");
+    Ok(())
+}
+
 #[test]
 fn ndjson_streaming_emits_valid_sequence_and_events() -> Result<(), Box<dyn std::error::Error>> {
     let path = headings_fixture();
@@ -28,7 +53,7 @@ fn ndjson_streaming_emits_valid_sequence_and_events() -> Result<(), Box<dyn std:
     let first: serde_json::Value = serde_json::from_str(lines[0])?;
     assert_eq!(first["seq"], 1);
     assert_eq!(first["type"], "meta");
-    assert_eq!(first["schema"], "docsight.agent/v1");
+    assert_eq!(first["schema"], "docsight.agent/v2");
 
     let mut prev_seq = 1;
     for line in &lines[1..lines.len() - 1] {
@@ -46,6 +71,87 @@ fn ndjson_streaming_emits_valid_sequence_and_events() -> Result<(), Box<dyn std:
     assert_eq!(last["type"], "done");
     assert_eq!(last["limits"]["truncated"], false);
 
+    Ok(())
+}
+
+#[test]
+fn ndjson_is_honored_by_single_result_commands() -> Result<(), Box<dyn std::error::Error>> {
+    let headings = headings_fixture();
+    let tables = tables_fixture();
+    let headings_str = headings.to_str().ok_or("invalid headings path")?;
+    let tables_str = tables.to_str().ok_or("invalid tables path")?;
+    let heading_id = "h_515ad605791c12fc496c1c18d79f6526";
+    let table_id = "tbl_6c22c8dd17adf7e32604b29241d9ab99";
+    let temp_dir = tempfile::tempdir()?;
+
+    assert_ndjson_event(
+        docsight()
+            .args(["--ndjson", "table", tables_str, table_id])
+            .output()?,
+        "table",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args(["--ndjson", "fingerprint", headings_str])
+            .output()?,
+        "fingerprint",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args(["--ndjson", "evidence", headings_str, heading_id])
+            .output()?,
+        "evidence",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args([
+                "--ndjson",
+                "hit",
+                headings_str,
+                "--page",
+                "1",
+                "--point",
+                "100,80",
+            ])
+            .output()?,
+        "hit",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args([
+                "--ndjson",
+                "render",
+                headings_str,
+                "--page",
+                "1",
+                "--out",
+                temp_dir
+                    .path()
+                    .join("page.png")
+                    .to_str()
+                    .ok_or("render path")?,
+            ])
+            .output()?,
+        "render",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args([
+                "--ndjson",
+                "crop",
+                headings_str,
+                "--object",
+                heading_id,
+                "--out",
+                temp_dir
+                    .path()
+                    .join("crop.png")
+                    .to_str()
+                    .ok_or("crop path")?,
+            ])
+            .output()?,
+        "crop",
+    )?;
     Ok(())
 }
 
@@ -143,9 +249,12 @@ fn text_limit_truncates_long_strings() -> Result<(), Box<dyn std::error::Error>>
     let headings = val["result"]["headings"]
         .as_array()
         .ok_or("missing headings array")?;
+    assert_eq!(val["limits"]["text_truncated"], true);
     for h in headings {
         let text = h["text"].as_str().ok_or("missing text field")?;
         assert!(text.chars().count() <= 4);
+        assert_eq!(h["id"].as_str().ok_or("missing id")?.len(), 34);
+        assert!(h["source"].as_str().ok_or("missing source")?.len() > 4);
     }
     Ok(())
 }

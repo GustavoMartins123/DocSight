@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/evidence-record.json",
+  "title": "EvidenceRecord",
+  "type": "object",
+  "required": [
+    "document_digest",
+    "object_id",
+    "kind",
+    "source_path",
+    "z_index",
+    "reading_order",
+    "fidelity",
+    "text_fragment"
+  ],
+  "properties": {
+    "bbox": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "x0": {
+          "type": "number"
+        },
+        "y0": {
+          "type": "number"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ]
+    },
+    "confidence": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "document_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fidelity": {
+      "type": "object",
+      "required": [
+        "text",
+        "structure",
+        "geometry",
+        "visual",
+        "reasons"
+      ],
+      "properties": {
+        "text": {
+          "type": "number"
+        },
+        "structure": {
+          "type": "number"
+        },
+        "geometry": {
+          "type": "number"
+        },
+        "visual": {
+          "type": "number"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "kind": {
+      "type": "string"
+    },
+    "object_id": {
+      "type": "string",
+      "pattern": "^[a-z]+_[0-9a-f]{32}$"
+    },
+    "page": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "reading_order": {
+      "type": "integer"
+    },
+    "render_fingerprint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_offset": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source_path": {
+      "type": "string"
+    },
+    "text_fragment": {
+      "type": "string"
+    },
+    "z_index": {
+      "type": "integer"
+    }
+  }
+}

@@ -25,7 +25,7 @@ fn exposes_pdf_page_spans_as_deterministic_json() -> Result<(), Box<dyn std::err
     assert_eq!(value["result"]["number"], 1);
     assert_eq!(value["result"]["width_pt"], 200.0);
     assert_eq!(value["result"]["spans"][0]["text"], "Hello DOCSIGHT");
-    assert_eq!(value["warnings"][0]["code"], "APPROXIMATED_BASE14_FONT");
+    assert_eq!(value["warnings"][0]["code"], "APPROXIMATED_PDF_FONT");
     Ok(())
 }
 
@@ -50,7 +50,7 @@ fn renders_page_bbox_and_object_crops() -> Result<(), Box<dyn std::error::Error>
         ])
         .output()?;
     assert!(render.status.success());
-    assert!(String::from_utf8(render.stderr)?.contains("APPROXIMATED_BASE14_FONT"));
+    assert!(String::from_utf8(render.stderr)?.contains("APPROXIMATED_PDF_FONT"));
     assert_png_dimensions(&fs::read(&full)?, 400, 200)?;
     let crop = docsight()
         .args([

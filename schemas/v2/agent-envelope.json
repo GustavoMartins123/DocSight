@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/agent-envelope.json",
+  "title": "AgentEnvelope",
+  "type": "object",
+  "required": [
+    "schema",
+    "engine",
+    "document",
+    "result",
+    "warnings",
+    "limits"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "docsight.agent/v2"
+    },
+    "engine": {
+      "type": "string"
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "id",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^doc_[0-9a-f]{32}$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "result": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "diagnostic.json"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "truncated"
+      ],
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "text_truncated": {
+          "type": "boolean"
+        },
+        "continuation_token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_items": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "returned_items": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

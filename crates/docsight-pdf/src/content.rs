@@ -59,12 +59,26 @@ pub(crate) enum DisplayCommand {
 pub(crate) struct FontInfo {
     pub bold: bool,
     pub base_font: String,
+    decoder: FontDecoder,
+}
+
+#[derive(Clone, Debug)]
+enum FontDecoder {
+    Ascii,
+    WinAnsi,
+    ToUnicode(ToUnicodeMap),
+}
+
+#[derive(Clone, Debug)]
+struct ToUnicodeMap {
+    mappings: BTreeMap<Vec<u8>, String>,
+    code_lengths: Vec<usize>,
 }
 
 pub(crate) struct ParsedContent {
     pub commands: Vec<DisplayCommand>,
     pub text_runs: Vec<TextRun>,
-    pub approximated_base14_font: bool,
+    pub approximated_font: bool,
 }
 
 pub(crate) fn parse_content(
@@ -81,8 +95,9 @@ pub(crate) fn parse_content(
     let mut commands = Vec::new();
     let mut text_runs = Vec::new();
     let mut in_text = false;
+    let mut marked_content_depth = 0usize;
     let mut operations = 0usize;
-    let mut approximated_base14_font = false;
+    let mut approximated_font = false;
     while let Some(token) = lexer.next_token()? {
         match token {
             ContentToken::Operand(value) => {
@@ -266,8 +281,9 @@ pub(crate) fn parse_content(
                             size,
                             bold: font.bold,
                             font_name: font.base_font.clone(),
+                            decoder: font.decoder.clone(),
                         });
-                        approximated_base14_font = true;
+                        approximated_font = true;
                     }
                     "Tm" => {
                         require_text(in_text, &operator)?;
@@ -371,6 +387,41 @@ pub(crate) fn parse_content(
                             &mut text_runs,
                         )?;
                     }
+                    "BMC" => {
+                        if operands.len() != 1 {
+                            return Err(malformed("BMC requires one tag name"));
+                        }
+                        name(&operands[0], &operator)?;
+                        if marked_content_depth >= MAX_GRAPHICS_DEPTH {
+                            return Err(DocsightError::ResourceLimit {
+                                resource: "PDF marked-content depth".to_owned(),
+                                limit: MAX_GRAPHICS_DEPTH as u64,
+                            });
+                        }
+                        marked_content_depth += 1;
+                    }
+                    "BDC" => {
+                        if operands.len() != 2 {
+                            return Err(malformed(
+                                "BDC requires a tag name and property-list name",
+                            ));
+                        }
+                        name(&operands[0], &operator)?;
+                        name(&operands[1], &operator)?;
+                        if marked_content_depth >= MAX_GRAPHICS_DEPTH {
+                            return Err(DocsightError::ResourceLimit {
+                                resource: "PDF marked-content depth".to_owned(),
+                                limit: MAX_GRAPHICS_DEPTH as u64,
+                            });
+                        }
+                        marked_content_depth += 1;
+                    }
+                    "EMC" => {
+                        require_empty(&operands, &operator)?;
+                        marked_content_depth = marked_content_depth
+                            .checked_sub(1)
+                            .ok_or_else(|| malformed("EMC has no matching BMC or BDC"))?;
+                    }
                     "Do" => {
                         return Err(DocsightError::UnsupportedFeature {
                             feature: "PDF XObjects".to_owned(),
@@ -405,10 +456,13 @@ pub(crate) fn parse_content(
     if !stack.is_empty() {
         return Err(malformed("unbalanced PDF graphics state"));
     }
+    if marked_content_depth != 0 {
+        return Err(malformed("unbalanced PDF marked content"));
+    }
     Ok(ParsedContent {
         commands,
         text_runs,
-        approximated_base14_font,
+        approximated_font,
     })
 }
 
@@ -428,7 +482,7 @@ fn append_text(
         .font
         .as_ref()
         .ok_or_else(|| malformed("text showing operator used before Tf"))?;
-    let text = decode_ascii(bytes)?;
+    let text = font.decoder.decode(bytes)?;
     let glyphs = text.chars().count() as f32;
     let spaces = text.chars().filter(|character| *character == ' ').count() as f32;
     let width = glyphs * font.size * 0.6
@@ -466,15 +520,6 @@ fn append_text(
     text_runs.push(run);
     state.text.matrix = state.text.matrix.translated(width, 0.0);
     Ok(())
-}
-
-fn decode_ascii(bytes: &[u8]) -> Result<String, DocsightError> {
-    if bytes.iter().any(|byte| !(32..=126).contains(byte)) {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "non-ASCII PDF text without a ToUnicode CMap".to_owned(),
-        });
-    }
-    String::from_utf8(bytes.to_vec()).map_err(|_| malformed("PDF text is not valid ASCII"))
 }
 
 fn append_rectangle(
@@ -704,6 +749,7 @@ struct FontSelection {
     size: f32,
     bold: bool,
     font_name: String,
+    decoder: FontDecoder,
 }
 
 #[derive(Clone, Copy)]
@@ -808,6 +854,9 @@ impl<'a> ContentLexer<'a> {
         let token = match byte {
             b'/' => ContentToken::Operand(ContentValue::Name(self.parse_name()?)),
             b'(' => ContentToken::Operand(ContentValue::String(self.parse_string()?)),
+            b'<' if self.bytes.get(self.cursor + 1) != Some(&b'<') => {
+                ContentToken::Operand(ContentValue::String(self.parse_hex_string()?))
+            }
             b'[' => ContentToken::Operand(ContentValue::Array(self.parse_array()?)),
             b'+' | b'-' | b'.' | b'0'..=b'9' => {
                 ContentToken::Operand(ContentValue::Number(self.parse_number()?))
@@ -833,6 +882,9 @@ impl<'a> ContentLexer<'a> {
                     return Ok(values);
                 }
                 Some(b'(') => values.push(ContentValue::String(self.parse_string()?)),
+                Some(b'<') if self.bytes.get(self.cursor + 1) != Some(&b'<') => {
+                    values.push(ContentValue::String(self.parse_hex_string()?));
+                }
                 Some(b'/') => values.push(ContentValue::Name(self.parse_name()?)),
                 Some(b'+' | b'-' | b'.' | b'0'..=b'9') => {
                     values.push(ContentValue::Number(self.parse_number()?));
@@ -871,6 +923,30 @@ impl<'a> ContentLexer<'a> {
             }
         }
         Err(malformed("unterminated PDF content string"))
+    }
+
+    fn parse_hex_string(&mut self) -> Result<Vec<u8>, DocsightError> {
+        self.cursor += 1;
+        let mut nibbles = Vec::new();
+        loop {
+            let byte = self
+                .take()
+                .ok_or_else(|| malformed("unterminated PDF content hex string"))?;
+            match byte {
+                b'>' => break,
+                byte if is_space(byte) => {}
+                _ => nibbles.push(hex_digit(byte)?),
+            }
+        }
+        let mut result = Vec::with_capacity(nibbles.len().div_ceil(2));
+        let mut pairs = nibbles.chunks_exact(2);
+        for pair in &mut pairs {
+            result.push(pair[0] << 4 | pair[1]);
+        }
+        if let [high] = pairs.remainder() {
+            result.push(high << 4);
+        }
+        Ok(result)
     }
 
     fn parse_name(&mut self) -> Result<String, DocsightError> {
@@ -997,6 +1073,7 @@ fn is_delimiter(byte: u8) -> bool {
 pub(crate) fn fonts_from_resources(
     resources: &BTreeMap<String, Value>,
     resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
+    decode_stream_value: impl Fn(&Value) -> Result<Vec<u8>, DocsightError>,
 ) -> Result<BTreeMap<String, FontInfo>, DocsightError> {
     let font_value = match resources.get("Font") {
         Some(value) => resolve(value)?,
@@ -1016,9 +1093,13 @@ pub(crate) fn fonts_from_resources(
         let subtype = dict
             .get("Subtype")
             .ok_or_else(|| malformed("font has no Subtype"))?;
-        if !matches!(subtype, Value::Name(value) if value == "Type1") {
+        let subtype = match subtype {
+            Value::Name(value) => value.as_str(),
+            _ => return Err(malformed("font Subtype must be a name")),
+        };
+        if !matches!(subtype, "Type1" | "TrueType") {
             return Err(DocsightError::UnsupportedFeature {
-                feature: "PDF fonts other than simple Type1".to_owned(),
+                feature: "PDF fonts other than simple Type1 or TrueType".to_owned(),
             });
         }
         let base_font = dict
@@ -1028,22 +1109,421 @@ pub(crate) fn fonts_from_resources(
             Value::Name(value) => value.as_str(),
             _ => return Err(malformed("BaseFont must be a name")),
         };
-        let bold = match base_font {
-            "Helvetica" => false,
-            "Helvetica-Bold" => true,
+        let canonical_font = canonical_base_font(base_font);
+        let bold = match canonical_font {
+            "Helvetica" | "Helvetica-Oblique" | "Times-Roman" | "Times-Italic" | "Courier"
+            | "Courier-Oblique" | "Symbol" | "ZapfDingbats" => false,
+            "Helvetica-Bold"
+            | "Helvetica-BoldOblique"
+            | "Times-Bold"
+            | "Times-BoldItalic"
+            | "Courier-Bold"
+            | "Courier-BoldOblique" => true,
+            _ if subtype == "TrueType" => canonical_font.contains("Bold"),
             _ => {
                 return Err(DocsightError::UnsupportedFeature {
                     feature: format!("PDF base font {base_font}"),
                 });
             }
         };
+        let decoder = match dict.get("ToUnicode") {
+            Some(value) => FontDecoder::ToUnicode(parse_to_unicode(&decode_stream_value(value)?)?),
+            None if subtype == "TrueType" && !dict.contains_key("Encoding") => {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: "TrueType PDF font without ToUnicode or an explicit encoding"
+                        .to_owned(),
+                });
+            }
+            None => decoder_from_encoding(dict.get("Encoding"))?,
+        };
         fonts.insert(
             resource_name,
             FontInfo {
                 bold,
-                base_font: base_font.to_owned(),
+                base_font: canonical_font.to_owned(),
+                decoder,
             },
         );
     }
     Ok(fonts)
+}
+
+impl FontDecoder {
+    fn decode(&self, bytes: &[u8]) -> Result<String, DocsightError> {
+        match self {
+            Self::Ascii => decode_ascii(bytes),
+            Self::WinAnsi => decode_win_ansi(bytes),
+            Self::ToUnicode(map) => map.decode(bytes),
+        }
+    }
+}
+
+impl ToUnicodeMap {
+    fn decode(&self, bytes: &[u8]) -> Result<String, DocsightError> {
+        let mut cursor = 0usize;
+        let mut output = String::new();
+        while cursor < bytes.len() {
+            let mapping = self.code_lengths.iter().find_map(|length| {
+                let end = cursor.checked_add(*length)?;
+                let code = bytes.get(cursor..end)?;
+                self.mappings.get(code).map(|value| (*length, value))
+            });
+            let Some((length, value)) = mapping else {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: "PDF text code missing from ToUnicode CMap".to_owned(),
+                });
+            };
+            output.push_str(value);
+            cursor += length;
+        }
+        Ok(output)
+    }
+}
+
+fn decoder_from_encoding(encoding: Option<&Value>) -> Result<FontDecoder, DocsightError> {
+    match encoding {
+        None => Ok(FontDecoder::Ascii),
+        Some(Value::Name(name)) if name == "WinAnsiEncoding" => Ok(FontDecoder::WinAnsi),
+        Some(Value::Name(name)) => Err(DocsightError::UnsupportedFeature {
+            feature: format!("PDF font encoding {name}"),
+        }),
+        Some(Value::Dict(_)) => Err(DocsightError::UnsupportedFeature {
+            feature: "PDF font encoding differences".to_owned(),
+        }),
+        Some(_) => Err(malformed("font Encoding must be a name or dictionary")),
+    }
+}
+
+fn decode_ascii(bytes: &[u8]) -> Result<String, DocsightError> {
+    if bytes.iter().any(|byte| !(32..=126).contains(byte)) {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "non-ASCII PDF text without an explicit supported encoding".to_owned(),
+        });
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|_| malformed("PDF text is not valid ASCII"))
+}
+
+fn decode_win_ansi(bytes: &[u8]) -> Result<String, DocsightError> {
+    bytes.iter().map(|byte| win_ansi_character(*byte)).collect()
+}
+
+fn win_ansi_character(byte: u8) -> Result<char, DocsightError> {
+    let character = match byte {
+        32..=126 | 160..=255 => char::from_u32(u32::from(byte)),
+        128 => Some('\u{20ac}'),
+        130 => Some('\u{201a}'),
+        131 => Some('\u{0192}'),
+        132 => Some('\u{201e}'),
+        133 => Some('\u{2026}'),
+        134 => Some('\u{2020}'),
+        135 => Some('\u{2021}'),
+        136 => Some('\u{02c6}'),
+        137 => Some('\u{2030}'),
+        138 => Some('\u{0160}'),
+        139 => Some('\u{2039}'),
+        140 => Some('\u{0152}'),
+        142 => Some('\u{017d}'),
+        145 => Some('\u{2018}'),
+        146 => Some('\u{2019}'),
+        147 => Some('\u{201c}'),
+        148 => Some('\u{201d}'),
+        149 => Some('\u{2022}'),
+        150 => Some('\u{2013}'),
+        151 => Some('\u{2014}'),
+        152 => Some('\u{02dc}'),
+        153 => Some('\u{2122}'),
+        154 => Some('\u{0161}'),
+        155 => Some('\u{203a}'),
+        156 => Some('\u{0153}'),
+        158 => Some('\u{017e}'),
+        159 => Some('\u{0178}'),
+        _ => None,
+    };
+    character.ok_or_else(|| DocsightError::UnsupportedFeature {
+        feature: format!("undefined WinAnsi character code {byte}"),
+    })
+}
+
+const MAX_CMAP_MAPPINGS: usize = 65_536;
+const MAX_CMAP_TOKENS: usize = 262_144;
+
+#[derive(Clone, Debug)]
+enum CMapToken {
+    Integer(usize),
+    Hex(Vec<u8>),
+    Keyword(String),
+    ArrayStart,
+    ArrayEnd,
+}
+
+fn parse_to_unicode(bytes: &[u8]) -> Result<ToUnicodeMap, DocsightError> {
+    let tokens = tokenize_cmap(bytes)?;
+    let mut mappings = BTreeMap::new();
+    let mut cursor = 0usize;
+    while cursor < tokens.len() {
+        match tokens.get(cursor) {
+            Some(CMapToken::Keyword(keyword)) if keyword == "beginbfchar" => {
+                let count = preceding_count(&tokens, cursor)?;
+                cursor += 1;
+                for _ in 0..count {
+                    let source = cmap_hex(&tokens, cursor)?.to_vec();
+                    let target = decode_utf16be(cmap_hex(&tokens, cursor + 1)?)?;
+                    insert_cmap_mapping(&mut mappings, source, target)?;
+                    cursor += 2;
+                }
+            }
+            Some(CMapToken::Keyword(keyword)) if keyword == "beginbfrange" => {
+                let count = preceding_count(&tokens, cursor)?;
+                cursor += 1;
+                for _ in 0..count {
+                    let start = cmap_hex(&tokens, cursor)?.to_vec();
+                    let end = cmap_hex(&tokens, cursor + 1)?.to_vec();
+                    cursor += 2;
+                    let sources = cmap_code_range(&start, &end)?;
+                    match tokens.get(cursor) {
+                        Some(CMapToken::Hex(target_start)) => {
+                            let mut target = target_start.clone();
+                            let source_count = sources.len();
+                            for (index, source) in sources.into_iter().enumerate() {
+                                insert_cmap_mapping(
+                                    &mut mappings,
+                                    source,
+                                    decode_utf16be(&target)?,
+                                )?;
+                                if index + 1 < source_count {
+                                    increment_big_endian(&mut target)?;
+                                }
+                            }
+                            cursor += 1;
+                        }
+                        Some(CMapToken::ArrayStart) => {
+                            cursor += 1;
+                            for source in sources {
+                                let target = decode_utf16be(cmap_hex(&tokens, cursor)?)?;
+                                insert_cmap_mapping(&mut mappings, source, target)?;
+                                cursor += 1;
+                            }
+                            if !matches!(tokens.get(cursor), Some(CMapToken::ArrayEnd)) {
+                                return Err(malformed("ToUnicode bfrange array has wrong length"));
+                            }
+                            cursor += 1;
+                        }
+                        _ => return Err(malformed("invalid ToUnicode bfrange target")),
+                    }
+                }
+            }
+            _ => cursor += 1,
+        }
+    }
+    if mappings.is_empty() {
+        return Err(malformed("ToUnicode CMap has no supported mappings"));
+    }
+    let mut code_lengths = mappings.keys().map(Vec::len).collect::<Vec<_>>();
+    code_lengths.sort_unstable();
+    code_lengths.dedup();
+    code_lengths.reverse();
+    Ok(ToUnicodeMap {
+        mappings,
+        code_lengths,
+    })
+}
+
+fn tokenize_cmap(bytes: &[u8]) -> Result<Vec<CMapToken>, DocsightError> {
+    let mut tokens = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            byte if is_space(byte) => cursor += 1,
+            b'%' => {
+                while cursor < bytes.len() && !matches!(bytes[cursor], b'\r' | b'\n') {
+                    cursor += 1;
+                }
+            }
+            b'[' => {
+                tokens.push(CMapToken::ArrayStart);
+                cursor += 1;
+            }
+            b']' => {
+                tokens.push(CMapToken::ArrayEnd);
+                cursor += 1;
+            }
+            b'<' if bytes.get(cursor + 1) != Some(&b'<') => {
+                cursor += 1;
+                let mut digits = Vec::new();
+                while cursor < bytes.len() && bytes[cursor] != b'>' {
+                    if !is_space(bytes[cursor]) {
+                        digits.push(bytes[cursor]);
+                    }
+                    cursor += 1;
+                }
+                if cursor == bytes.len() {
+                    return Err(malformed("unterminated ToUnicode hex string"));
+                }
+                cursor += 1;
+                tokens.push(CMapToken::Hex(decode_hex_digits(&digits)?));
+            }
+            b'<' | b'>' => {
+                cursor += if bytes.get(cursor + 1) == Some(&bytes[cursor]) {
+                    2
+                } else {
+                    1
+                }
+            }
+            _ => {
+                let start = cursor;
+                while cursor < bytes.len()
+                    && !is_space(bytes[cursor])
+                    && !matches!(bytes[cursor], b'[' | b']' | b'<' | b'>' | b'%')
+                {
+                    cursor += 1;
+                }
+                let word = std::str::from_utf8(&bytes[start..cursor])
+                    .map_err(|_| malformed("ToUnicode token is not ASCII"))?;
+                match word.parse::<usize>() {
+                    Ok(value) => tokens.push(CMapToken::Integer(value)),
+                    Err(_) => tokens.push(CMapToken::Keyword(word.to_owned())),
+                }
+            }
+        }
+        if tokens.len() > MAX_CMAP_TOKENS {
+            return Err(DocsightError::ResourceLimit {
+                resource: "ToUnicode CMap tokens".to_owned(),
+                limit: MAX_CMAP_TOKENS as u64,
+            });
+        }
+    }
+    Ok(tokens)
+}
+
+fn decode_hex_digits(digits: &[u8]) -> Result<Vec<u8>, DocsightError> {
+    if digits.is_empty() || digits.len() % 2 != 0 {
+        return Err(malformed(
+            "ToUnicode hex string must contain complete bytes",
+        ));
+    }
+    digits
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_digit(pair[0])?;
+            let low = hex_digit(pair[1])?;
+            Ok(high << 4 | low)
+        })
+        .collect()
+}
+
+fn hex_digit(byte: u8) -> Result<u8, DocsightError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(malformed("ToUnicode hex string contains a non-hex digit")),
+    }
+}
+
+fn preceding_count(tokens: &[CMapToken], cursor: usize) -> Result<usize, DocsightError> {
+    match cursor.checked_sub(1).and_then(|index| tokens.get(index)) {
+        Some(CMapToken::Integer(count)) if *count <= MAX_CMAP_MAPPINGS => Ok(*count),
+        Some(CMapToken::Integer(_)) => Err(DocsightError::ResourceLimit {
+            resource: "ToUnicode CMap mappings".to_owned(),
+            limit: MAX_CMAP_MAPPINGS as u64,
+        }),
+        _ => Err(malformed("ToUnicode mapping block has no valid count")),
+    }
+}
+
+fn cmap_hex(tokens: &[CMapToken], cursor: usize) -> Result<&[u8], DocsightError> {
+    match tokens.get(cursor) {
+        Some(CMapToken::Hex(value)) => Ok(value),
+        _ => Err(malformed("ToUnicode mapping requires a hex string")),
+    }
+}
+
+fn decode_utf16be(bytes: &[u8]) -> Result<String, DocsightError> {
+    if bytes.is_empty() || bytes.len() % 2 != 0 {
+        return Err(malformed("ToUnicode target must be UTF-16BE"));
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
+    std::char::decode_utf16(units)
+        .collect::<Result<String, _>>()
+        .map_err(|_| malformed("ToUnicode target is invalid UTF-16BE"))
+}
+
+fn cmap_code_range(start: &[u8], end: &[u8]) -> Result<Vec<Vec<u8>>, DocsightError> {
+    if start.is_empty() || start.len() != end.len() || start.len() > 4 {
+        return Err(malformed("ToUnicode source range has invalid code widths"));
+    }
+    let start_value = big_endian_value(start);
+    let end_value = big_endian_value(end);
+    if end_value < start_value {
+        return Err(malformed("ToUnicode source range is descending"));
+    }
+    let count = end_value - start_value + 1;
+    if count > MAX_CMAP_MAPPINGS as u64 {
+        return Err(DocsightError::ResourceLimit {
+            resource: "ToUnicode CMap mappings".to_owned(),
+            limit: MAX_CMAP_MAPPINGS as u64,
+        });
+    }
+    (start_value..=end_value)
+        .map(|value| big_endian_bytes(value, start.len()))
+        .collect()
+}
+
+fn big_endian_value(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(0u64, |value, byte| value << 8 | u64::from(*byte))
+}
+
+fn big_endian_bytes(value: u64, length: usize) -> Result<Vec<u8>, DocsightError> {
+    let bytes = value.to_be_bytes();
+    let start = bytes
+        .len()
+        .checked_sub(length)
+        .ok_or_else(|| malformed("invalid CMap code width"))?;
+    Ok(bytes[start..].to_vec())
+}
+
+fn increment_big_endian(bytes: &mut [u8]) -> Result<(), DocsightError> {
+    for byte in bytes.iter_mut().rev() {
+        let (value, overflow) = byte.overflowing_add(1);
+        *byte = value;
+        if !overflow {
+            return Ok(());
+        }
+    }
+    Err(malformed("ToUnicode destination range overflows"))
+}
+
+fn insert_cmap_mapping(
+    mappings: &mut BTreeMap<Vec<u8>, String>,
+    source: Vec<u8>,
+    target: String,
+) -> Result<(), DocsightError> {
+    if source.is_empty() || source.len() > 4 {
+        return Err(malformed("ToUnicode source code has invalid width"));
+    }
+    if mappings.len() >= MAX_CMAP_MAPPINGS && !mappings.contains_key(&source) {
+        return Err(DocsightError::ResourceLimit {
+            resource: "ToUnicode CMap mappings".to_owned(),
+            limit: MAX_CMAP_MAPPINGS as u64,
+        });
+    }
+    if mappings.insert(source, target).is_some() {
+        return Err(malformed("ToUnicode CMap contains duplicate source codes"));
+    }
+    Ok(())
+}
+
+fn canonical_base_font(name: &str) -> &str {
+    match name.split_once('+') {
+        Some((tag, base))
+            if tag.len() == 6 && tag.bytes().all(|byte| byte.is_ascii_uppercase()) =>
+        {
+            base
+        }
+        _ => name,
+    }
 }

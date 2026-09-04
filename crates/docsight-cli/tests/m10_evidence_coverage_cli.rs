@@ -20,11 +20,11 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
 
     let output = docsight()
-        .args(["evidence", doc_str, "h_515ad605791c12fc"])
+        .args(["evidence", doc_str, "h_515ad605791c12fc496c1c18d79f6526"])
         .output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("Evidence for h_515ad605791c12fc:"));
+    assert!(stdout.contains("Evidence for h_515ad605791c12fc496c1c18d79f6526:"));
     assert!(stdout.contains("Kind:              Heading"));
     assert!(stdout.contains("Source Path:       /word/document.xml::body/p[1]"));
     assert!(stdout.contains("Page:              1"));
@@ -36,22 +36,25 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     assert!(stdout.contains("Source Fragment:"));
 
     let json_output = docsight()
-        .args(["evidence", doc_str, "h_515ad605791c12fc", "--json"])
+        .args([
+            "evidence",
+            doc_str,
+            "h_515ad605791c12fc496c1c18d79f6526",
+            "--json",
+        ])
         .output()?;
     assert!(json_output.status.success());
     let val: serde_json::Value = serde_json::from_slice(&json_output.stdout)?;
-    assert_eq!(val["schema"], "docsight.agent/v1");
+    assert_eq!(val["schema"], "docsight.agent/v2");
     let result = &val["result"];
-    assert_eq!(result["object_id"], "h_515ad605791c12fc");
+    assert_eq!(result["object_id"], "h_515ad605791c12fc496c1c18d79f6526");
     assert_eq!(result["kind"], "heading");
     assert_eq!(result["page"], 1);
     assert_eq!(result["fidelity"]["text"], 1.0);
     assert_eq!(result["fidelity"]["structure"], 1.0);
     let geometry = result["fidelity"]["geometry"].as_f64().ok_or("geometry")?;
-    assert!(
-        geometry < 0.999 && geometry > 0.85,
-        "geometry must reflect measured penalties, got {geometry}"
-    );
+    assert_eq!(geometry, 0.0);
+    assert_eq!(result["fidelity"]["visual"], 0.0);
     assert!(
         result["fidelity"]["reasons"]
             .as_array()
@@ -81,11 +84,11 @@ fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::
     let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
 
     let output = docsight()
-        .args(["evidence", pdf_str, "p_c7f2cbe563d57330"])
+        .args(["evidence", pdf_str, "p_c7f2cbe563d57330ee6d1a3578bfe5d7"])
         .output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("Evidence for p_c7f2cbe563d57330:"));
+    assert!(stdout.contains("Evidence for p_c7f2cbe563d57330ee6d1a3578bfe5d7:"));
     assert!(stdout.contains("Kind:              Paragraph"));
     assert!(stdout.contains("Source Path:       pdf::page[1]::content"));
     assert!(stdout.contains("Page:              1"));
@@ -93,12 +96,17 @@ fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::
     assert!(stdout.contains("Render Hash:"));
 
     let json_output = docsight()
-        .args(["evidence", pdf_str, "p_c7f2cbe563d57330", "--json"])
+        .args([
+            "evidence",
+            pdf_str,
+            "p_c7f2cbe563d57330ee6d1a3578bfe5d7",
+            "--json",
+        ])
         .output()?;
     assert!(json_output.status.success());
     let val: serde_json::Value = serde_json::from_slice(&json_output.stdout)?;
     let result = &val["result"];
-    assert_eq!(result["object_id"], "p_c7f2cbe563d57330");
+    assert_eq!(result["object_id"], "p_c7f2cbe563d57330ee6d1a3578bfe5d7");
     assert!((result["confidence"].as_f64().ok_or("missing")? - 0.85).abs() < 0.01);
     assert_eq!(result["source_path"], "pdf::page[1]::content");
     let offset = result["source_offset"].as_u64().ok_or("missing offset")?;
@@ -141,9 +149,9 @@ fn coverage_docx_reports_measured_penalties() -> Result<(), Box<dyn std::error::
     assert!(stdout.contains("Format:              DOCX"));
     assert!(stdout.contains("Text Fidelity:       1.000 (exact)"));
     assert!(stdout.contains("Structure Fidelity:  1.000 (exact)"));
-    assert!(stdout.contains("Geometry Fidelity:   0.920 (approximated)"));
-    assert!(stdout.contains("Visual Fidelity:     0.865 (approximated)"));
-    assert!(stdout.contains("Affected Objects:    0"));
+    assert!(stdout.contains("Geometry Fidelity:   0.000 (unsupported)"));
+    assert!(stdout.contains("Visual Fidelity:     0.000 (unsupported)"));
+    assert!(stdout.contains("Affected Objects:    50"));
     assert!(stdout.contains("DOCX_FONT_SUBSTITUTED"));
 
     Ok(())
@@ -160,13 +168,14 @@ fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::er
     assert!(output.status.success());
     let val: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     let result = &val["result"];
-    assert_eq!(result["affected_objects_count"], 1);
+    assert_eq!(result["affected_objects_count"], 8);
 
     let mut unsupported_regions = 0;
     for page in result["pages"].as_array().ok_or("pages")? {
         for region in page["regions"].as_array().ok_or("regions")? {
-            if region["status"] == "unsupported" {
+            if region["reason_code"] == "DOCX_FIGURE_RASTER_PLACEHOLDER" {
                 unsupported_regions += 1;
+                assert_eq!(region["status"], "unsupported");
                 assert_eq!(region["reason_code"], "DOCX_FIGURE_RASTER_PLACEHOLDER");
                 assert!(
                     region["object_id"]
@@ -199,7 +208,7 @@ fn coverage_pdf_json_filtered_page() -> Result<(), Box<dyn std::error::Error>> {
         .output()?;
     assert!(json_output.status.success());
     let val: serde_json::Value = serde_json::from_slice(&json_output.stdout)?;
-    assert_eq!(val["schema"], "docsight.agent/v1");
+    assert_eq!(val["schema"], "docsight.agent/v2");
     let result = &val["result"];
     assert_eq!(result["format"], "pdf");
     assert_eq!(result["global"]["text"]["score"], 1.0);
@@ -247,10 +256,20 @@ fn evidence_and_coverage_deterministic_json() -> Result<(), Box<dyn std::error::
     assert_eq!(out1.stdout, out2.stdout);
 
     let ev1 = docsight()
-        .args(["evidence", doc_str, "h_515ad605791c12fc", "--json"])
+        .args([
+            "evidence",
+            doc_str,
+            "h_515ad605791c12fc496c1c18d79f6526",
+            "--json",
+        ])
         .output()?;
     let ev2 = docsight()
-        .args(["evidence", doc_str, "h_515ad605791c12fc", "--json"])
+        .args([
+            "evidence",
+            doc_str,
+            "h_515ad605791c12fc496c1c18d79f6526",
+            "--json",
+        ])
         .output()?;
     assert_eq!(ev1.stdout, ev2.stdout);
 
@@ -264,7 +283,7 @@ fn schemas_stay_in_sync_with_serialized_contracts() -> Result<(), Box<dyn std::e
         .join("..");
 
     let evidence_schema: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
-        manifest_root.join("schemas/v1/evidence-record.json"),
+        manifest_root.join("schemas/v2/evidence-record.json"),
     )?)?;
     let schema_fields: Vec<&str> = evidence_schema["properties"]
         .as_object()
@@ -295,7 +314,7 @@ fn schemas_stay_in_sync_with_serialized_contracts() -> Result<(), Box<dyn std::e
     assert!(!schema_fields.contains(&"safe_source_fragment"));
 
     let coverage_schema: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
-        manifest_root.join("schemas/v1/coverage-report.json"),
+        manifest_root.join("schemas/v2/coverage-report.json"),
     )?)?;
     let status_enum: Vec<&str> =
         coverage_schema["$defs"]["coverage_metric"]["properties"]["status"]["enum"]

@@ -166,10 +166,10 @@ impl<'a> PdfDocument<'a> {
             .text_runs
             .into_iter()
             .enumerate()
-            .map(|(index, run)| self.make_span(number, index, run, parsed.approximated_base14_font))
+            .map(|(index, run)| self.make_span(number, index, run, parsed.approximated_font))
             .collect::<Result<Vec<_>, DocsightError>>()?;
-        let warnings = if parsed.approximated_base14_font {
-            vec![base14_warning(number)]
+        let warnings = if parsed.approximated_font {
+            vec![font_approximation_warning(number)]
         } else {
             Vec::new()
         };
@@ -204,8 +204,8 @@ impl<'a> PdfDocument<'a> {
         for page_num in 1..=self.page_count() {
             let page_record = self.page_record(page_num)?;
             let parsed = self.parse_page(page_num)?;
-            if parsed.approximated_base14_font {
-                all_warnings.push(base14_warning(page_num));
+            if parsed.approximated_font {
+                all_warnings.push(font_approximation_warning(page_num));
             }
 
             let reconstructed = reconstruction::reconstruct_page_semantics(
@@ -270,8 +270,8 @@ impl<'a> PdfDocument<'a> {
         };
         let parsed = self.parse_page(number)?;
         let mut warnings = vec![renderer_warning(number)];
-        if parsed.approximated_base14_font {
-            warnings.push(base14_warning(number));
+        if parsed.approximated_font {
+            warnings.push(font_approximation_warning(number));
         }
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
@@ -297,13 +297,23 @@ impl<'a> PdfDocument<'a> {
                 )));
             }
         };
-        let fonts = fonts_from_resources(&resources, |value| self.store.resolve(value))?;
+        let fonts = fonts_from_resources(
+            &resources,
+            |value| self.store.resolve(value),
+            |value| {
+                let value = self.store.resolve(value)?;
+                match value {
+                    Value::Stream(stream) => decode_stream(&stream),
+                    _ => Err(malformed("ToUnicode must resolve to a stream")),
+                }
+            },
+        )?;
         let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(&content, page.media_box.x0, page.media_box.y1, &fonts)?;
         Ok(ParsedPage {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
-            approximated_base14_font: parsed.approximated_base14_font,
+            approximated_font: parsed.approximated_font,
         })
     }
 
@@ -379,7 +389,7 @@ impl<'a> PdfDocument<'a> {
 struct ParsedPage {
     commands: Vec<DisplayCommand>,
     text_runs: Vec<TextRun>,
-    approximated_base14_font: bool,
+    approximated_font: bool,
 }
 
 struct ObjectStore<'a> {
@@ -395,7 +405,7 @@ impl ObjectStore<'_> {
                 reference.number
             ))
         })?;
-        parse_object(self.bytes, offset, reference)
+        parse_object(self.bytes, offset, reference, &self.xref.entries)
     }
 
     fn resolve(&self, value: &Value) -> Result<Value, DocsightError> {
@@ -582,12 +592,14 @@ fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, DocsightError> {
     Ok(output)
 }
 
-fn base14_warning(page: u32) -> Diagnostic {
+fn font_approximation_warning(page: u32) -> Diagnostic {
     Diagnostic {
-        code: "APPROXIMATED_BASE14_FONT".to_owned(),
+        code: "APPROXIMATED_PDF_FONT".to_owned(),
         severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} uses DOCSIGHT's initial Helvetica bitmap implementation"),
-        effect: "glyph shapes and text metrics can differ from a full PDF font implementation"
+        message: format!(
+            "page {page} uses DOCSIGHT's initial bitmap font and approximate text metrics"
+        ),
+        effect: "embedded glyph outlines, shaping, and exact font metrics are not reproduced"
             .to_owned(),
         object: None,
         page: Some(page),
