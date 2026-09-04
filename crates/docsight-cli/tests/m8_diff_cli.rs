@@ -202,3 +202,73 @@ fn diff_ndjson_streaming_events() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn diff_reports_single_insertion_without_cascade() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Cursor, Write};
+    use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
+
+    fn build_docx(paragraphs: &[&str]) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let body: String = paragraphs
+            .iter()
+            .map(|text| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"))
+            .collect();
+        let document = format!(
+            r#"<w:document xmlns:w="{ns}"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+        );
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+        writer.start_file("[Content_Types].xml", options)?;
+        writer.write_all(b"<Types/>")?;
+        writer.start_file("word/document.xml", options)?;
+        writer.write_all(document.as_bytes())?;
+        let bytes = writer.finish()?.into_inner();
+        let path = std::env::temp_dir().join(format!("docsight_m8_{}.docx", paragraphs.len()));
+        std::fs::write(&path, bytes)?;
+        Ok(path)
+    }
+
+    let before = build_docx(&[
+        "First shared paragraph about revenue",
+        "Second shared paragraph about costs",
+        "Third shared paragraph about margins",
+    ])?;
+    let after = build_docx(&[
+        "First shared paragraph about revenue",
+        "Inserted brand new paragraph about guidance",
+        "Second shared paragraph about costs",
+        "Third shared paragraph about margins",
+    ])?;
+
+    let out = docsight()
+        .args([
+            "diff",
+            before.to_str().ok_or("path")?,
+            after.to_str().ok_or("path")?,
+            "--json",
+        ])
+        .output()?;
+    assert!(out.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    let semantic = &value["result"]["semantic"];
+    assert_eq!(semantic["paragraphs"]["added"], 1);
+    assert_eq!(semantic["paragraphs"]["modified"], 0);
+    assert_eq!(semantic["paragraphs"]["removed"], 0);
+    let lineage = semantic["lineage"]
+        .as_array()
+        .ok_or("lineage array missing")?;
+    assert_eq!(lineage.len(), 3);
+    for entry in lineage {
+        let id = entry["id"].as_str().ok_or("lineage id missing")?;
+        assert!(id.starts_with("lin_"), "{id}");
+        assert_eq!(entry["match_score"], 1.0);
+        assert!(entry["before_object"].as_str().is_some());
+        assert!(entry["after_object"].as_str().is_some());
+    }
+    let _ = std::fs::remove_file(before);
+    let _ = std::fs::remove_file(after);
+    Ok(())
+}

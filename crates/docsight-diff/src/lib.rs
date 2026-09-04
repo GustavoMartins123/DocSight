@@ -1,4 +1,6 @@
-use docsight_core::{Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect};
+use docsight_core::{
+    Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect, table_to_tsv_string,
+};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::PdfDocument;
@@ -8,7 +10,7 @@ use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
     Added,
@@ -33,6 +35,8 @@ pub struct ChangeCounter {
     pub added: u32,
     pub removed: u32,
     pub modified: u32,
+    #[serde(default)]
+    pub moved: u32,
 }
 
 impl ChangeCounter {
@@ -40,25 +44,38 @@ impl ChangeCounter {
         self.added
             .saturating_add(self.removed)
             .saturating_add(self.modified)
+            .saturating_add(self.moved)
     }
 
     pub fn format_images(&self) -> String {
         format!(
-            "+{} / -{} / changed {}",
-            self.added, self.removed, self.modified
+            "+{} / -{} / changed {} / moved {}",
+            self.added, self.removed, self.modified, self.moved
         )
     }
 
     pub fn format_tables(&self) -> String {
         if self.added > 0 || self.removed > 0 {
             format!(
-                "+{} / -{} / modified {}",
-                self.added, self.removed, self.modified
+                "+{} / -{} / modified {} / moved {}",
+                self.added, self.removed, self.modified, self.moved
             )
         } else {
-            format!("{} modified", self.modified)
+            format!("{} modified / {} moved", self.modified, self.moved)
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LineageRecord {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_object: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_object: Option<String>,
+    pub match_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ChangeKind>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,6 +91,8 @@ pub struct SemanticChangeRecord {
     pub before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lineage: Option<LineageRecord>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -91,6 +110,8 @@ pub struct SemanticDiff {
     pub tables: ChangeCounter,
     pub images: ChangeCounter,
     pub records: Vec<SemanticChangeRecord>,
+    #[serde(default)]
+    pub lineage: Vec<LineageRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -352,216 +373,441 @@ fn inspect_zip_parts(bytes: &[u8]) -> Result<BTreeMap<String, (u64, u32)>, Docsi
     Ok(parts)
 }
 
+const SIMILARITY_THRESHOLD: f32 = 0.6;
+
+struct AlignItem {
+    object_id: String,
+    page: Option<u32>,
+    key: String,
+    display: String,
+}
+
+struct MatchedPair {
+    before_index: usize,
+    after_index: usize,
+    exact: bool,
+    score: f32,
+}
+
+fn normalize_text(text: &str) -> String {
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn token_set(text: &str) -> std::collections::BTreeSet<String> {
+    normalize_text(text)
+        .split(' ')
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn text_similarity(before: &str, after: &str) -> f32 {
+    let before_tokens = token_set(before);
+    let after_tokens = token_set(after);
+    if before_tokens.is_empty() && after_tokens.is_empty() {
+        return 1.0;
+    }
+    if before_tokens.is_empty() || after_tokens.is_empty() {
+        return 0.0;
+    }
+    let intersection = before_tokens.intersection(&after_tokens).count() as f32;
+    let union = before_tokens.union(&after_tokens).count() as f32;
+    intersection / union
+}
+
+fn align_items(before: &[AlignItem], after: &[AlignItem]) -> Vec<MatchedPair> {
+    let mut pairs = Vec::new();
+    let mut after_by_key: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, item) in after.iter().enumerate() {
+        after_by_key
+            .entry(item.key.as_str())
+            .or_default()
+            .push(index);
+    }
+    let mut before_matched = vec![false; before.len()];
+    let mut after_matched = vec![false; after.len()];
+
+    for (before_index, item) in before.iter().enumerate() {
+        if let Some(candidates) = after_by_key.get(item.key.as_str()) {
+            if let Some(&after_index) = candidates.iter().find(|index| !after_matched[**index]) {
+                pairs.push(MatchedPair {
+                    before_index,
+                    after_index,
+                    exact: true,
+                    score: 1.0,
+                });
+                before_matched[before_index] = true;
+                after_matched[after_index] = true;
+            }
+        }
+    }
+
+    let mut candidates: Vec<(f32, usize, usize)> = Vec::new();
+    for (before_index, before_item) in before.iter().enumerate() {
+        if before_matched[before_index] {
+            continue;
+        }
+        for (after_index, after_item) in after.iter().enumerate() {
+            if after_matched[after_index] {
+                continue;
+            }
+            let score = text_similarity(&before_item.key, &after_item.key);
+            if score >= SIMILARITY_THRESHOLD {
+                candidates.push((score, before_index, after_index));
+            }
+        }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    for (score, before_index, after_index) in candidates {
+        if before_matched[before_index] || after_matched[after_index] {
+            continue;
+        }
+        pairs.push(MatchedPair {
+            before_index,
+            after_index,
+            exact: false,
+            score,
+        });
+        before_matched[before_index] = true;
+        after_matched[after_index] = true;
+    }
+
+    pairs.sort_by_key(|pair| pair.after_index);
+    pairs
+}
+
+fn moved_exact_pairs(pairs: &[MatchedPair]) -> std::collections::BTreeSet<usize> {
+    let exact: Vec<&MatchedPair> = pairs.iter().filter(|pair| pair.exact).collect();
+    let before_indices: Vec<usize> = exact.iter().map(|pair| pair.before_index).collect();
+    if before_indices.is_empty() {
+        return std::collections::BTreeSet::new();
+    }
+    let mut lengths = vec![1_usize; before_indices.len()];
+    let mut previous = vec![usize::MAX; before_indices.len()];
+    for current in (0..before_indices.len()).rev() {
+        for earlier in (current + 1)..before_indices.len() {
+            if before_indices[earlier] > before_indices[current]
+                && lengths[earlier] + 1 > lengths[current]
+            {
+                lengths[current] = lengths[earlier] + 1;
+                previous[current] = earlier;
+            }
+        }
+    }
+    let mut best = 0_usize;
+    for (index, length) in lengths.iter().enumerate() {
+        if *length > lengths[best] {
+            best = index;
+        }
+    }
+    let mut stable = std::collections::BTreeSet::new();
+    let mut current = Some(best);
+    while let Some(index) = current {
+        stable.insert(exact[index].after_index);
+        current = if previous[index] == usize::MAX {
+            None
+        } else {
+            Some(previous[index])
+        };
+    }
+    pairs
+        .iter()
+        .enumerate()
+        .filter(|(_, pair)| pair.exact && stable.contains(&pair.after_index))
+        .map(|(position, _)| position)
+        .collect()
+}
+
+fn lineage_id(target_type: &str, before_key: &str, after_key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let (first, second) = if before_key <= after_key {
+        (before_key, after_key)
+    } else {
+        (after_key, before_key)
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(target_type.as_bytes());
+    hasher.update([0]);
+    hasher.update(first.as_bytes());
+    hasher.update([0]);
+    hasher.update(second.as_bytes());
+    let digest = hasher.finalize();
+    let suffix: String = digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("lin_{suffix}")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_change_record(
+    records: &mut Vec<SemanticChangeRecord>,
+    lineage: &mut Vec<LineageRecord>,
+    counter: &mut ChangeCounter,
+    target_type: &str,
+    kind: ChangeKind,
+    before_item: Option<&AlignItem>,
+    after_item: Option<&AlignItem>,
+    score: Option<f32>,
+) {
+    let record_lineage = match (before_item, after_item) {
+        (Some(before), Some(after)) => {
+            let record = LineageRecord {
+                id: lineage_id(target_type, &before.key, &after.key),
+                before_object: Some(before.object_id.clone()),
+                after_object: Some(after.object_id.clone()),
+                match_score: score.unwrap_or(1.0),
+                kind: Some(kind),
+            };
+            lineage.push(LineageRecord {
+                kind: None,
+                ..record.clone()
+            });
+            Some(record)
+        }
+        _ => None,
+    };
+    let (object_id, page) = match (kind, before_item, after_item) {
+        (ChangeKind::Removed, Some(before), _) => (Some(before.object_id.clone()), before.page),
+        (_, _, Some(after)) => (Some(after.object_id.clone()), after.page),
+        (_, Some(before), _) => (Some(before.object_id.clone()), before.page),
+        (_, None, None) => (None, None),
+    };
+    let (description, before_text, after_text) = match (before_item, after_item) {
+        (Some(before), Some(after)) if kind == ChangeKind::Modified => (
+            format!(
+                "{target_type} modified (match score {score:.3})",
+                score = score.unwrap_or(1.0)
+            ),
+            Some(before.display.clone()),
+            Some(after.display.clone()),
+        ),
+        (Some(before), Some(after)) => (
+            format!(
+                "{target_type} moved: was position-linked to \"{}\"",
+                before.display
+            ),
+            Some(before.display.clone()),
+            Some(after.display.clone()),
+        ),
+        (None, Some(after)) => (
+            format!("{target_type} added: \"{}\"", after.display),
+            None,
+            Some(after.display.clone()),
+        ),
+        (Some(before), None) => (
+            format!("{target_type} removed: \"{}\"", before.display),
+            Some(before.display.clone()),
+            None,
+        ),
+        (None, None) => (format!("{target_type} changed"), None, None),
+    };
+    match kind {
+        ChangeKind::Added => counter.added += 1,
+        ChangeKind::Removed => counter.removed += 1,
+        ChangeKind::Modified => counter.modified += 1,
+        ChangeKind::Moved => counter.moved += 1,
+    }
+    records.push(SemanticChangeRecord {
+        kind,
+        object_id,
+        page,
+        target_type: target_type.to_owned(),
+        description,
+        before: before_text,
+        after: after_text,
+        lineage: record_lineage,
+    });
+}
+
+fn diff_collection(
+    before: &[AlignItem],
+    after: &[AlignItem],
+    target_type: &str,
+    records: &mut Vec<SemanticChangeRecord>,
+    lineage: &mut Vec<LineageRecord>,
+) -> ChangeCounter {
+    let mut counter = ChangeCounter::default();
+    let pairs = align_items(before, after);
+    let stable_positions = moved_exact_pairs(&pairs);
+
+    let mut handled_before = vec![false; before.len()];
+    let mut handled_after = vec![false; after.len()];
+
+    for (position, pair) in pairs.iter().enumerate() {
+        handled_before[pair.before_index] = true;
+        handled_after[pair.after_index] = true;
+        if pair.exact && stable_positions.contains(&position) {
+            lineage.push(LineageRecord {
+                id: lineage_id(
+                    target_type,
+                    &before[pair.before_index].key,
+                    &after[pair.after_index].key,
+                ),
+                before_object: Some(before[pair.before_index].object_id.clone()),
+                after_object: Some(after[pair.after_index].object_id.clone()),
+                match_score: 1.0,
+                kind: None,
+            });
+            continue;
+        }
+        let kind = if pair.exact {
+            ChangeKind::Moved
+        } else {
+            ChangeKind::Modified
+        };
+        push_change_record(
+            records,
+            lineage,
+            &mut counter,
+            target_type,
+            kind,
+            Some(&before[pair.before_index]),
+            Some(&after[pair.after_index]),
+            Some(pair.score),
+        );
+    }
+
+    for (index, item) in after.iter().enumerate() {
+        if !handled_after[index] {
+            push_change_record(
+                records,
+                lineage,
+                &mut counter,
+                target_type,
+                ChangeKind::Added,
+                None,
+                Some(item),
+                None,
+            );
+        }
+    }
+    for (index, item) in before.iter().enumerate() {
+        if !handled_before[index] {
+            push_change_record(
+                records,
+                lineage,
+                &mut counter,
+                target_type,
+                ChangeKind::Removed,
+                Some(item),
+                None,
+                None,
+            );
+        }
+    }
+
+    counter
+}
+
 pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff, DocsightError> {
     let mut records = Vec::new();
-    let mut headings = ChangeCounter::default();
-    let mut paragraphs = ChangeCounter::default();
-    let mut tables = ChangeCounter::default();
-    let mut images = ChangeCounter::default();
+    let mut lineage = Vec::new();
 
-    let h_before: Vec<_> = before.headings().collect();
-    let h_after: Vec<_> = after.headings().collect();
+    let heading_items = |document: &Document| -> Vec<AlignItem> {
+        document
+            .headings()
+            .map(|(block, heading)| AlignItem {
+                object_id: block.id.to_string(),
+                page: block.page,
+                key: normalize_text(&format!("h{}:{}", heading.level, heading.text)),
+                display: heading.text.clone(),
+            })
+            .collect()
+    };
+    let headings = diff_collection(
+        &heading_items(before),
+        &heading_items(after),
+        "heading",
+        &mut records,
+        &mut lineage,
+    );
 
-    let max_h = h_before.len().max(h_after.len());
-    for i in 0..max_h {
-        match (h_before.get(i), h_after.get(i)) {
-            (Some((_b_block, b_h)), Some((a_block, a_h))) => {
-                if b_h.text != a_h.text || b_h.level != a_h.level {
-                    headings.modified += 1;
-                    records.push(SemanticChangeRecord {
-                        kind: ChangeKind::Modified,
-                        object_id: Some(a_block.id.to_string()),
-                        page: a_block.page,
-                        target_type: "heading".into(),
-                        description: format!(
-                            "Heading modified: \"{}\" -> \"{}\"",
-                            b_h.text, a_h.text
-                        ),
-                        before: Some(b_h.text.clone()),
-                        after: Some(a_h.text.clone()),
-                    });
-                }
-            }
-            (None, Some((a_block, a_h))) => {
-                headings.added += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Added,
-                    object_id: Some(a_block.id.to_string()),
-                    page: a_block.page,
-                    target_type: "heading".into(),
-                    description: format!("Heading added: \"{}\"", a_h.text),
-                    before: None,
-                    after: Some(a_h.text.clone()),
-                });
-            }
-            (Some((b_block, b_h)), None) => {
-                headings.removed += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Removed,
-                    object_id: Some(b_block.id.to_string()),
-                    page: b_block.page,
-                    target_type: "heading".into(),
-                    description: format!("Heading removed: \"{}\"", b_h.text),
-                    before: Some(b_h.text.clone()),
-                    after: None,
-                });
-            }
-            (None, None) => {}
-        }
-    }
+    let paragraph_items = |document: &Document| -> Vec<AlignItem> {
+        document
+            .paragraphs()
+            .map(|(block, paragraph)| AlignItem {
+                object_id: block.id.to_string(),
+                page: block.page,
+                key: normalize_text(&paragraph.text),
+                display: paragraph.text.clone(),
+            })
+            .collect()
+    };
+    let paragraphs = diff_collection(
+        &paragraph_items(before),
+        &paragraph_items(after),
+        "paragraph",
+        &mut records,
+        &mut lineage,
+    );
 
-    let p_before: Vec<_> = before.paragraphs().collect();
-    let p_after: Vec<_> = after.paragraphs().collect();
+    let table_items = |document: &Document| -> Vec<AlignItem> {
+        document
+            .tables()
+            .map(|(block, table)| AlignItem {
+                object_id: block.id.to_string(),
+                page: block.page,
+                key: normalize_text(&table_to_tsv_string(table)),
+                display: format!("{}x{}", table.rows, table.columns),
+            })
+            .collect()
+    };
+    let tables = diff_collection(
+        &table_items(before),
+        &table_items(after),
+        "table",
+        &mut records,
+        &mut lineage,
+    );
 
-    let max_p = p_before.len().max(p_after.len());
-    for i in 0..max_p {
-        match (p_before.get(i), p_after.get(i)) {
-            (Some((_b_block, b_p)), Some((a_block, a_p))) => {
-                if b_p.text != a_p.text {
-                    paragraphs.modified += 1;
-                    records.push(SemanticChangeRecord {
-                        kind: ChangeKind::Modified,
-                        object_id: Some(a_block.id.to_string()),
-                        page: a_block.page,
-                        target_type: "paragraph".into(),
-                        description: "Paragraph text modified".into(),
-                        before: Some(b_p.text.clone()),
-                        after: Some(a_p.text.clone()),
-                    });
-                }
-            }
-            (None, Some((a_block, a_p))) => {
-                paragraphs.added += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Added,
-                    object_id: Some(a_block.id.to_string()),
-                    page: a_block.page,
-                    target_type: "paragraph".into(),
-                    description: "Paragraph added".into(),
-                    before: None,
-                    after: Some(a_p.text.clone()),
-                });
-            }
-            (Some((b_block, b_p)), None) => {
-                paragraphs.removed += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Removed,
-                    object_id: Some(b_block.id.to_string()),
-                    page: b_block.page,
-                    target_type: "paragraph".into(),
-                    description: "Paragraph removed".into(),
-                    before: Some(b_p.text.clone()),
-                    after: None,
-                });
-            }
-            (None, None) => {}
-        }
-    }
+    let figure_items = |document: &Document| -> Vec<AlignItem> {
+        document
+            .figures()
+            .map(|(block, figure)| AlignItem {
+                object_id: block.id.to_string(),
+                page: block.page,
+                key: normalize_text(&format!(
+                    "{}|{}|{}",
+                    figure.resource_id.as_deref().unwrap_or(""),
+                    figure.alt_text.as_deref().unwrap_or(""),
+                    figure.caption.as_deref().unwrap_or("")
+                )),
+                display: figure
+                    .caption
+                    .clone()
+                    .or_else(|| figure.alt_text.clone())
+                    .unwrap_or_else(|| figure.resource_id.clone().unwrap_or_default()),
+            })
+            .collect()
+    };
+    let images = diff_collection(
+        &figure_items(before),
+        &figure_items(after),
+        "figure",
+        &mut records,
+        &mut lineage,
+    );
 
-    let t_before: Vec<_> = before.tables().collect();
-    let t_after: Vec<_> = after.tables().collect();
-
-    let max_t = t_before.len().max(t_after.len());
-    for i in 0..max_t {
-        match (t_before.get(i), t_after.get(i)) {
-            (Some((_b_block, b_t)), Some((a_block, a_t))) => {
-                let diff_dims = b_t.rows != a_t.rows || b_t.columns != a_t.columns;
-                let diff_cells = b_t.cells.len() != a_t.cells.len()
-                    || b_t
-                        .cells
-                        .iter()
-                        .zip(&a_t.cells)
-                        .any(|(bc, ac)| bc.text != ac.text);
-                if diff_dims || diff_cells {
-                    tables.modified += 1;
-                    records.push(SemanticChangeRecord {
-                        kind: ChangeKind::Modified,
-                        object_id: Some(a_block.id.to_string()),
-                        page: a_block.page,
-                        target_type: "table".into(),
-                        description: format!(
-                            "Table modified ({}x{} -> {}x{})",
-                            b_t.rows, b_t.columns, a_t.rows, a_t.columns
-                        ),
-                        before: Some(format!("{}x{}", b_t.rows, b_t.columns)),
-                        after: Some(format!("{}x{}", a_t.rows, a_t.columns)),
-                    });
-                }
-            }
-            (None, Some((a_block, a_t))) => {
-                tables.added += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Added,
-                    object_id: Some(a_block.id.to_string()),
-                    page: a_block.page,
-                    target_type: "table".into(),
-                    description: format!("Table added ({}x{})", a_t.rows, a_t.columns),
-                    before: None,
-                    after: Some(format!("{}x{}", a_t.rows, a_t.columns)),
-                });
-            }
-            (Some((b_block, b_t)), None) => {
-                tables.removed += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Removed,
-                    object_id: Some(b_block.id.to_string()),
-                    page: b_block.page,
-                    target_type: "table".into(),
-                    description: format!("Table removed ({}x{})", b_t.rows, b_t.columns),
-                    before: Some(format!("{}x{}", b_t.rows, b_t.columns)),
-                    after: None,
-                });
-            }
-            (None, None) => {}
-        }
-    }
-
-    let f_before: Vec<_> = before.figures().collect();
-    let f_after: Vec<_> = after.figures().collect();
-    let max_f = f_before.len().max(f_after.len());
-    for i in 0..max_f {
-        match (f_before.get(i), f_after.get(i)) {
-            (Some((_b_block, b_f)), Some((a_block, a_f))) => {
-                if b_f.caption != a_f.caption || b_f.alt_text != a_f.alt_text {
-                    images.modified += 1;
-                    records.push(SemanticChangeRecord {
-                        kind: ChangeKind::Modified,
-                        object_id: Some(a_block.id.to_string()),
-                        page: a_block.page,
-                        target_type: "figure".into(),
-                        description: "Figure properties modified".into(),
-                        before: b_f.caption.clone(),
-                        after: a_f.caption.clone(),
-                    });
-                }
-            }
-            (None, Some((a_block, a_f))) => {
-                images.added += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Added,
-                    object_id: Some(a_block.id.to_string()),
-                    page: a_block.page,
-                    target_type: "figure".into(),
-                    description: "Figure added".into(),
-                    before: None,
-                    after: a_f.caption.clone(),
-                });
-            }
-            (Some((b_block, b_f)), None) => {
-                images.removed += 1;
-                records.push(SemanticChangeRecord {
-                    kind: ChangeKind::Removed,
-                    object_id: Some(b_block.id.to_string()),
-                    page: b_block.page,
-                    target_type: "figure".into(),
-                    description: "Figure removed".into(),
-                    before: b_f.caption.clone(),
-                    after: None,
-                });
-            }
-            (None, None) => {}
-        }
-    }
+    records.sort_by(|left, right| {
+        left.target_type.cmp(&right.target_type).then_with(|| {
+            left.kind
+                .cmp(&right.kind)
+                .then_with(|| left.object_id.cmp(&right.object_id))
+                .then_with(|| left.description.cmp(&right.description))
+        })
+    });
+    lineage.sort_by(|left, right| left.id.cmp(&right.id));
 
     let total_changes = headings
         .total()
@@ -576,6 +822,7 @@ pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff
         tables,
         images,
         records,
+        lineage,
     })
 }
 
@@ -809,17 +1056,19 @@ mod tests {
             added: 1,
             removed: 0,
             modified: 2,
+            moved: 0,
         };
         assert_eq!(counter.total(), 3);
-        assert_eq!(counter.format_images(), "+1 / -0 / changed 2");
-        assert_eq!(counter.format_tables(), "+1 / -0 / modified 2");
+        assert_eq!(counter.format_images(), "+1 / -0 / changed 2 / moved 0");
+        assert_eq!(counter.format_tables(), "+1 / -0 / modified 2 / moved 0");
 
         let mod_only = ChangeCounter {
             added: 0,
             removed: 0,
             modified: 2,
+            moved: 0,
         };
-        assert_eq!(mod_only.format_tables(), "2 modified");
+        assert_eq!(mod_only.format_tables(), "2 modified / 0 moved");
     }
 
     #[test]
@@ -835,11 +1084,13 @@ mod tests {
                 added: 1,
                 removed: 0,
                 modified: 0,
+                moved: 0,
             },
             tables: ChangeCounter {
                 added: 0,
                 removed: 0,
                 modified: 2,
+                moved: 0,
             },
             warnings: vec!["footer on page 13 overlaps body by 6.4 pt".into()],
         };
@@ -850,7 +1101,74 @@ mod tests {
         assert!(formatted.contains("Layout changes     7 pages"));
         assert!(formatted.contains("Largest drift      page 6, 41.2 pt vertical"));
         assert!(formatted.contains("Images             +1 / -0 / changed 0"));
-        assert!(formatted.contains("Tables             2 modified"));
+        assert!(formatted.contains("Tables             2 modified / 0 moved"));
         assert!(formatted.contains("Warnings           footer on page 13 overlaps body by 6.4 pt"));
+    }
+}
+
+#[cfg(test)]
+mod m8_alignment_tests {
+    use super::{AlignItem, ChangeKind, align_items, moved_exact_pairs, text_similarity};
+
+    fn item(key: &str) -> AlignItem {
+        AlignItem {
+            object_id: format!("obj_{key}"),
+            page: Some(1),
+            key: key.to_owned(),
+            display: key.to_owned(),
+        }
+    }
+
+    #[test]
+    fn single_insertion_does_not_cascade_into_modifications() {
+        let before = vec![item("alpha"), item("beta"), item("gamma")];
+        let after = vec![
+            item("alpha"),
+            item("new entry"),
+            item("beta"),
+            item("gamma"),
+        ];
+        let pairs = align_items(&before, &after);
+        let stable = moved_exact_pairs(&pairs);
+        assert_eq!(pairs.len(), 3);
+        let moved = pairs
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| !stable.contains(position))
+            .count();
+        assert_eq!(
+            moved, 0,
+            "exact matches must stay stable across an insertion"
+        );
+        assert!(text_similarity("beta", "new entry") < 0.6);
+    }
+
+    #[test]
+    fn reordered_exact_matches_are_detected_as_moved() {
+        let before = vec![item("alpha"), item("beta"), item("gamma")];
+        let after = vec![item("gamma"), item("alpha"), item("beta")];
+        let pairs = align_items(&before, &after);
+        let stable = moved_exact_pairs(&pairs);
+        assert_eq!(pairs.len(), 3);
+        assert!(
+            stable.len() < 3,
+            "at least one pair must be flagged as moved"
+        );
+    }
+
+    #[test]
+    fn similarity_matches_modified_pairs_with_score() {
+        let before = vec![item("revenue increased by twenty percent")];
+        let after = vec![item("revenue increased by twenty five percent")];
+        let pairs = align_items(&before, &after);
+        assert_eq!(pairs.len(), 1);
+        assert!(!pairs[0].exact);
+        assert!(pairs[0].score >= 0.6);
+        assert!(pairs[0].score < 1.0);
+    }
+
+    #[test]
+    fn change_kind_covers_moved() {
+        assert_eq!(ChangeKind::Moved.to_string(), "moved");
     }
 }
