@@ -781,6 +781,7 @@ const KNOWN_PARAGRAPH_CHILDREN: &[&str] = &[
 ];
 
 const KNOWN_RUN_CHILDREN: &[&str] = &[
+    "r",
     "rPr",
     "t",
     "tab",

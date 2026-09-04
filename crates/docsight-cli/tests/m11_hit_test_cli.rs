@@ -92,8 +92,8 @@ fn hit_pdf_point() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Hit Test on Page 1 at point (100.0, 55.0):"));
     assert!(stdout.contains("Hits: 1"));
-    assert!(stdout.contains("[p_92d5e2c3dcf6e69d] Paragraph"));
-    assert!(stdout.contains("Source:   pdf::page[1]::p[50_49]"));
+    assert!(stdout.contains("[p_c7f2cbe563d57330] Paragraph"));
+    assert!(stdout.contains("Source:   pdf::page[1]::content"));
 
     Ok(())
 }

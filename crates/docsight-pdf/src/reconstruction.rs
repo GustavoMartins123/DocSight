@@ -71,21 +71,17 @@ pub(crate) fn reconstruct_page_semantics(
     };
 
     let mut text_blocks: Vec<Block> = Vec::new();
-    let mut current_paragraph: Option<(String, Rect, f32)> = None;
+    let mut current_paragraph: Option<(String, Rect, f32, u64, u64)> = None;
 
-    let flush_paragraph = |current: &mut Option<(String, Rect, f32)>,
+    let flush_paragraph = |current: &mut Option<(String, Rect, f32, u64, u64)>,
                            blocks: &mut Vec<Block>,
                            page_num: u32,
                            digest: &str| {
-        if let Some((text, bbox, _)) = current.take() {
-            let p_id = ObjectId::new(
-                "p",
-                digest,
-                &format!(
-                    "pdf::page[{page_num}]::p[{:.0}_{:.0}]::{text}",
-                    bbox.x0, bbox.y0
-                ),
-            );
+        if let Some((text, bbox, _, source_offset, source_end)) = current.take() {
+            let anchor_length = source_end.saturating_sub(source_offset).max(1);
+            let anchor_path =
+                format!("pdf::page[{page_num}]::p[{source_offset}_{anchor_length}]::{text}");
+            let p_id = ObjectId::new("p", digest, &anchor_path);
             blocks.push(Block {
                 id: p_id,
                 kind: BlockKind::Paragraph,
@@ -93,10 +89,11 @@ pub(crate) fn reconstruct_page_semantics(
                 bbox: Some(bbox),
                 z_index: 0,
                 reading_order: 0,
-                source: SourceSpan::new(format!(
-                    "pdf::page[{page_num}]::p[{:.0}_{:.0}]",
-                    bbox.x0, bbox.y0
-                )),
+                source: SourceSpan::with_range(
+                    format!("pdf::page[{page_num}]::content"),
+                    source_offset,
+                    anchor_length,
+                ),
                 flags: docsight_core::LayoutFlags::default(),
                 confidence: 0.85,
                 content: BlockContent::Paragraph(ParagraphBlock {
@@ -138,12 +135,13 @@ pub(crate) fn reconstruct_page_semantics(
                 4
             };
 
+            let anchor_length = line.source_end.saturating_sub(line.source_offset).max(1);
             let h_id = ObjectId::new(
                 "h",
                 document_digest,
                 &format!(
-                    "pdf::page[{page}]::h[{:.0}_{:.0}]::{}",
-                    line.bbox.x0, line.bbox.y0, line.text
+                    "pdf::page[{page}]::h[{}_{anchor_length}]::{}",
+                    line.source_offset, line.text
                 ),
             );
 
@@ -154,10 +152,11 @@ pub(crate) fn reconstruct_page_semantics(
                 bbox: Some(line.bbox),
                 z_index: 0,
                 reading_order: 0,
-                source: SourceSpan::new(format!(
-                    "pdf::page[{page}]::h[{:.0}_{:.0}]",
-                    line.bbox.x0, line.bbox.y0
-                )),
+                source: SourceSpan::with_range(
+                    format!("pdf::page[{page}]::content"),
+                    line.source_offset,
+                    anchor_length,
+                ),
                 flags: docsight_core::LayoutFlags::default(),
                 confidence: 0.90,
                 content: BlockContent::Heading(HeadingBlock {
@@ -166,7 +165,14 @@ pub(crate) fn reconstruct_page_semantics(
                     style_id: None,
                 }),
             });
-        } else if let Some((ref mut p_text, ref mut p_bbox, ref mut last_y1)) = current_paragraph {
+        } else if let Some((
+            ref mut p_text,
+            ref mut p_bbox,
+            ref mut last_y1,
+            ref mut p_off,
+            ref mut p_end,
+        )) = current_paragraph
+        {
             let gap = line.bbox.y0 - *last_y1;
             if gap <= line.font_size * 1.6 && gap >= -2.0 {
                 p_text.push(' ');
@@ -179,6 +185,8 @@ pub(crate) fn reconstruct_page_semantics(
                     *p_bbox = rect;
                 }
                 *last_y1 = line.bbox.y1;
+                *p_off = (*p_off).min(line.source_offset);
+                *p_end = (*p_end).max(line.source_end);
             } else {
                 flush_paragraph(
                     &mut current_paragraph,
@@ -186,10 +194,22 @@ pub(crate) fn reconstruct_page_semantics(
                     page,
                     document_digest,
                 );
-                current_paragraph = Some((line.text.clone(), line.bbox, line.bbox.y1));
+                current_paragraph = Some((
+                    line.text.clone(),
+                    line.bbox,
+                    line.bbox.y1,
+                    line.source_offset,
+                    line.source_end,
+                ));
             }
         } else {
-            current_paragraph = Some((line.text.clone(), line.bbox, line.bbox.y1));
+            current_paragraph = Some((
+                line.text.clone(),
+                line.bbox,
+                line.bbox.y1,
+                line.source_offset,
+                line.source_end,
+            ));
         }
     }
 
@@ -242,6 +262,8 @@ struct LineCandidate {
     bbox: Rect,
     font_size: f32,
     bold: bool,
+    source_offset: u64,
+    source_end: u64,
 }
 
 fn cluster_runs_into_lines(runs: &[TextRun]) -> Vec<LineCandidate> {
@@ -301,6 +323,8 @@ fn cluster_runs_into_lines(runs: &[TextRun]) -> Vec<LineCandidate> {
         let mut max_y = f32::NEG_INFINITY;
         let mut total_font_size = 0.0;
         let mut bold_count = 0;
+        let mut source_offset = u64::MAX;
+        let mut source_end = 0_u64;
 
         for run in &group {
             if let Some(last_x) = prev_x1 {
@@ -321,6 +345,11 @@ fn cluster_runs_into_lines(runs: &[TextRun]) -> Vec<LineCandidate> {
             if run.bold {
                 bold_count += 1;
             }
+            source_offset = source_offset.min(run.source_offset);
+            source_end = source_end.max(run.source_offset.saturating_add(run.source_length));
+        }
+        if source_offset == u64::MAX {
+            source_offset = 0;
         }
 
         let bbox = match Rect::new(min_x, min_y, max_x, max_y) {
@@ -340,6 +369,8 @@ fn cluster_runs_into_lines(runs: &[TextRun]) -> Vec<LineCandidate> {
             text: line_text,
             bbox,
             font_size,
+            source_offset,
+            source_end,
             bold,
         });
     }

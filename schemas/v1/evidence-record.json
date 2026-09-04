@@ -10,43 +10,109 @@
     "z_index",
     "reading_order",
     "fidelity",
-    "safe_source_fragment"
+    "text_fragment"
   ],
   "properties": {
-    "document_digest": { "type": "string" },
-    "object_id": { "type": "string" },
-    "kind": { "type": "string" },
-    "source_path": { "type": "string" },
-    "source_offset": { "type": ["integer", "null"] },
-    "page": { "type": ["integer", "null"] },
     "bbox": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "x0": { "type": "number" },
-        "y0": { "type": "number" },
-        "x1": { "type": "number" },
-        "y1": { "type": "number" }
+        "x0": {
+          "type": "number"
+        },
+        "y0": {
+          "type": "number"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        }
       },
-      "required": ["x0", "y0", "x1", "y1"]
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ]
     },
-    "z_index": { "type": "integer" },
-    "reading_order": { "type": "integer" },
-    "confidence": { "type": ["number", "null"] },
+    "confidence": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "document_digest": {
+      "type": "string"
+    },
     "fidelity": {
       "type": "object",
-      "required": ["text", "structure", "geometry", "visual", "reasons"],
+      "required": [
+        "text",
+        "structure",
+        "geometry",
+        "visual",
+        "reasons"
+      ],
       "properties": {
-        "text": { "type": "number" },
-        "structure": { "type": "number" },
-        "geometry": { "type": "number" },
-        "visual": { "type": "number" },
+        "text": {
+          "type": "number"
+        },
+        "structure": {
+          "type": "number"
+        },
+        "geometry": {
+          "type": "number"
+        },
+        "visual": {
+          "type": "number"
+        },
         "reasons": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
-    "render_fingerprint": { "type": ["string", "null"] },
-    "safe_source_fragment": { "type": "string" }
+    "kind": {
+      "type": "string"
+    },
+    "object_id": {
+      "type": "string"
+    },
+    "page": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "reading_order": {
+      "type": "integer"
+    },
+    "render_fingerprint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_offset": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source_path": {
+      "type": "string"
+    },
+    "text_fragment": {
+      "type": "string"
+    },
+    "z_index": {
+      "type": "integer"
+    }
   }
 }

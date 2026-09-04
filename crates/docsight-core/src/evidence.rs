@@ -1,7 +1,29 @@
 use crate::{
-    BlockKind, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId, Rect,
+    Block, BlockKind, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId, Rect,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+const TEXT_LOSS_CODES: &[&str] = &["DOCX_RUN_ELEMENT_UNSUPPORTED"];
+
+const GEOMETRY_WARNING_CODES: &[&str] = &[
+    "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
+    "DOCX_BLOCK_TALLER_THAN_PAGE",
+];
+
+const GLOBAL_GEOMETRY_PENALTIES: &[(&str, f32)] = &[
+    ("DOCX_FONT_SUBSTITUTED", 0.060),
+    ("DOCX_PAGINATION_BLOCK_GRANULAR", 0.020),
+    ("APPROXIMATED_BASE14_FONT", 0.040),
+];
+
+const GLOBAL_VISUAL_PENALTIES: &[(&str, f32)] = &[
+    ("DOCX_FONT_SUBSTITUTED", 0.100),
+    ("APPROXIMATED_BASE14_FONT", 0.060),
+];
+
+const FIGURE_PLACEHOLDER_VISUAL_PENALTY: f32 = 0.900;
+const UNKNOWN_STRUCTURE_PENALTY: f32 = 1.000;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FidelityProfile {
@@ -13,49 +35,147 @@ pub struct FidelityProfile {
 }
 
 impl FidelityProfile {
-    pub fn for_docx(warnings: &[Diagnostic]) -> Self {
-        let mut reasons: Vec<String> = warnings.iter().map(|w| w.code.clone()).collect();
-        reasons.sort();
-        reasons.dedup();
-        let has_font_sub = reasons.iter().any(|r| r == "DOCX_FONT_SUBSTITUTED");
-        let has_layout_pag = reasons.iter().any(|r| r == "DOCX_LAYOUT_PAGINATED");
-        let geometry = if has_font_sub {
-            0.943
-        } else if has_layout_pag {
-            0.980
-        } else {
-            1.000
-        };
-        let visual = if has_font_sub { 0.812 } else { 0.980 };
-        Self {
-            text: 1.000,
-            structure: 1.000,
-            geometry,
-            visual,
-            reasons,
-        }
-    }
-
-    pub fn for_pdf(warnings: &[Diagnostic], block_confidence: Option<f32>) -> Self {
-        let mut reasons: Vec<String> = warnings.iter().map(|w| w.code.clone()).collect();
-        reasons.sort();
-        reasons.dedup();
-        let structure = block_confidence.unwrap_or(0.850);
-        let has_font_approx = reasons
-            .iter()
-            .any(|r| r.contains("FONT") || r.contains("BASE14"));
-        let visual = if has_font_approx { 0.880 } else { 0.950 };
-        Self {
-            text: 1.000,
-            structure,
-            geometry: 0.990,
-            visual,
-            reasons,
-        }
-    }
-
     pub fn overall(&self) -> f32 {
         (self.text + self.structure + self.geometry + self.visual) / 4.0
+    }
+}
+
+pub struct FidelityInputs<'a> {
+    pub blocks: &'a [&'a Block],
+    pub glyph_coverage: f32,
+    pub single_block_confidence: Option<f32>,
+}
+
+fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityProfile {
+    let total = inputs.blocks.len();
+    let reasons: BTreeSet<String> = doc.warnings.iter().map(|w| w.code.clone()).collect();
+
+    let text_loss_objects: BTreeSet<&ObjectId> = doc
+        .warnings
+        .iter()
+        .filter(|warning| TEXT_LOSS_CODES.contains(&warning.code.as_str()))
+        .filter_map(|warning| warning.object.as_ref())
+        .collect();
+    let text_blocks_total = inputs
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.kind,
+                BlockKind::Paragraph | BlockKind::Heading | BlockKind::ListItem | BlockKind::Note
+            )
+        })
+        .count();
+    let text_blocks_affected = inputs
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.kind,
+                BlockKind::Paragraph | BlockKind::Heading | BlockKind::ListItem | BlockKind::Note
+            ) && text_loss_objects.contains(&block.id)
+        })
+        .count();
+    let text = if text_blocks_total == 0 {
+        1.0
+    } else {
+        1.0 - text_blocks_affected as f32 / text_blocks_total as f32
+    };
+
+    let structure = match doc.format {
+        DocumentFormat::Docx => {
+            if total == 0 {
+                1.0
+            } else {
+                let unknown = inputs
+                    .blocks
+                    .iter()
+                    .filter(|block| block.kind == BlockKind::Unknown)
+                    .count();
+                1.0 - UNKNOWN_STRUCTURE_PENALTY * unknown as f32 / total as f32
+            }
+        }
+        DocumentFormat::Pdf => match inputs.single_block_confidence {
+            Some(confidence) => confidence,
+            None => {
+                if total == 0 {
+                    1.0
+                } else {
+                    let sum: f32 = inputs.blocks.iter().map(|block| block.confidence).sum();
+                    sum / total as f32
+                }
+            }
+        },
+    };
+
+    let placed = inputs
+        .blocks
+        .iter()
+        .filter(|block| block.page.is_some() && block.bbox.is_some())
+        .count();
+    let placed_ratio = if total == 0 {
+        1.0
+    } else {
+        placed as f32 / total as f32
+    };
+    let geometry_warning_objects: BTreeSet<&ObjectId> = doc
+        .warnings
+        .iter()
+        .filter(|warning| GEOMETRY_WARNING_CODES.contains(&warning.code.as_str()))
+        .filter_map(|warning| warning.object.as_ref())
+        .collect();
+    let geometry_affected = inputs
+        .blocks
+        .iter()
+        .filter(|block| geometry_warning_objects.contains(&block.id))
+        .count();
+    let mut geometry_penalty = 0.0_f32;
+    for (code, penalty) in GLOBAL_GEOMETRY_PENALTIES {
+        if reasons.contains(*code) {
+            geometry_penalty += penalty;
+        }
+    }
+    if total > 0 {
+        geometry_penalty += 0.500 * geometry_affected as f32 / total as f32;
+    }
+    let geometry = placed_ratio * (1.0 - geometry_penalty.min(1.0));
+
+    let figures_total = inputs
+        .blocks
+        .iter()
+        .filter(|block| block.kind == BlockKind::Figure)
+        .count();
+    let placeholder_figures = inputs
+        .blocks
+        .iter()
+        .filter(|block| block.kind == BlockKind::Figure)
+        .filter(|block| {
+            doc.warnings.iter().any(|warning| {
+                warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"
+                    && warning.object.as_ref() == Some(&block.id)
+            })
+        })
+        .count();
+    let placeholder_share = if figures_total == 0 || total == 0 {
+        0.0
+    } else {
+        placeholder_figures as f32 / total as f32
+    };
+    let mut visual_penalty = 0.0_f32;
+    for (code, penalty) in GLOBAL_VISUAL_PENALTIES {
+        if reasons.contains(*code) {
+            visual_penalty += penalty;
+        }
+    }
+    visual_penalty += FIGURE_PLACEHOLDER_VISUAL_PENALTY * placeholder_share;
+    let visual = inputs.glyph_coverage * (1.0 - visual_penalty.min(1.0));
+
+    FidelityProfile {
+        text,
+        structure,
+        geometry,
+        visual,
+        reasons: reasons.into_iter().collect(),
     }
 }
 
@@ -78,7 +198,7 @@ pub struct EvidenceRecord {
     pub fidelity: FidelityProfile,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub render_fingerprint: Option<String>,
-    pub safe_source_fragment: String,
+    pub text_fragment: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -147,6 +267,7 @@ pub fn compute_evidence(
     source: &DocumentSource,
     object_id: &ObjectId,
     render_fingerprint: Option<String>,
+    glyph_coverage: f32,
 ) -> Result<EvidenceRecord, DocsightError> {
     let block =
         doc.find_block(object_id.as_str())
@@ -154,17 +275,17 @@ pub fn compute_evidence(
                 object: object_id.to_string(),
             })?;
 
-    let fidelity = match source.format() {
-        DocumentFormat::Docx => FidelityProfile::for_docx(&doc.warnings),
-        DocumentFormat::Pdf => FidelityProfile::for_pdf(&doc.warnings, Some(block.confidence)),
-    };
+    let fidelity = measured_fidelity(
+        doc,
+        &FidelityInputs {
+            blocks: &[block],
+            glyph_coverage,
+            single_block_confidence: Some(block.confidence),
+        },
+    );
 
     let full_text = block.text();
-    let safe_source_fragment = if full_text.len() > 300 {
-        format!("{}...", &full_text[..300])
-    } else {
-        full_text
-    };
+    let text_fragment = truncate_at_char_boundary(&full_text, 300);
 
     Ok(EvidenceRecord {
         document_digest: source.sha256().to_owned(),
@@ -183,8 +304,209 @@ pub fn compute_evidence(
         },
         fidelity,
         render_fingerprint,
-        safe_source_fragment,
+        text_fragment,
     })
+}
+
+fn truncate_at_char_boundary(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    format!("{}...", &text[..boundary])
+}
+
+fn metric_reason_codes(profile: &FidelityProfile, relevant: &[&str]) -> Vec<String> {
+    profile
+        .reasons
+        .iter()
+        .filter(|reason| relevant.contains(&reason.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn coverage_metric(
+    score: f32,
+    exact_status: CoverageStatus,
+    degraded_status: CoverageStatus,
+    reasons: Vec<String>,
+    unsupported: bool,
+) -> CoverageMetric {
+    let status = if unsupported {
+        CoverageStatus::Unsupported
+    } else if score >= 0.999 {
+        exact_status
+    } else {
+        degraded_status
+    };
+    CoverageMetric {
+        score,
+        status,
+        reason_codes: reasons,
+    }
+}
+
+fn page_coverage(
+    doc: &Document,
+    page: u32,
+    page_blocks: &[&Block],
+    glyph_coverage: f32,
+    include_regions: bool,
+    affected_ids: &mut BTreeSet<String>,
+    all_reason_codes: &mut BTreeSet<String>,
+) -> PageCoverage {
+    let fidelity = measured_fidelity(
+        doc,
+        &FidelityInputs {
+            blocks: page_blocks,
+            glyph_coverage,
+            single_block_confidence: None,
+        },
+    );
+    for reason in &fidelity.reasons {
+        all_reason_codes.insert(reason.clone());
+    }
+
+    let mut regions = Vec::new();
+
+    for block in page_blocks {
+        if block.kind == BlockKind::Unknown {
+            affected_ids.insert(block.id.to_string());
+            all_reason_codes.insert("DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned());
+            if include_regions {
+                regions.push(CoverageRegion {
+                    page,
+                    object_id: Some(block.id.clone()),
+                    bbox: block.bbox,
+                    status: CoverageStatus::Unsupported,
+                    reason_code: "DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned(),
+                    description:
+                        "element preserved as an opaque node without semantic interpretation"
+                            .to_owned(),
+                });
+            }
+        }
+        if block.kind == BlockKind::Figure
+            && doc.warnings.iter().any(|warning| {
+                warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"
+                    && warning.object.as_ref() == Some(&block.id)
+            })
+        {
+            affected_ids.insert(block.id.to_string());
+            all_reason_codes.insert("DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned());
+            if include_regions {
+                regions.push(CoverageRegion {
+                    page,
+                    object_id: Some(block.id.clone()),
+                    bbox: block.bbox,
+                    status: CoverageStatus::Unsupported,
+                    reason_code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
+                    description: "embedded image bytes are not rasterized; visual evidence is a placeholder box"
+                        .to_owned(),
+                });
+            }
+        }
+        if doc.warnings.iter().any(|warning| {
+            TEXT_LOSS_CODES.contains(&warning.code.as_str())
+                && warning.object.as_ref() == Some(&block.id)
+        }) {
+            affected_ids.insert(block.id.to_string());
+            if include_regions {
+                regions.push(CoverageRegion {
+                    page,
+                    object_id: Some(block.id.clone()),
+                    bbox: block.bbox,
+                    status: CoverageStatus::Approximated,
+                    reason_code: "DOCX_RUN_ELEMENT_UNSUPPORTED".to_owned(),
+                    description:
+                        "paragraph text may be incomplete because run content was not extracted"
+                            .to_owned(),
+                });
+            }
+        }
+        if doc.format == DocumentFormat::Pdf && block.confidence < 0.95 {
+            affected_ids.insert(block.id.to_string());
+            let reason = if block.kind == BlockKind::Table {
+                "INFERRED_TABLE"
+            } else {
+                "INFERRED_SEMANTICS"
+            };
+            all_reason_codes.insert(reason.to_owned());
+            if include_regions {
+                regions.push(CoverageRegion {
+                    page,
+                    object_id: Some(block.id.clone()),
+                    bbox: block.bbox,
+                    status: CoverageStatus::Inferred,
+                    reason_code: reason.to_owned(),
+                    description: format!(
+                        "semantic structure inferred with confidence {:.3}",
+                        block.confidence
+                    ),
+                });
+            }
+        }
+    }
+
+    let text_reasons = metric_reason_codes(&fidelity, TEXT_LOSS_CODES);
+    let structure_unsupported = !page_blocks.is_empty()
+        && page_blocks
+            .iter()
+            .all(|block| block.kind == BlockKind::Unknown);
+    let geometry_reasons = metric_reason_codes(
+        &fidelity,
+        &[
+            "DOCX_FONT_SUBSTITUTED",
+            "DOCX_PAGINATION_BLOCK_GRANULAR",
+            "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
+            "DOCX_BLOCK_TALLER_THAN_PAGE",
+        ],
+    );
+    let visual_reasons = metric_reason_codes(
+        &fidelity,
+        &[
+            "DOCX_FONT_SUBSTITUTED",
+            "APPROXIMATED_BASE14_FONT",
+            "DOCX_FIGURE_RASTER_PLACEHOLDER",
+        ],
+    );
+
+    PageCoverage {
+        page,
+        text: coverage_metric(
+            fidelity.text,
+            CoverageStatus::Exact,
+            CoverageStatus::Approximated,
+            text_reasons,
+            false,
+        ),
+        structure: coverage_metric(
+            fidelity.structure,
+            CoverageStatus::Exact,
+            CoverageStatus::Inferred,
+            Vec::new(),
+            structure_unsupported,
+        ),
+        geometry: coverage_metric(
+            fidelity.geometry,
+            CoverageStatus::Exact,
+            CoverageStatus::Approximated,
+            geometry_reasons,
+            false,
+        ),
+        visual: coverage_metric(
+            fidelity.visual,
+            CoverageStatus::Exact,
+            CoverageStatus::Approximated,
+            visual_reasons,
+            false,
+        ),
+        overall_fidelity: fidelity.overall(),
+        regions,
+    }
 }
 
 pub fn compute_coverage(
@@ -192,161 +514,44 @@ pub fn compute_coverage(
     source: &DocumentSource,
     page_filter: Option<u32>,
     include_regions: bool,
+    glyph_coverage: f32,
 ) -> Result<CoverageReport, DocsightError> {
-    let mut page_coverages = Vec::new();
-    let mut all_affected_ids = std::collections::BTreeSet::new();
-    let mut all_reason_codes = std::collections::BTreeSet::new();
-
-    let doc_fidelity = match source.format() {
-        DocumentFormat::Docx => FidelityProfile::for_docx(&doc.warnings),
-        DocumentFormat::Pdf => FidelityProfile::for_pdf(&doc.warnings, None),
-    };
-
-    for code in &doc_fidelity.reasons {
-        all_reason_codes.insert(code.clone());
-    }
+    let mut affected_ids = BTreeSet::new();
+    let mut all_reason_codes = BTreeSet::new();
 
     let pages_to_process: Vec<u32> = match page_filter {
-        Some(p) => vec![p],
+        Some(page) => vec![page],
         None => doc.pages.iter().map(|page| page.number).collect(),
     };
 
-    for page_num in pages_to_process {
-        let page_blocks: Vec<_> = doc
+    let mut page_coverages = Vec::with_capacity(pages_to_process.len());
+    for page in pages_to_process {
+        let page_blocks: Vec<&Block> = doc
             .blocks
             .iter()
-            .filter(|b| b.page == Some(page_num))
+            .filter(|block| block.page == Some(page))
             .collect();
-
-        let mut regions = Vec::new();
-
-        if include_regions {
-            for block in &page_blocks {
-                match source.format() {
-                    DocumentFormat::Docx => {
-                        if doc_fidelity
-                            .reasons
-                            .iter()
-                            .any(|r| r == "DOCX_FONT_SUBSTITUTED")
-                        {
-                            all_affected_ids.insert(block.id.to_string());
-                            regions.push(CoverageRegion {
-                                page: page_num,
-                                object_id: Some(block.id.clone()),
-                                bbox: block.bbox,
-                                status: CoverageStatus::Approximated,
-                                reason_code: "DOCX_FONT_SUBSTITUTED".to_owned(),
-                                description: "proportional fallback metrics used for run layout"
-                                    .to_owned(),
-                            });
-                        }
-                    }
-                    DocumentFormat::Pdf => {
-                        if block.confidence < 0.95 {
-                            all_affected_ids.insert(block.id.to_string());
-                            let reason = if block.kind == BlockKind::Table {
-                                "INFERRED_TABLE"
-                            } else {
-                                "INFERRED_SEMANTICS"
-                            };
-                            all_reason_codes.insert(reason.to_owned());
-                            regions.push(CoverageRegion {
-                                page: page_num,
-                                object_id: Some(block.id.clone()),
-                                bbox: block.bbox,
-                                status: CoverageStatus::Inferred,
-                                reason_code: reason.to_owned(),
-                                description: format!(
-                                    "semantic structure inferred with confidence {:.3}",
-                                    block.confidence
-                                ),
-                            });
-                        }
-                    }
-                }
-            }
-        } else {
-            for block in &page_blocks {
-                if block.confidence < 0.95 || source.format() == DocumentFormat::Docx {
-                    all_affected_ids.insert(block.id.to_string());
-                }
-            }
-        }
-
-        let geom_status = if doc_fidelity.geometry < 0.999 {
-            CoverageStatus::Approximated
-        } else {
-            CoverageStatus::Exact
-        };
-
-        let visual_status = if doc_fidelity.visual < 0.999 {
-            CoverageStatus::Approximated
-        } else {
-            CoverageStatus::Exact
-        };
-
-        let struct_status = if doc_fidelity.structure < 0.999 {
-            CoverageStatus::Inferred
-        } else {
-            CoverageStatus::Exact
-        };
-
-        page_coverages.push(PageCoverage {
-            page: page_num,
-            text: CoverageMetric {
-                score: doc_fidelity.text,
-                status: CoverageStatus::Exact,
-                reason_codes: Vec::new(),
-            },
-            structure: CoverageMetric {
-                score: doc_fidelity.structure,
-                status: struct_status,
-                reason_codes: doc_fidelity.reasons.clone(),
-            },
-            geometry: CoverageMetric {
-                score: doc_fidelity.geometry,
-                status: geom_status,
-                reason_codes: doc_fidelity.reasons.clone(),
-            },
-            visual: CoverageMetric {
-                score: doc_fidelity.visual,
-                status: visual_status,
-                reason_codes: doc_fidelity.reasons.clone(),
-            },
-            overall_fidelity: doc_fidelity.overall(),
-            regions,
-        });
+        page_coverages.push(page_coverage(
+            doc,
+            page,
+            &page_blocks,
+            glyph_coverage,
+            include_regions,
+            &mut affected_ids,
+            &mut all_reason_codes,
+        ));
     }
 
-    let global = if let Some(first) = page_coverages.first() {
-        first.clone()
-    } else {
-        PageCoverage {
-            page: 1,
-            text: CoverageMetric {
-                score: 1.0,
-                status: CoverageStatus::Exact,
-                reason_codes: Vec::new(),
-            },
-            structure: CoverageMetric {
-                score: 1.0,
-                status: CoverageStatus::Exact,
-                reason_codes: Vec::new(),
-            },
-            geometry: CoverageMetric {
-                score: 1.0,
-                status: CoverageStatus::Exact,
-                reason_codes: Vec::new(),
-            },
-            visual: CoverageMetric {
-                score: 1.0,
-                status: CoverageStatus::Exact,
-                reason_codes: Vec::new(),
-            },
-            overall_fidelity: 1.0,
-            regions: Vec::new(),
-        }
-    };
+    let all_blocks: Vec<&Block> = doc.blocks.iter().collect();
+    let global = page_coverage(
+        doc,
+        0,
+        &all_blocks,
+        glyph_coverage,
+        false,
+        &mut affected_ids,
+        &mut all_reason_codes,
+    );
 
     let reason_codes: Vec<String> = all_reason_codes.into_iter().collect();
 
@@ -355,7 +560,7 @@ pub fn compute_coverage(
         format: source.format(),
         global,
         pages: page_coverages,
-        affected_objects_count: all_affected_ids.len(),
+        affected_objects_count: affected_ids.len(),
         reason_codes,
     })
 }

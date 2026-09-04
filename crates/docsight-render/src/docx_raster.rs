@@ -89,7 +89,7 @@ pub(crate) fn rasterize_docx_page(
             if character == ' ' {
                 continue;
             }
-            let pattern = glyph(character);
+            let pattern = glyph(character).unwrap_or([31, 17, 17, 17, 17, 17, 31]);
             let left = run.bbox.x0 + index as f32 * advance;
             for (row, bits) in pattern.iter().enumerate() {
                 for column in 0..5 {
@@ -266,14 +266,37 @@ pub fn raster_font_fingerprint() -> String {
             continue;
         };
         hasher.update(code.to_le_bytes());
-        hasher.update(glyph(character));
+        if let Some(pattern) = glyph(character) {
+            hasher.update(pattern);
+        } else {
+            hasher.update([0_u8; 7]);
+        }
     }
     let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn glyph(character: char) -> [u8; 7] {
-    match character {
+pub fn glyph_coverage(text: &str) -> f32 {
+    let mut total = 0_usize;
+    let mut covered = 0_usize;
+    for character in text.chars() {
+        if character.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if glyph(character).is_some() {
+            covered += 1;
+        }
+    }
+    if total == 0 {
+        1.0
+    } else {
+        covered as f32 / total as f32
+    }
+}
+
+fn glyph(character: char) -> Option<[u8; 7]> {
+    let pattern = match character {
         'A' => [14, 17, 17, 31, 17, 17, 17],
         'B' => [30, 17, 17, 30, 17, 17, 30],
         'C' => [14, 17, 16, 16, 16, 17, 14],
@@ -358,6 +381,7 @@ fn glyph(character: char) -> [u8; 7] {
         '%' => [25, 25, 2, 4, 8, 19, 19],
         '&' => [12, 18, 20, 8, 21, 18, 13],
         '@' => [14, 17, 23, 21, 23, 16, 14],
-        _ => [31, 17, 17, 17, 17, 17, 31],
-    }
+        _ => return None,
+    };
+    Some(pattern)
 }

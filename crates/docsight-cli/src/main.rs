@@ -4,9 +4,9 @@ use docsight_agent::{
     truncate_json_strings, validate_projection,
 };
 use docsight_core::{
-    BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
-    Rect, compute_coverage, compute_evidence, table_to_csv, table_to_html, table_to_markdown,
-    table_to_tsv, table_to_tsv_string,
+    BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
+    DocumentSource, ObjectId, Rect, compute_coverage, compute_evidence, table_to_csv,
+    table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
 use docsight_diff::{DiffOptions, diff_documents};
 use docsight_layout::layout_docx;
@@ -168,6 +168,8 @@ enum Command {
     Evidence {
         path: PathBuf,
         object: String,
+        #[arg(long, default_value_t = 144)]
+        render_dpi: u16,
         #[arg(long)]
         json: bool,
     },
@@ -527,9 +529,15 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             cli.quiet,
             cli.json_errors,
         ),
-        Command::Evidence { path, object, json } => evidence(
+        Command::Evidence {
             path,
             object,
+            render_dpi,
+            json,
+        } => evidence(
+            path,
+            object,
+            *render_dpi,
             cli.is_agent_json(*json),
             &limits,
             cli.quiet,
@@ -1615,6 +1623,7 @@ fn fingerprint(
 fn evidence(
     path: &Path,
     object: &str,
+    render_dpi: u16,
     json: bool,
     limits: &QueryLimits,
     quiet: bool,
@@ -1623,33 +1632,50 @@ fn evidence(
     let source = DocumentSource::open(path)?;
     let doc = load_document(&source)?;
     let obj_id = ObjectId::from_raw(object);
+    let mut extra_warnings = Vec::new();
 
     let render_fingerprint = {
         let req = RenderRequest {
             target: RenderTarget::Object {
                 id: object.to_owned(),
             },
-            dpi: 144,
+            dpi: render_dpi,
         };
-        if let Ok(rendered) = render_document(&source, &req) {
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(rendered.png());
-            let hash = hasher.finalize();
-            let mut s = String::with_capacity(64);
-            for b in hash {
-                use std::fmt::Write as _;
-                let _ = write!(&mut s, "{b:02x}");
+        match render_document(&source, &req) {
+            Ok(rendered) => {
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(rendered.png());
+                let hash = hasher.finalize();
+                let mut s = String::with_capacity(64);
+                for b in hash {
+                    use std::fmt::Write as _;
+                    let _ = write!(&mut s, "{b:02x}");
+                }
+                Some(s)
             }
-            Some(s)
-        } else {
-            None
+            Err(render_error) => {
+                extra_warnings.push(Diagnostic {
+                    code: "RENDER_FINGERPRINT_UNAVAILABLE".to_owned(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!(
+                        "render fingerprint was not computed for {object}: {render_error}"
+                    ),
+                    effect: "visual provenance for this object is missing".to_owned(),
+                    object: Some(obj_id.clone()),
+                    page: None,
+                });
+                None
+            }
         }
     };
 
-    let record = compute_evidence(&doc, &source, &obj_id, render_fingerprint)?;
+    let glyph_coverage = document_glyph_coverage(&doc, &source);
+    let record = compute_evidence(&doc, &source, &obj_id, render_fingerprint, glyph_coverage)?;
+    let mut warnings = doc.warnings.clone();
+    warnings.extend(extra_warnings);
 
     if json {
-        return write_single_json(&source, &record, doc.warnings, limits);
+        return write_single_json(&source, &record, warnings, limits);
     }
 
     let stdout = io::stdout();
@@ -1697,15 +1723,22 @@ fn evidence(
     if let Some(ref fp) = record.render_fingerprint {
         writeln!(writer, "  Render Hash:       {}", fp).map_err(stdout_error)?;
     }
-    if !record.safe_source_fragment.is_empty() {
-        writeln!(
-            writer,
-            "  Source Fragment:   {:?}",
-            record.safe_source_fragment
-        )
-        .map_err(stdout_error)?;
+    if !record.text_fragment.is_empty() {
+        writeln!(writer, "  Source Fragment:   {:?}", record.text_fragment)
+            .map_err(stdout_error)?;
     }
-    emit_warnings(&doc.warnings, quiet, json_errors)
+    emit_warnings(&warnings, quiet, json_errors)
+}
+
+fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
+    let mut text = String::new();
+    for block in &doc.blocks {
+        text.push_str(&block.text());
+    }
+    match source.format() {
+        DocumentFormat::Docx => docsight_render::glyph_coverage(&text),
+        DocumentFormat::Pdf => docsight_pdf::pdf_glyph_coverage(&text),
+    }
 }
 
 struct CoverageArgs<'a> {
@@ -1722,7 +1755,8 @@ struct CoverageArgs<'a> {
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
     let doc = load_document(&source)?;
-    let report = compute_coverage(&doc, &source, args.page, args.regions)?;
+    let glyph_coverage = document_glyph_coverage(&doc, &source);
+    let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
 
     if args.ndjson {
         let stdout = io::stdout();

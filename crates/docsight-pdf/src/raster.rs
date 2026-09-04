@@ -517,3 +517,22 @@ fn glyph(character: char) -> Option<[u8; 7]> {
     };
     Some(pattern)
 }
+
+pub fn glyph_coverage(text: &str) -> f32 {
+    let mut total = 0_usize;
+    let mut covered = 0_usize;
+    for character in text.chars() {
+        if character.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if glyph(character).is_some() {
+            covered += 1;
+        }
+    }
+    if total == 0 {
+        1.0
+    } else {
+        covered as f32 / total as f32
+    }
+}

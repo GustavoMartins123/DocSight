@@ -18,7 +18,10 @@ pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PAGES: u32 = 10_000;
 pub use raster::MIN_DPI as PDF_MIN_DPI;
-pub use raster::{MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS};
+pub use raster::{
+    MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS,
+    glyph_coverage as pdf_glyph_coverage,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PdfPageInfo {
