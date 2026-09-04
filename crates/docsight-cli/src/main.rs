@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use docsight_agent::{
     AgentEnvelope, NdjsonWriter, OutputLimits, QueryLimits, apply_bounded_collection, project_json,
-    truncate_json_strings,
+    truncate_json_strings, validate_projection,
 };
 use docsight_core::{
     BlockContent, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
@@ -407,7 +407,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             path,
             object,
             format,
-        } => table(path, object, *format, cli.quiet, cli.json_errors),
+        } => table(path, object, *format, &limits, cli.quiet, cli.json_errors),
         Command::Page { path, page, json } => page_command(
             path,
             *page,
@@ -824,17 +824,51 @@ fn page_command(
     }
 
     if json {
-        let envelope =
-            apply_bounded_collection(&spans, limits, "page", &source, document.warnings, |s| {
+        #[derive(Clone, Serialize)]
+        enum PageItem {
+            Span(PageSpanRecord),
+            Overlay(PageOverlayRecord),
+        }
+        let items: Vec<PageItem> = spans
+            .iter()
+            .map(|span| PageItem::Span(span.clone()))
+            .chain(
+                overlays
+                    .iter()
+                    .map(|overlay| PageItem::Overlay(overlay.clone())),
+            )
+            .collect();
+        let envelope = apply_bounded_collection(
+            &items,
+            limits,
+            "page",
+            &source,
+            document.warnings,
+            |bounded| {
+                let bounded_spans: Vec<PageSpanRecord> = bounded
+                    .iter()
+                    .filter_map(|item| match item {
+                        PageItem::Span(span) => Some(span.clone()),
+                        PageItem::Overlay(_) => None,
+                    })
+                    .collect();
+                let bounded_overlays: Vec<PageOverlayRecord> = bounded
+                    .iter()
+                    .filter_map(|item| match item {
+                        PageItem::Overlay(overlay) => Some(overlay.clone()),
+                        PageItem::Span(_) => None,
+                    })
+                    .collect();
                 serde_json::to_value(PageResult {
                     number: target_page_number,
                     width_pt: target_page_width,
                     height_pt: target_page_height,
-                    spans: s,
-                    overlays: overlays.clone(),
+                    spans: bounded_spans,
+                    overlays: bounded_overlays,
                 })
                 .map_err(output_serialization_error)
-            })?;
+            },
+        )?;
         return write_envelope(&envelope);
     }
 
@@ -1055,6 +1089,7 @@ fn table(
     path: &PathBuf,
     object: &str,
     format: TableFormat,
+    limits: &QueryLimits,
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
@@ -1072,12 +1107,7 @@ fn table(
     let mut writer = stdout.lock();
     match format {
         TableFormat::Json => {
-            return write_single_json(
-                &source,
-                target,
-                document.warnings.clone(),
-                &QueryLimits::default(),
-            );
+            return write_single_json(&source, target, document.warnings.clone(), limits);
         }
         TableFormat::Markdown => {
             let md = table_to_markdown(target)?;
@@ -1299,9 +1329,20 @@ fn write_single_json<T: Serialize>(
         truncate_json_strings(&mut val, text_limit);
     }
     if let Some(ref select) = limits.select {
+        validate_projection(&val, select)?;
         val = project_json(&val, select);
     }
     let envelope = AgentEnvelope::with_limits(source, val, warnings, OutputLimits::default());
+    if let Some(max_bytes) = limits.max_bytes {
+        let serialized = serde_json::to_string(&envelope).map_err(output_serialization_error)?;
+        if serialized.len() > max_bytes {
+            return Err(DocsightError::InvalidArgument {
+                message: format!(
+                    "--max-bytes {max_bytes} is smaller than the requested single-result payload; increase the cap or use --select to reduce the output"
+                ),
+            });
+        }
+    }
     write_envelope(&envelope)
 }
 

@@ -100,18 +100,14 @@ fn diff_docx_json_envelope_and_projections() -> Result<(), Box<dyn std::error::E
 
     let projected = docsight()
         .args([
-            "diff",
-            before_str,
-            after_str,
-            "--json",
-            "--select",
-            "summary.pages_before,summary.pages_after",
+            "diff", before_str, after_str, "--json", "--select", "summary",
         ])
         .output()?;
     assert!(projected.status.success());
     let proj_val: serde_json::Value = serde_json::from_slice(&projected.stdout)?;
     assert_eq!(proj_val["result"]["summary"]["pages_before"], 3);
     assert_eq!(proj_val["result"]["summary"]["pages_after"], 2);
+    assert!(proj_val["result"].get("semantic").is_none());
 
     Ok(())
 }

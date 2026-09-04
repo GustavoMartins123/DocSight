@@ -271,6 +271,42 @@ pub fn project_json(val: &serde_json::Value, select: &[String]) -> serde_json::V
     }
 }
 
+pub fn validate_projection(
+    val: &serde_json::Value,
+    select: &[String],
+) -> Result<(), DocsightError> {
+    if select.is_empty() {
+        return Ok(());
+    }
+    let unknown: Vec<&String> = select
+        .iter()
+        .filter(|key| !value_contains_key(val, key))
+        .collect();
+    if !unknown.is_empty() {
+        let names: Vec<String> = unknown.iter().map(|key| key.to_string()).collect();
+        return Err(DocsightError::InvalidArgument {
+            message: format!(
+                "--select fields do not exist in the result: {}",
+                names.join(", ")
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn value_contains_key(val: &serde_json::Value, key: &str) -> bool {
+    match val {
+        serde_json::Value::Object(map) => {
+            if map.contains_key(key) {
+                return true;
+            }
+            map.values().any(|value| value_contains_key(value, key))
+        }
+        serde_json::Value::Array(arr) => arr.iter().any(|item| value_contains_key(item, key)),
+        _ => false,
+    }
+}
+
 pub fn apply_collection_limits<T: Clone>(
     items: &[T],
     limits: &QueryLimits,
@@ -360,6 +396,7 @@ where
             truncate_json_strings(&mut val, text_limit);
         }
         if let Some(ref select) = limits.select {
+            validate_projection(&val, select)?;
             val = project_json(&val, select);
         }
 
@@ -389,9 +426,16 @@ where
                 serde_json::to_string(&envelope).map_err(|e| DocsightError::MalformedDocument {
                     message: e.to_string(),
                 })?;
-            if serialized.len() > max_bytes && count > 0 {
-                count -= 1;
-                continue;
+            if serialized.len() > max_bytes {
+                if count > 0 {
+                    count -= 1;
+                    continue;
+                }
+                return Err(DocsightError::InvalidArgument {
+                    message: format!(
+                        "--max-bytes {max_bytes} is smaller than the minimum agent envelope; increase the cap or use --select to reduce the payload"
+                    ),
+                });
             }
         }
 
@@ -516,6 +560,7 @@ impl<W: Write> NdjsonWriter<W> {
         }
 
         let mut projected = if let Some(ref fields) = self.limits.select {
+            validate_projection(data, fields)?;
             project_json(data, fields)
         } else {
             data.clone()

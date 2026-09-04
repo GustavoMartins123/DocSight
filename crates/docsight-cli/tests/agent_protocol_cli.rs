@@ -214,3 +214,63 @@ fn byte_for_byte_deterministic_agent_output() -> Result<(), Box<dyn std::error::
 
     Ok(())
 }
+
+#[test]
+fn select_with_unknown_field_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let docx_path = headings_fixture();
+    let out = docsight()
+        .args([
+            "inspect",
+            docx_path.to_str().ok_or("path")?,
+            "--json",
+            "--select",
+            "nonexistent_field",
+        ])
+        .output()?;
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(stderr.contains("nonexistent_field"));
+    assert!(out.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
+fn max_bytes_below_envelope_floor_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let docx_path = headings_fixture();
+    let out = docsight()
+        .args([
+            "inspect",
+            docx_path.to_str().ok_or("path")?,
+            "--json",
+            "--max-bytes",
+            "64",
+        ])
+        .output()?;
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(stderr.contains("--max-bytes"));
+    assert!(out.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
+fn max_bytes_never_emits_oversized_single_item() -> Result<(), Box<dyn std::error::Error>> {
+    let docx_path = headings_fixture();
+    let out = docsight()
+        .args([
+            "text",
+            docx_path.to_str().ok_or("path")?,
+            "--json",
+            "--max-bytes",
+            "700",
+        ])
+        .output()?;
+    if out.status.success() {
+        assert!(out.stdout.len() <= 700, "stdout exceeded the hard cap");
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+        assert!(value["limits"]["truncated"] == true);
+    } else {
+        assert_eq!(out.status.code(), Some(2));
+    }
+    Ok(())
+}
