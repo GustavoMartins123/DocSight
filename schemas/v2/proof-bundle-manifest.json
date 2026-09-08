@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/proof-bundle-manifest.json",
+  "title": "ProofBundleManifest",
+  "type": "object",
+  "required": ["schema", "trace", "evidence", "crop"],
+  "properties": {
+    "schema": { "const": "docsight.proof-bundle/v1" },
+    "trace": { "$ref": "trace-manifest.json" },
+    "evidence": { "type": "array", "items": { "$ref": "evidence-record.json" } },
+    "crop": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": ["sha256", "bytes", "media_type"],
+          "properties": {
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "bytes": { "type": "integer", "minimum": 1 },
+            "media_type": { "const": "image/png" }
+          },
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

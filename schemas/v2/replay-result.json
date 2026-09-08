@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/replay-result.json",
+  "title": "ReplayResult",
+  "type": "object",
+  "required": ["trace_path", "verification"],
+  "properties": {
+    "trace_path": { "type": "string", "minLength": 1 },
+    "verification": {
+      "type": "object",
+      "required": ["schema", "valid", "trace_sha256", "document_sha256", "display_list_sha256", "raster_sha256"],
+      "properties": {
+        "schema": { "const": "docsight.trace/v1" },
+        "valid": { "const": true },
+        "trace_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "document_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "display_list_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "raster_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

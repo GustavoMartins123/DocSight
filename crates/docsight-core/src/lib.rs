@@ -77,6 +77,8 @@ pub enum DocsightError {
     ResourceLimit { resource: String, limit: u64 },
     #[error("malformed document: {message}")]
     MalformedDocument { message: String },
+    #[error("verification failed: {message}")]
+    VerificationFailed { message: String },
     #[error("encrypted documents require a password and are not supported")]
     EncryptedDocument,
     #[error("encrypted OOXML package detected inside an OLE2 container")]
@@ -99,7 +101,7 @@ impl DocsightError {
         match self {
             Self::InvalidArgument { .. } => 2,
             Self::UnsupportedFormat | Self::UnsupportedOperation { .. } => 10,
-            Self::MalformedDocument { .. } => 11,
+            Self::MalformedDocument { .. } | Self::VerificationFailed { .. } => 11,
             Self::EncryptedDocument | Self::EncryptedPackage => 12,
             Self::ResourceLimit { .. } => 13,
             Self::UnsupportedFeature { .. } => 20,
@@ -124,6 +126,10 @@ impl DocsightError {
             Self::MalformedDocument { .. } => (
                 "MALFORMED_DOCUMENT",
                 "the document was rejected during parsing",
+            ),
+            Self::VerificationFailed { .. } => (
+                "VERIFICATION_FAILED",
+                "the artifact did not reproduce its claimed evidence",
             ),
             Self::EncryptedDocument => ("ENCRYPTED", "the document was rejected before inspection"),
             Self::EncryptedPackage => ("ENCRYPTED", "the document was rejected before inspection"),
@@ -481,5 +487,14 @@ mod tests {
             .exit_code(),
             30
         );
+    }
+
+    #[test]
+    fn maps_verification_failure_to_a_typed_artifact_error() {
+        let error = DocsightError::VerificationFailed {
+            message: "mismatch".to_owned(),
+        };
+        assert_eq!(error.exit_code(), 11);
+        assert_eq!(error.diagnostic().code, "VERIFICATION_FAILED");
     }
 }

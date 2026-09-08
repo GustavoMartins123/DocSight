@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/bundle-result.json",
+  "title": "BundleResult",
+  "type": "object",
+  "required": ["output_path", "output_sha256", "output_bytes", "target", "evidence_count", "crop_included", "trace_display_list_sha256", "trace_raster_sha256"],
+  "properties": {
+    "output_path": { "type": "string", "minLength": 1 },
+    "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "output_bytes": { "type": "integer", "minimum": 1 },
+    "target": { "$ref": "trace-manifest.json#/$defs/target" },
+    "evidence_count": { "type": "integer", "minimum": 0 },
+    "crop_included": { "type": "boolean" },
+    "trace_display_list_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "trace_raster_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

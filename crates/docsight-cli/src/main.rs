@@ -12,7 +12,13 @@ use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, diff_documen
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
-use docsight_render::{HitQuery, RenderRequest, RenderTarget, render_document};
+use docsight_render::{
+    HitQuery, RenderRequest, RenderTarget, render_document,
+    trace::{
+        TraceDecisionCoverage, TraceTarget, create_proof_bundle, read_proof_bundle, read_trace,
+        record_trace, verify_proof_bundle, verify_trace,
+    },
+};
 use docsight_search::{
     PageRange, SemanticViewport, SpatialQueryResult, execute_spatial_query, focus_object,
     focus_pages, overview as document_overview,
@@ -153,6 +159,8 @@ enum Command {
         dpi: u16,
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        trace: Option<PathBuf>,
     },
     Crop {
         path: PathBuf,
@@ -203,6 +211,35 @@ enum Command {
         object: String,
         #[arg(long, default_value_t = 144)]
         render_dpi: u16,
+        #[arg(long)]
+        json: bool,
+    },
+    Bundle {
+        path: PathBuf,
+        #[arg(long)]
+        page: Option<u32>,
+        #[arg(long, value_parser = parse_bbox)]
+        bbox: Option<Rect>,
+        #[arg(long)]
+        object: Option<String>,
+        #[arg(long, default_value_t = 144)]
+        dpi: u16,
+        #[arg(long)]
+        include_crop: bool,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Replay {
+        trace: PathBuf,
+        #[arg(long)]
+        verify: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Verify {
+        bundle: PathBuf,
         #[arg(long)]
         json: bool,
     },
@@ -607,11 +644,13 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             page,
             dpi,
             out,
+            trace,
         } => render(RenderCommandArgs {
             path,
             target: RenderTarget::Page { page: *page },
             dpi: *dpi,
             out,
+            trace: trace.as_deref(),
             command: "render",
             json: cli.is_agent_json(false),
             ndjson: cli.ndjson,
@@ -645,6 +684,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 target,
                 dpi: *dpi,
                 out,
+                trace: None,
                 command: "crop",
                 json: cli.is_agent_json(false),
                 ndjson: cli.ndjson,
@@ -711,6 +751,50 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             path,
             object,
             render_dpi: *render_dpi,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Bundle {
+            path,
+            page,
+            bbox,
+            object,
+            dpi,
+            include_crop,
+            out,
+            json,
+        } => bundle(BundleArgs {
+            path,
+            page: *page,
+            bbox: *bbox,
+            object: object.as_deref(),
+            dpi: *dpi,
+            include_crop: *include_crop,
+            out,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Replay {
+            trace,
+            verify,
+            json,
+        } => replay(ReplayArgs {
+            trace,
+            verify: *verify,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Verify { bundle, json } => verify(VerifyArgs {
+            bundle,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
@@ -902,7 +986,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "render",
-                summary: "write a PNG artifact with provenance metadata",
+                summary: "write a PNG artifact with provenance metadata and optional deterministic trace",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
                 bounded: true,
@@ -932,6 +1016,27 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 name: "evidence",
                 summary: "return provenance and fidelity for one object",
                 formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: false,
+            },
+            CommandCapability {
+                name: "bundle",
+                summary: "write a self-contained verifiable proof bundle for an object or region",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "replay",
+                summary: "verify a deterministic trace using its embedded document bytes",
+                formats: NO_DOCUMENT_FORMATS,
+                ndjson: true,
+                bounded: false,
+            },
+            CommandCapability {
+                name: "verify",
+                summary: "verify a self-contained proof bundle offline",
+                formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
                 bounded: false,
             },
@@ -1792,6 +1897,7 @@ struct RenderCommandArgs<'a> {
     target: RenderTarget,
     dpi: u16,
     out: &'a Path,
+    trace: Option<&'a Path>,
     command: &'a str,
     json: bool,
     ndjson: bool,
@@ -1802,14 +1908,48 @@ struct RenderCommandArgs<'a> {
 
 fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let rendered = render_document(
-        &source,
-        &RenderRequest {
-            target: args.target,
-            dpi: args.dpi,
-        },
-    )?;
+    let request = RenderRequest {
+        target: args.target,
+        dpi: args.dpi,
+    };
+    let rendered = render_document(&source, &request)?;
+    let trace = args
+        .trace
+        .map(|path| {
+            let trace = record_trace(&source, &request)?;
+            if trace.manifest.raster.sha256 != digest_bytes(rendered.png()) {
+                return Err(DocsightError::VerificationFailed {
+                    message: "rendered PNG does not match its deterministic trace".to_owned(),
+                });
+            }
+            let trace_bytes = trace.to_bytes()?;
+            let output_path = path
+                .to_str()
+                .ok_or_else(|| DocsightError::InvalidArgument {
+                    message: "trace path must be valid UTF-8 for agent output".to_owned(),
+                })?
+                .to_owned();
+            let output = TraceOutput {
+                output_path,
+                output_sha256: digest_bytes(&trace_bytes),
+                output_bytes: u64::try_from(trace_bytes.len()).map_err(|_| {
+                    DocsightError::ResourceLimit {
+                        resource: "trace artifact bytes".to_owned(),
+                        limit: u64::MAX,
+                    }
+                })?,
+                target: trace.manifest.target,
+                display_list_sha256: trace.manifest.display_list.sha256,
+                raster_sha256: trace.manifest.raster.sha256,
+                decision_coverage: trace.manifest.decision_coverage,
+            };
+            Ok((path, trace_bytes, output))
+        })
+        .transpose()?;
     rendered.write(args.out)?;
+    if let Some((path, bytes, _)) = &trace {
+        docsight_core::write_all(path, bytes)?;
+    }
     if !args.ndjson && !args.json {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
@@ -1836,6 +1976,8 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
         output_path: String,
         output_sha256: String,
         output_bytes: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        trace: Option<TraceOutput>,
     }
     let output_path = args
         .out
@@ -1860,6 +2002,7 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
         output_path,
         output_sha256,
         output_bytes,
+        trace: trace.map(|(_, _, output)| output),
     };
     if args.ndjson {
         return write_single_ndjson(
@@ -1872,6 +2015,235 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
         );
     }
     write_single_json(&source, &result, rendered.warnings.clone(), args.limits)
+}
+
+#[derive(Serialize)]
+struct TraceOutput {
+    output_path: String,
+    output_sha256: String,
+    output_bytes: u64,
+    target: TraceTarget,
+    display_list_sha256: String,
+    raster_sha256: String,
+    decision_coverage: TraceDecisionCoverage,
+}
+
+struct BundleArgs<'a> {
+    path: &'a Path,
+    page: Option<u32>,
+    bbox: Option<Rect>,
+    object: Option<&'a str>,
+    dpi: u16,
+    include_crop: bool,
+    out: &'a Path,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
+    let target = match (args.page, args.bbox, args.object) {
+        (Some(page), Some(bbox), None) => RenderTarget::Region { page, bbox },
+        (None, None, Some(id)) => RenderTarget::Object { id: id.to_owned() },
+        _ => {
+            return Err(DocsightError::InvalidArgument {
+                message: "bundle requires either --page with --bbox or only --object".to_owned(),
+            });
+        }
+    };
+    let source = DocumentSource::open(args.path)?;
+    let request = RenderRequest {
+        target,
+        dpi: args.dpi,
+    };
+    let proof = create_proof_bundle(&source, &request, args.include_crop)?;
+    let written = proof.write(args.out)?;
+    let output_path = args
+        .out
+        .to_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "bundle path must be valid UTF-8 for agent output".to_owned(),
+        })?
+        .to_owned();
+    #[derive(Serialize)]
+    struct BundleResult {
+        output_path: String,
+        output_sha256: String,
+        output_bytes: u64,
+        target: TraceTarget,
+        evidence_count: usize,
+        crop_included: bool,
+        trace_display_list_sha256: String,
+        trace_raster_sha256: String,
+    }
+    let result = BundleResult {
+        output_path,
+        output_sha256: written.sha256,
+        output_bytes: written.bytes,
+        target: proof.manifest.trace.target.clone(),
+        evidence_count: proof.manifest.evidence.len(),
+        crop_included: proof.manifest.crop.is_some(),
+        trace_display_list_sha256: proof.manifest.trace.display_list.sha256.clone(),
+        trace_raster_sha256: proof.manifest.trace.raster.sha256.clone(),
+    };
+    if args.ndjson {
+        return write_single_ndjson(
+            &source,
+            "bundle",
+            "bundle",
+            &result,
+            &proof.manifest.trace.warnings,
+            args.limits,
+        );
+    }
+    if args.json {
+        return write_single_json(
+            &source,
+            &result,
+            proof.manifest.trace.warnings.clone(),
+            args.limits,
+        );
+    }
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Proof bundle written to {} ({})",
+        args.out.display(),
+        result.output_sha256
+    )
+    .map_err(stdout_error)?;
+    writeln!(writer, "  Evidence records: {}", result.evidence_count).map_err(stdout_error)?;
+    writeln!(writer, "  Crop included:    {}", result.crop_included).map_err(stdout_error)?;
+    emit_warnings(&proof.manifest.trace.warnings, args.quiet, args.json_errors)
+}
+
+struct ReplayArgs<'a> {
+    trace: &'a Path,
+    verify: bool,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
+    if !args.verify {
+        return Err(DocsightError::InvalidArgument {
+            message: "replay requires --verify".to_owned(),
+        });
+    }
+    let trace = read_trace(args.trace)?;
+    let source = trace.document_source()?;
+    let verification = verify_trace(&trace)?;
+    #[derive(Serialize)]
+    struct ReplayResult {
+        trace_path: String,
+        verification: docsight_render::trace::ReplayVerification,
+    }
+    let trace_path = args
+        .trace
+        .to_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "trace path must be valid UTF-8 for agent output".to_owned(),
+        })?
+        .to_owned();
+    let result = ReplayResult {
+        trace_path,
+        verification,
+    };
+    if args.ndjson {
+        return write_single_ndjson(
+            &source,
+            "replay",
+            "replay",
+            &result,
+            &trace.manifest.warnings,
+            args.limits,
+        );
+    }
+    if args.json {
+        return write_single_json(
+            &source,
+            &result,
+            trace.manifest.warnings.clone(),
+            args.limits,
+        );
+    }
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Trace replay verified: {}",
+        result.verification.trace_sha256
+    )
+    .map_err(stdout_error)?;
+    emit_warnings(&trace.manifest.warnings, args.quiet, args.json_errors)
+}
+
+struct VerifyArgs<'a> {
+    bundle: &'a Path,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
+    let bundle = read_proof_bundle(args.bundle)?;
+    let source = bundle.document_source()?;
+    let verification = verify_proof_bundle(&bundle)?;
+    #[derive(Serialize)]
+    struct VerifyResult {
+        bundle_path: String,
+        verification: docsight_render::trace::ProofVerification,
+    }
+    let bundle_path = args
+        .bundle
+        .to_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "bundle path must be valid UTF-8 for agent output".to_owned(),
+        })?
+        .to_owned();
+    let result = VerifyResult {
+        bundle_path,
+        verification,
+    };
+    if args.ndjson {
+        return write_single_ndjson(
+            &source,
+            "verify",
+            "verify",
+            &result,
+            &bundle.manifest.trace.warnings,
+            args.limits,
+        );
+    }
+    if args.json {
+        return write_single_json(
+            &source,
+            &result,
+            bundle.manifest.trace.warnings.clone(),
+            args.limits,
+        );
+    }
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Proof bundle verified: {}",
+        result.verification.bundle_sha256
+    )
+    .map_err(stdout_error)?;
+    emit_warnings(
+        &bundle.manifest.trace.warnings,
+        args.quiet,
+        args.json_errors,
+    )
 }
 
 fn images(

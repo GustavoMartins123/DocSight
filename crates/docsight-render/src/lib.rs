@@ -1,5 +1,6 @@
 mod docx_raster;
 pub mod hit;
+pub mod trace;
 
 use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect, write_all};
 use docsight_layout::layout_docx;

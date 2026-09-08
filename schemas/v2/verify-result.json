@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/verify-result.json",
+  "title": "VerifyResult",
+  "type": "object",
+  "required": ["bundle_path", "verification"],
+  "properties": {
+    "bundle_path": { "type": "string", "minLength": 1 },
+    "verification": {
+      "type": "object",
+      "required": ["schema", "valid", "bundle_sha256", "document_sha256", "evidence_count", "trace_verified", "crop_verified"],
+      "properties": {
+        "schema": { "const": "docsight.proof-bundle/v1" },
+        "valid": { "const": true },
+        "bundle_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "document_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "evidence_count": { "type": "integer", "minimum": 0 },
+        "trace_verified": { "const": true },
+        "crop_verified": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

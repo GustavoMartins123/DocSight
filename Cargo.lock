@@ -281,7 +281,9 @@ dependencies = [
  "docsight-ooxml",
  "docsight-pdf",
  "serde",
+ "serde_json",
  "sha2",
+ "zip",
 ]
 
 [[package]]

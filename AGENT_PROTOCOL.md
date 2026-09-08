@@ -60,6 +60,25 @@ Output limits are explicit. `limits.truncated` describes omitted result items, w
 
 Render and crop results include the requested output path, PNG media type, byte count, SHA-256 digest, page bounding box, and pixel dimensions. The digest verifies the artifact; fidelity still comes from the warnings and coverage records.
 
+Record deterministic evidence for a rendered page, then replay it without the original document path:
+
+```text
+docsight --agent render input.docx --page 7 --trace page7.dstrace --out page7.png
+docsight --agent replay page7.dstrace --verify
+```
+
+A `.dstrace` is a canonical, self-contained ZIP artifact with `manifest.json` and `source.bin`. Its manifest records the source digest, reproduction fingerprint, page-local target, available resource, glyph, line, table, pagination and display-list decisions, plus the normalized raster fingerprint. `replay` requires `--verify`, re-executes from the embedded bytes, and fails closed with `VERIFICATION_FAILED` if any claimed result differs. `decision_coverage` explicitly identifies decision categories that the active backend cannot expose; for example, PDF graphics are never represented as a complete display list merely because a raster was produced.
+
+Use a proof bundle when an agent needs one object or one region with the selected semantic evidence, provenance, geometry and optional crop in one offline-verifiable package:
+
+```text
+docsight --agent bundle input.docx --object tbl_0008 --include-crop --out tbl_0008.dse
+docsight --agent verify tbl_0008.dse
+docsight --agent bundle input.pdf --page 3 --bbox 72,144,324,288 --out region.dse
+```
+
+A `.dse` has fixed ordered entries: `manifest.json`, `source.bin`, and, when requested, `crop.png`. It is content-addressed by the returned SHA-256, contains no original filesystem path, and is accepted only in its canonical stored form. `verify` replays the embedded trace and recomputes evidence from the embedded source. Unknown entries, compression, excess sizes, checksum disagreement and non-canonical archives fail closed. The public contracts are `schemas/v2/trace-manifest.json`, `schemas/v2/proof-bundle-manifest.json`, `schemas/v2/trace-result.json`, `schemas/v2/bundle-result.json`, `schemas/v2/replay-result.json`, and `schemas/v2/verify-result.json`.
+
 Agent errors use `schemas/v2/error-envelope.json` and include a stable diagnostic code and process exit code. Exit code `0` is success; non-zero codes must be handled programmatically without matching human messages.
 
 The M12 result contracts are `schemas/v2/spatial-query-result.json`, `schemas/v2/overview-result.json`, `schemas/v2/semantic-viewport.json`, and the shared `schemas/v2/semantic-object.json`.

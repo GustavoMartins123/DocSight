@@ -33,7 +33,10 @@
     "media_type": { "const": "image/png" },
     "output_path": { "type": "string", "minLength": 1 },
     "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "output_bytes": { "type": "integer", "minimum": 1 }
+    "output_bytes": { "type": "integer", "minimum": 1 },
+    "trace": {
+      "$ref": "trace-result.json"
+    }
   },
   "additionalProperties": false
 }
