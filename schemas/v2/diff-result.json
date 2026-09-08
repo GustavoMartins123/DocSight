@@ -6,14 +6,18 @@
   "required": [
     "format_before",
     "format_after",
+    "before_document",
+    "after_document",
     "package",
     "semantic",
     "summary",
     "warnings"
   ],
   "properties": {
-    "format_before": { "type": "string" },
-    "format_after": { "type": "string" },
+    "format_before": { "enum": ["docx", "pdf"] },
+    "format_after": { "enum": ["docx", "pdf"] },
+    "before_document": { "$ref": "#/$defs/document_identity" },
+    "after_document": { "$ref": "#/$defs/document_identity" },
     "package": {
       "type": "object",
       "required": ["added_parts", "removed_parts", "modified_parts"],
@@ -25,10 +29,33 @@
     },
     "semantic": {
       "type": "object",
-      "required": ["total_changes", "headings", "paragraphs", "tables", "images", "records"],
+      "required": [
+        "total_changes",
+        "headings",
+        "paragraphs",
+        "tables",
+        "images",
+        "records",
+        "lineage",
+        "lineage_ambiguous",
+        "evidence_limited_changes"
+      ],
       "properties": {
-        "total_changes": { "type": "integer" },
-        "records": { "type": "array" }
+        "total_changes": { "type": "integer", "minimum": 0 },
+        "headings": { "$ref": "#/$defs/change_counter" },
+        "paragraphs": { "$ref": "#/$defs/change_counter" },
+        "tables": { "$ref": "#/$defs/change_counter" },
+        "images": { "$ref": "#/$defs/change_counter" },
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/semantic_change" }
+        },
+        "lineage": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lineage_record" }
+        },
+        "lineage_ambiguous": { "type": "integer", "minimum": 0 },
+        "evidence_limited_changes": { "type": "integer", "minimum": 0 }
       }
     },
     "summary": {
@@ -40,11 +67,143 @@
         "layout_changed_pages",
         "images",
         "tables",
+        "lineage_ambiguous",
+        "evidence_limited_changes",
         "warnings"
+      ],
+      "properties": {
+        "pages_before": { "type": "integer", "minimum": 0 },
+        "pages_after": { "type": "integer", "minimum": 0 },
+        "semantic_changes": { "type": "integer", "minimum": 0 },
+        "layout_changed_pages": { "type": "integer", "minimum": 0 },
+        "largest_drift_pt": { "type": ["number", "null"] },
+        "largest_drift_page": { "type": ["integer", "null"], "minimum": 1 },
+        "images": { "$ref": "#/$defs/change_counter" },
+        "tables": { "$ref": "#/$defs/change_counter" },
+        "lineage_ambiguous": { "type": "integer", "minimum": 0 },
+        "evidence_limited_changes": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "warnings": { "type": "array" },
+    "visual": { "type": "object" }
+  },
+  "$defs": {
+    "document_identity": {
+      "type": "object",
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^doc_[0-9a-f]{32}$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "change_counter": {
+      "type": "object",
+      "required": ["added", "removed", "modified", "moved"],
+      "properties": {
+        "added": { "type": "integer", "minimum": 0 },
+        "removed": { "type": "integer", "minimum": 0 },
+        "modified": { "type": "integer", "minimum": 0 },
+        "moved": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "lineage_evidence": {
+      "type": "object",
+      "required": ["kind", "score", "weight"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "normalized_text",
+            "source_path",
+            "style",
+            "geometry",
+            "table_shape",
+            "image_digest",
+            "neighborhood",
+            "object_confidence"
+          ]
+        },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "weight": { "type": "number", "exclusiveMinimum": 0 },
+        "before": { "type": "string" },
+        "after": { "type": "string" }
+      }
+    },
+    "lineage_candidate": {
+      "type": "object",
+      "required": ["match_score", "evidence"],
+      "properties": {
+        "before_object": { "type": "string" },
+        "after_object": { "type": "string" },
+        "match_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lineage_evidence" }
+        }
+      }
+    },
+    "lineage_record": {
+      "type": "object",
+      "required": ["id", "status", "target_type", "match_score", "evidence"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^lin_[0-9a-f]{32}$" },
+        "status": { "enum": ["matched", "ambiguous"] },
+        "target_type": { "enum": ["heading", "paragraph", "table", "figure"] },
+        "before_object": { "type": "string" },
+        "after_object": { "type": "string" },
+        "match_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "kind": { "enum": ["added", "removed", "modified", "moved"] },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lineage_evidence" }
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/lineage_candidate" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "matched" } } },
+          "then": { "required": ["before_object", "after_object"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "ambiguous" } } },
+          "then": { "required": ["candidates"] }
+        }
       ]
     },
-    "warnings": {
-      "type": "array"
+    "diff_evidence": {
+      "type": "object",
+      "required": ["side", "code", "message", "effect"],
+      "properties": {
+        "side": { "enum": ["before", "after"] },
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "effect": { "type": "string" },
+        "object": { "type": "string" },
+        "page": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "semantic_change": {
+      "type": "object",
+      "required": ["kind", "target_type", "description", "authoritative", "evidence"],
+      "properties": {
+        "kind": { "enum": ["added", "removed", "modified", "moved"] },
+        "object_id": { "type": "string" },
+        "page": { "type": "integer", "minimum": 1 },
+        "target_type": { "enum": ["heading", "paragraph", "table", "figure"] },
+        "description": { "type": "string" },
+        "before": { "type": "string" },
+        "after": { "type": "string" },
+        "lineage": { "$ref": "#/$defs/lineage_record" },
+        "authoritative": { "type": "boolean" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diff_evidence" }
+        }
+      }
     }
   }
 }

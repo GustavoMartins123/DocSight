@@ -43,6 +43,17 @@ Supported relation names are `above`, `below`, `inside`, `overlaps`, `nearest`, 
 
 Viewport visual references are deterministic crop requests at 36 DPI. They carry page-local geometry and do not write or embed an image artifact; `artifact_available` is therefore always `false`. Use the existing `crop` command with the emitted page and bounding box when pixels are necessary.
 
+Compare revisions through the same machine profile:
+
+```text
+docsight --agent diff before.docx after.docx
+docsight --agent --ndjson diff before.pdf after.pdf --max-items 100
+```
+
+The diff result identifies both source documents in `before_document` and `after_document`. `semantic.lineage` is the cross-version correspondence layer; it does not replace either document-bound object ID. A `matched` record has one object from each revision, a deterministic `lin_…` identifier, a match score, and the evidence components used to establish correspondence. Components can include normalized text, source path, style, geometry, table shape, image digest, neighborhood, and reconstruction confidence.
+
+An `ambiguous` lineage record intentionally omits a definitive counterpart and returns the competing candidates with their own evidence and scores. Related semantic additions or removals carry that lineage record and set `authoritative` to `false`. A changed record is likewise non-authoritative when relevant diagnostics or low-confidence reconstruction evidence are present. Inspect `evidence` before treating a diff as proof of a source-level content change. NDJSON emits `diff.summary` with both document identities, then `diff.lineage`, then `diff.semantic` records.
+
 Every document result carries a deterministic document ID and SHA-256 digest. Use `warnings`, `capability_details`, and `coverage` before treating geometry or pixels as authoritative. `source_faithful` distinguishes an available operation from an exact representation.
 
 Output limits are explicit. `limits.truncated` describes omitted result items, while `limits.warnings_truncated` describes omitted diagnostics. A continuation token is valid only for the command, document, and query or focus target that produced it.
@@ -52,3 +63,5 @@ Render and crop results include the requested output path, PNG media type, byte 
 Agent errors use `schemas/v2/error-envelope.json` and include a stable diagnostic code and process exit code. Exit code `0` is success; non-zero codes must be handled programmatically without matching human messages.
 
 The M12 result contracts are `schemas/v2/spatial-query-result.json`, `schemas/v2/overview-result.json`, `schemas/v2/semantic-viewport.json`, and the shared `schemas/v2/semantic-object.json`.
+
+The M13 diff contract is `schemas/v2/diff-result.json`; its NDJSON event type is defined in `schemas/v2/ndjson-event.json`.

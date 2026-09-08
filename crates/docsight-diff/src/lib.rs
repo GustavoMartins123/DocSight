@@ -1,5 +1,6 @@
 use docsight_core::{
-    Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect, table_to_tsv_string,
+    Block, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect,
+    table_to_tsv_string,
 };
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
@@ -35,7 +36,6 @@ pub struct ChangeCounter {
     pub added: u32,
     pub removed: u32,
     pub modified: u32,
-    #[serde(default)]
     pub moved: u32,
 }
 
@@ -69,6 +69,8 @@ impl ChangeCounter {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LineageRecord {
     pub id: String,
+    pub status: LineageStatus,
+    pub target_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before_object: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,6 +78,69 @@ pub struct LineageRecord {
     pub match_score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<ChangeKind>,
+    pub evidence: Vec<LineageEvidence>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<LineageCandidate>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineageStatus {
+    Matched,
+    Ambiguous,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineageEvidenceKind {
+    NormalizedText,
+    SourcePath,
+    Style,
+    Geometry,
+    TableShape,
+    ImageDigest,
+    Neighborhood,
+    ObjectConfidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LineageEvidence {
+    pub kind: LineageEvidenceKind,
+    pub score: f32,
+    pub weight: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LineageCandidate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_object: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_object: Option<String>,
+    pub match_score: f32,
+    pub evidence: Vec<LineageEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffSide {
+    Before,
+    After,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DiffEvidence {
+    pub side: DiffSide,
+    pub code: String,
+    pub message: String,
+    pub effect: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,6 +158,8 @@ pub struct SemanticChangeRecord {
     pub after: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lineage: Option<LineageRecord>,
+    pub authoritative: bool,
+    pub evidence: Vec<DiffEvidence>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -110,8 +177,9 @@ pub struct SemanticDiff {
     pub tables: ChangeCounter,
     pub images: ChangeCounter,
     pub records: Vec<SemanticChangeRecord>,
-    #[serde(default)]
     pub lineage: Vec<LineageRecord>,
+    pub lineage_ambiguous: u32,
+    pub evidence_limited_changes: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,6 +213,8 @@ pub struct DiffSummary {
     pub largest_drift_page: Option<u32>,
     pub images: ChangeCounter,
     pub tables: ChangeCounter,
+    pub lineage_ambiguous: u32,
+    pub evidence_limited_changes: u32,
     pub warnings: Vec<String>,
 }
 
@@ -171,6 +241,18 @@ impl DiffSummary {
         }
         lines.push(format!("{:<18} {}", "Images", self.images.format_images()));
         lines.push(format!("{:<18} {}", "Tables", self.tables.format_tables()));
+        if self.lineage_ambiguous > 0 {
+            lines.push(format!(
+                "{:<18} {}",
+                "Lineage ambiguous", self.lineage_ambiguous
+            ));
+        }
+        if self.evidence_limited_changes > 0 {
+            lines.push(format!(
+                "{:<18} {}",
+                "Evidence-limited", self.evidence_limited_changes
+            ));
+        }
         for w in &self.warnings {
             lines.push(format!("{:<18} {}", "Warnings", w));
         }
@@ -178,10 +260,18 @@ impl DiffSummary {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DiffDocumentIdentity {
+    pub id: String,
+    pub sha256: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocumentDiffResult {
     pub format_before: DocumentFormat,
     pub format_after: DocumentFormat,
+    pub before_document: DiffDocumentIdentity,
+    pub after_document: DiffDocumentIdentity,
     pub package: PackageDiff,
     pub semantic: SemanticDiff,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +347,12 @@ pub fn diff_documents(
     let mut combined_warnings = Vec::new();
     combined_warnings.extend(doc_before.warnings);
     combined_warnings.extend(doc_after.warnings);
+    combined_warnings.extend(
+        semantic
+            .lineage
+            .iter()
+            .filter_map(lineage_ambiguity_warning),
+    );
 
     let summary_warnings: Vec<String> = combined_warnings
         .iter()
@@ -272,17 +368,51 @@ pub fn diff_documents(
         largest_drift_page,
         images: semantic.images.clone(),
         tables: semantic.tables.clone(),
+        lineage_ambiguous: semantic.lineage_ambiguous,
+        evidence_limited_changes: semantic.evidence_limited_changes,
         warnings: summary_warnings,
     };
 
     Ok(DocumentDiffResult {
         format_before: source_before.format(),
         format_after: source_after.format(),
+        before_document: DiffDocumentIdentity {
+            id: doc_before.id,
+            sha256: doc_before.sha256,
+        },
+        after_document: DiffDocumentIdentity {
+            id: doc_after.id,
+            sha256: doc_after.sha256,
+        },
         package,
         semantic,
         visual,
         summary,
         warnings: combined_warnings,
+    })
+}
+
+fn lineage_ambiguity_warning(record: &LineageRecord) -> Option<Diagnostic> {
+    if record.status != LineageStatus::Ambiguous {
+        return None;
+    }
+    let object = record
+        .before_object
+        .as_ref()
+        .or(record.after_object.as_ref())
+        .map(|id| docsight_core::ObjectId::from_raw(id.clone()));
+    Some(Diagnostic {
+        code: "DIFF_LINEAGE_AMBIGUOUS".to_owned(),
+        severity: docsight_core::DiagnosticSeverity::Warning,
+        message: format!(
+            "{} lineage has {} competing correspondence candidates",
+            record.target_type,
+            record.candidates.len()
+        ),
+        effect: "the related semantic additions or removals are not authoritative until the correspondence is resolved"
+            .to_owned(),
+        object,
+        page: None,
     })
 }
 
@@ -373,20 +503,75 @@ fn inspect_zip_parts(bytes: &[u8]) -> Result<BTreeMap<String, (u64, u32)>, Docsi
     Ok(parts)
 }
 
-const SIMILARITY_THRESHOLD: f32 = 0.6;
+const TEXT_SIMILARITY_THRESHOLD: f32 = 0.6;
+const STRUCTURAL_SIMILARITY_THRESHOLD: f32 = 0.5;
+const AMBIGUITY_MARGIN: f32 = 0.05;
 
+#[derive(Clone, Default)]
+struct Neighborhood {
+    previous: Option<String>,
+    next: Option<String>,
+}
+
+#[derive(Clone)]
 struct AlignItem {
+    document_sha256: String,
     object_id: String,
     page: Option<u32>,
+    bbox: Option<Rect>,
+    source_path: String,
+    style_id: Option<String>,
+    table_shape: Option<(u32, u32)>,
+    image_digest: Option<String>,
+    confidence: f32,
+    neighborhood: Neighborhood,
     key: String,
     display: String,
 }
 
+#[derive(Clone)]
 struct MatchedPair {
     before_index: usize,
     after_index: usize,
     exact: bool,
     score: f32,
+    evidence: Vec<LineageEvidence>,
+}
+
+#[derive(Clone)]
+struct CandidatePair {
+    before_index: usize,
+    after_index: usize,
+    exact: bool,
+    score: f32,
+    evidence: Vec<LineageEvidence>,
+}
+
+struct Alignment {
+    pairs: Vec<MatchedPair>,
+    ambiguities: Vec<AlignmentAmbiguity>,
+}
+
+struct AlignmentAmbiguity {
+    anchor: AmbiguityAnchor,
+    candidates: Vec<CandidatePair>,
+}
+
+enum AmbiguityAnchor {
+    Before(usize),
+    After(usize),
+}
+
+struct DiffContext<'a> {
+    target_type: &'a str,
+    before_warnings: &'a [Diagnostic],
+    after_warnings: &'a [Diagnostic],
+}
+
+struct AlignMetadata {
+    style_id: Option<String>,
+    table_shape: Option<(u32, u32)>,
+    image_digest: Option<String>,
 }
 
 fn normalize_text(text: &str) -> String {
@@ -418,72 +603,325 @@ fn text_similarity(before: &str, after: &str) -> f32 {
     intersection / union
 }
 
-fn align_items(before: &[AlignItem], after: &[AlignItem]) -> Vec<MatchedPair> {
-    let mut pairs = Vec::new();
-    let mut after_by_key: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, item) in after.iter().enumerate() {
-        after_by_key
-            .entry(item.key.as_str())
-            .or_default()
-            .push(index);
-    }
-    let mut before_matched = vec![false; before.len()];
-    let mut after_matched = vec![false; after.len()];
-
-    for (before_index, item) in before.iter().enumerate() {
-        if let Some(candidates) = after_by_key.get(item.key.as_str()) {
-            if let Some(&after_index) = candidates.iter().find(|index| !after_matched[**index]) {
-                pairs.push(MatchedPair {
-                    before_index,
-                    after_index,
-                    exact: true,
-                    score: 1.0,
-                });
-                before_matched[before_index] = true;
-                after_matched[after_index] = true;
-            }
-        }
-    }
-
-    let mut candidates: Vec<(f32, usize, usize)> = Vec::new();
+fn align_items(before: &[AlignItem], after: &[AlignItem]) -> Alignment {
+    let mut candidates = Vec::new();
     for (before_index, before_item) in before.iter().enumerate() {
-        if before_matched[before_index] {
-            continue;
-        }
         for (after_index, after_item) in after.iter().enumerate() {
-            if after_matched[after_index] {
-                continue;
-            }
-            let score = text_similarity(&before_item.key, &after_item.key);
-            if score >= SIMILARITY_THRESHOLD {
-                candidates.push((score, before_index, after_index));
+            if let Some(candidate) =
+                candidate_pair(before_index, after_index, before_item, after_item)
+            {
+                candidates.push(candidate);
             }
         }
     }
     candidates.sort_by(|left, right| {
         right
-            .0
-            .partial_cmp(&left.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| left.2.cmp(&right.2))
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| {
+                before[left.before_index]
+                    .object_id
+                    .cmp(&before[right.before_index].object_id)
+            })
+            .then_with(|| {
+                after[left.after_index]
+                    .object_id
+                    .cmp(&after[right.after_index].object_id)
+            })
     });
-    for (score, before_index, after_index) in candidates {
-        if before_matched[before_index] || after_matched[after_index] {
-            continue;
-        }
-        pairs.push(MatchedPair {
-            before_index,
-            after_index,
-            exact: false,
-            score,
+
+    let mut before_ambiguous = BTreeMap::new();
+    for before_index in 0..before.len() {
+        let contenders = competing_candidates(&candidates, |candidate| {
+            candidate.before_index == before_index
         });
-        before_matched[before_index] = true;
-        after_matched[after_index] = true;
+        if contenders.len() > 1 {
+            before_ambiguous.insert(before_index, contenders);
+        }
     }
 
-    pairs.sort_by_key(|pair| pair.after_index);
-    pairs
+    let mut after_ambiguous = BTreeMap::new();
+    for after_index in 0..after.len() {
+        let contenders = competing_candidates(&candidates, |candidate| {
+            candidate.after_index == after_index
+        });
+        if contenders.len() > 1 {
+            after_ambiguous.insert(after_index, contenders);
+        }
+    }
+
+    let ambiguous_before: std::collections::BTreeSet<usize> =
+        before_ambiguous.keys().copied().collect();
+    let ambiguous_after: std::collections::BTreeSet<usize> =
+        after_ambiguous.keys().copied().collect();
+    let mut before_matched = vec![false; before.len()];
+    let mut after_matched = vec![false; after.len()];
+    let mut pairs = Vec::new();
+    for candidate in &candidates {
+        if ambiguous_before.contains(&candidate.before_index)
+            || ambiguous_after.contains(&candidate.after_index)
+            || before_matched[candidate.before_index]
+            || after_matched[candidate.after_index]
+        {
+            continue;
+        }
+        before_matched[candidate.before_index] = true;
+        after_matched[candidate.after_index] = true;
+        pairs.push(MatchedPair {
+            before_index: candidate.before_index,
+            after_index: candidate.after_index,
+            exact: candidate.exact,
+            score: candidate.score,
+            evidence: candidate.evidence.clone(),
+        });
+    }
+    pairs.sort_by(|left, right| {
+        left.after_index
+            .cmp(&right.after_index)
+            .then_with(|| left.before_index.cmp(&right.before_index))
+    });
+
+    let mut ambiguities = Vec::new();
+    let mut covered_after = std::collections::BTreeSet::new();
+    for (before_index, contenders) in before_ambiguous {
+        for contender in &contenders {
+            covered_after.insert(contender.after_index);
+        }
+        ambiguities.push(AlignmentAmbiguity {
+            anchor: AmbiguityAnchor::Before(before_index),
+            candidates: contenders,
+        });
+    }
+    for (after_index, contenders) in after_ambiguous {
+        if covered_after.contains(&after_index) {
+            continue;
+        }
+        ambiguities.push(AlignmentAmbiguity {
+            anchor: AmbiguityAnchor::After(after_index),
+            candidates: contenders,
+        });
+    }
+    ambiguities.sort_by(|left, right| {
+        ambiguity_anchor_key(left, before, after).cmp(&ambiguity_anchor_key(right, before, after))
+    });
+
+    Alignment { pairs, ambiguities }
+}
+
+fn competing_candidates(
+    candidates: &[CandidatePair],
+    predicate: impl Fn(&CandidatePair) -> bool,
+) -> Vec<CandidatePair> {
+    let contenders: Vec<CandidatePair> = candidates
+        .iter()
+        .filter(|candidate| predicate(candidate))
+        .cloned()
+        .collect();
+    let Some(best_score) = contenders.first().map(|candidate| candidate.score) else {
+        return Vec::new();
+    };
+    contenders
+        .into_iter()
+        .take_while(|candidate| best_score - candidate.score <= AMBIGUITY_MARGIN)
+        .collect()
+}
+
+fn candidate_pair(
+    before_index: usize,
+    after_index: usize,
+    before: &AlignItem,
+    after: &AlignItem,
+) -> Option<CandidatePair> {
+    let exact = before.key == after.key;
+    let evidence = lineage_evidence(before, after);
+    let total_weight: f32 = evidence.iter().map(|entry| entry.weight).sum();
+    if total_weight <= 0.0 {
+        return None;
+    }
+    let score = evidence
+        .iter()
+        .map(|entry| entry.score * entry.weight)
+        .sum::<f32>()
+        / total_weight;
+    let threshold = if exact || before.table_shape.is_some() || before.image_digest.is_some() {
+        STRUCTURAL_SIMILARITY_THRESHOLD
+    } else {
+        TEXT_SIMILARITY_THRESHOLD
+    };
+    if score < threshold {
+        return None;
+    }
+    Some(CandidatePair {
+        before_index,
+        after_index,
+        exact,
+        score,
+        evidence,
+    })
+}
+
+fn lineage_evidence(before: &AlignItem, after: &AlignItem) -> Vec<LineageEvidence> {
+    let mut evidence = Vec::new();
+    if !before.key.is_empty() || !after.key.is_empty() {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::NormalizedText,
+            score: text_similarity(&before.key, &after.key),
+            weight: 0.45,
+            before: Some(fingerprint_label(&before.key)),
+            after: Some(fingerprint_label(&after.key)),
+        });
+    }
+    if !before.source_path.is_empty() || !after.source_path.is_empty() {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::SourcePath,
+            score: if before.source_path == after.source_path {
+                1.0
+            } else {
+                0.0
+            },
+            weight: 0.15,
+            before: Some(before.source_path.clone()),
+            after: Some(after.source_path.clone()),
+        });
+    }
+    if let (Some(before_style), Some(after_style)) = (&before.style_id, &after.style_id) {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::Style,
+            score: if before_style == after_style {
+                1.0
+            } else {
+                0.0
+            },
+            weight: 0.08,
+            before: Some(before_style.clone()),
+            after: Some(after_style.clone()),
+        });
+    }
+    if let (Some(before_bbox), Some(after_bbox)) = (before.bbox, after.bbox) {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::Geometry,
+            score: geometry_similarity(before.page, before_bbox, after.page, after_bbox),
+            weight: 0.08,
+            before: Some(geometry_label(before.page, before_bbox)),
+            after: Some(geometry_label(after.page, after_bbox)),
+        });
+    }
+    if let (Some(before_shape), Some(after_shape)) = (before.table_shape, after.table_shape) {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::TableShape,
+            score: table_shape_similarity(before_shape, after_shape),
+            weight: 0.25,
+            before: Some(format!("{}x{}", before_shape.0, before_shape.1)),
+            after: Some(format!("{}x{}", after_shape.0, after_shape.1)),
+        });
+    }
+    if let (Some(before_digest), Some(after_digest)) = (&before.image_digest, &after.image_digest) {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::ImageDigest,
+            score: if before_digest == after_digest {
+                1.0
+            } else {
+                0.0
+            },
+            weight: 0.40,
+            before: Some(before_digest.clone()),
+            after: Some(after_digest.clone()),
+        });
+    }
+    if let Some((score, before_value, after_value)) =
+        neighborhood_similarity(&before.neighborhood, &after.neighborhood)
+    {
+        evidence.push(LineageEvidence {
+            kind: LineageEvidenceKind::Neighborhood,
+            score,
+            weight: 0.09,
+            before: Some(before_value),
+            after: Some(after_value),
+        });
+    }
+    evidence.push(LineageEvidence {
+        kind: LineageEvidenceKind::ObjectConfidence,
+        score: before.confidence.min(after.confidence).clamp(0.0, 1.0),
+        weight: 0.05,
+        before: Some(format!("{:.3}", before.confidence)),
+        after: Some(format!("{:.3}", after.confidence)),
+    });
+    evidence
+}
+
+fn geometry_similarity(
+    before_page: Option<u32>,
+    before: Rect,
+    after_page: Option<u32>,
+    after: Rect,
+) -> f32 {
+    if before_page != after_page {
+        return 0.0;
+    }
+    let before_center_x = (before.x0 + before.x1) / 2.0;
+    let before_center_y = (before.y0 + before.y1) / 2.0;
+    let after_center_x = (after.x0 + after.x1) / 2.0;
+    let after_center_y = (after.y0 + after.y1) / 2.0;
+    let distance = (before_center_x - after_center_x).abs()
+        + (before_center_y - after_center_y).abs()
+        + (before.width() - after.width()).abs()
+        + (before.height() - after.height()).abs();
+    (1.0 - distance / 720.0).clamp(0.0, 1.0)
+}
+
+fn table_shape_similarity(before: (u32, u32), after: (u32, u32)) -> f32 {
+    let rows = before.0.min(after.0) as f32 / before.0.max(after.0).max(1) as f32;
+    let columns = before.1.min(after.1) as f32 / before.1.max(after.1).max(1) as f32;
+    (rows + columns) / 2.0
+}
+
+fn geometry_label(page: Option<u32>, bbox: Rect) -> String {
+    let page = page.map_or_else(|| "unknown".to_owned(), |value| value.to_string());
+    format!(
+        "p{page}:{:.2},{:.2},{:.2},{:.2}",
+        bbox.x0, bbox.y0, bbox.x1, bbox.y1
+    )
+}
+
+fn neighborhood_similarity(
+    before: &Neighborhood,
+    after: &Neighborhood,
+) -> Option<(f32, String, String)> {
+    let mut scores = Vec::new();
+    if let (Some(before_previous), Some(after_previous)) = (&before.previous, &after.previous) {
+        scores.push(text_similarity(before_previous, after_previous));
+    }
+    if let (Some(before_next), Some(after_next)) = (&before.next, &after.next) {
+        scores.push(text_similarity(before_next, after_next));
+    }
+    if scores.is_empty() {
+        return None;
+    }
+    let score = scores.iter().sum::<f32>() / scores.len() as f32;
+    Some((score, neighborhood_label(before), neighborhood_label(after)))
+}
+
+fn neighborhood_label(neighborhood: &Neighborhood) -> String {
+    let previous = neighborhood
+        .previous
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), |value| fingerprint_label(value));
+    let next = neighborhood
+        .next
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), |value| fingerprint_label(value));
+    format!("previous={previous};next={next}")
+}
+
+fn fingerprint_label(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(value.as_bytes());
+    let suffix: String = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("sha256:{suffix}")
 }
 
 fn moved_exact_pairs(pairs: &[MatchedPair]) -> std::collections::BTreeSet<usize> {
@@ -528,55 +966,154 @@ fn moved_exact_pairs(pairs: &[MatchedPair]) -> std::collections::BTreeSet<usize>
         .collect()
 }
 
-fn lineage_id(target_type: &str, before_key: &str, after_key: &str) -> String {
+fn lineage_id(target_type: &str, before: &AlignItem, after: &AlignItem) -> String {
     use sha2::{Digest, Sha256};
-    let (first, second) = if before_key <= after_key {
-        (before_key, after_key)
-    } else {
-        (after_key, before_key)
-    };
     let mut hasher = Sha256::new();
     hasher.update(target_type.as_bytes());
     hasher.update([0]);
-    hasher.update(first.as_bytes());
+    hasher.update(before.document_sha256.as_bytes());
     hasher.update([0]);
-    hasher.update(second.as_bytes());
+    hasher.update(before.object_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(after.document_sha256.as_bytes());
+    hasher.update([0]);
+    hasher.update(after.object_id.as_bytes());
     let digest = hasher.finalize();
-    let suffix: String = digest[..6]
+    let suffix: String = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
     format!("lin_{suffix}")
 }
 
-#[allow(clippy::too_many_arguments)]
+fn ambiguity_id(
+    target_type: &str,
+    anchor: &AmbiguityAnchor,
+    candidates: &[CandidatePair],
+    before: &[AlignItem],
+    after: &[AlignItem],
+) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(target_type.as_bytes());
+    hasher.update([0]);
+    match anchor {
+        AmbiguityAnchor::Before(index) => {
+            hasher.update(b"before");
+            hasher.update([0]);
+            hasher.update(before[*index].document_sha256.as_bytes());
+            hasher.update([0]);
+            hasher.update(before[*index].object_id.as_bytes());
+        }
+        AmbiguityAnchor::After(index) => {
+            hasher.update(b"after");
+            hasher.update([0]);
+            hasher.update(after[*index].document_sha256.as_bytes());
+            hasher.update([0]);
+            hasher.update(after[*index].object_id.as_bytes());
+        }
+    }
+    for candidate in candidates {
+        hasher.update([0]);
+        hasher.update(before[candidate.before_index].object_id.as_bytes());
+        hasher.update([0]);
+        hasher.update(after[candidate.after_index].object_id.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix: String = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("lin_{suffix}")
+}
+
+fn ambiguity_anchor_key(
+    ambiguity: &AlignmentAmbiguity,
+    before: &[AlignItem],
+    after: &[AlignItem],
+) -> (u8, String) {
+    match ambiguity.anchor {
+        AmbiguityAnchor::Before(index) => (0, before[index].object_id.clone()),
+        AmbiguityAnchor::After(index) => (1, after[index].object_id.clone()),
+    }
+}
+
+fn matched_lineage(
+    target_type: &str,
+    before: &AlignItem,
+    after: &AlignItem,
+    pair: &MatchedPair,
+    kind: Option<ChangeKind>,
+) -> LineageRecord {
+    LineageRecord {
+        id: lineage_id(target_type, before, after),
+        status: LineageStatus::Matched,
+        target_type: target_type.to_owned(),
+        before_object: Some(before.object_id.clone()),
+        after_object: Some(after.object_id.clone()),
+        match_score: pair.score,
+        kind,
+        evidence: pair.evidence.clone(),
+        candidates: Vec::new(),
+    }
+}
+
+fn ambiguous_lineage(
+    target_type: &str,
+    ambiguity: &AlignmentAmbiguity,
+    before: &[AlignItem],
+    after: &[AlignItem],
+) -> LineageRecord {
+    let (before_object, after_object) = match ambiguity.anchor {
+        AmbiguityAnchor::Before(index) => (Some(before[index].object_id.clone()), None),
+        AmbiguityAnchor::After(index) => (None, Some(after[index].object_id.clone())),
+    };
+    let match_score = ambiguity
+        .candidates
+        .first()
+        .map_or(0.0, |candidate| candidate.score);
+    let candidates = ambiguity
+        .candidates
+        .iter()
+        .map(|candidate| LineageCandidate {
+            before_object: Some(before[candidate.before_index].object_id.clone()),
+            after_object: Some(after[candidate.after_index].object_id.clone()),
+            match_score: candidate.score,
+            evidence: candidate.evidence.clone(),
+        })
+        .collect();
+    LineageRecord {
+        id: ambiguity_id(
+            target_type,
+            &ambiguity.anchor,
+            &ambiguity.candidates,
+            before,
+            after,
+        ),
+        status: LineageStatus::Ambiguous,
+        target_type: target_type.to_owned(),
+        before_object,
+        after_object,
+        match_score,
+        kind: None,
+        evidence: ambiguity
+            .candidates
+            .first()
+            .map_or_else(Vec::new, |candidate| candidate.evidence.clone()),
+        candidates,
+    }
+}
+
 fn push_change_record(
     records: &mut Vec<SemanticChangeRecord>,
-    lineage: &mut Vec<LineageRecord>,
     counter: &mut ChangeCounter,
-    target_type: &str,
+    context: &DiffContext<'_>,
     kind: ChangeKind,
     before_item: Option<&AlignItem>,
     after_item: Option<&AlignItem>,
-    score: Option<f32>,
-) {
-    let record_lineage = match (before_item, after_item) {
-        (Some(before), Some(after)) => {
-            let record = LineageRecord {
-                id: lineage_id(target_type, &before.key, &after.key),
-                before_object: Some(before.object_id.clone()),
-                after_object: Some(after.object_id.clone()),
-                match_score: score.unwrap_or(1.0),
-                kind: Some(kind),
-            };
-            lineage.push(LineageRecord {
-                kind: None,
-                ..record.clone()
-            });
-            Some(record)
-        }
-        _ => None,
-    };
+    lineage: Option<LineageRecord>,
+) -> Result<(), DocsightError> {
     let (object_id, page) = match (kind, before_item, after_item) {
         (ChangeKind::Removed, Some(before), _) => (Some(before.object_id.clone()), before.page),
         (_, _, Some(after)) => (Some(after.object_id.clone()), after.page),
@@ -587,7 +1124,8 @@ fn push_change_record(
         (Some(before), Some(after)) if kind == ChangeKind::Modified => (
             format!(
                 "{target_type} modified (match score {score:.3})",
-                score = score.unwrap_or(1.0)
+                target_type = context.target_type,
+                score = lineage.as_ref().map_or(1.0, |record| record.match_score)
             ),
             Some(before.display.clone()),
             Some(after.display.clone()),
@@ -595,70 +1133,110 @@ fn push_change_record(
         (Some(before), Some(after)) => (
             format!(
                 "{target_type} moved: was position-linked to \"{}\"",
-                before.display
+                before.display,
+                target_type = context.target_type
             ),
             Some(before.display.clone()),
             Some(after.display.clone()),
         ),
         (None, Some(after)) => (
-            format!("{target_type} added: \"{}\"", after.display),
+            format!("{} added: \"{}\"", context.target_type, after.display),
             None,
             Some(after.display.clone()),
         ),
         (Some(before), None) => (
-            format!("{target_type} removed: \"{}\"", before.display),
+            format!("{} removed: \"{}\"", context.target_type, before.display),
             Some(before.display.clone()),
             None,
         ),
-        (None, None) => (format!("{target_type} changed"), None, None),
+        (None, None) => (format!("{} changed", context.target_type), None, None),
     };
-    match kind {
-        ChangeKind::Added => counter.added += 1,
-        ChangeKind::Removed => counter.removed += 1,
-        ChangeKind::Modified => counter.modified += 1,
-        ChangeKind::Moved => counter.moved += 1,
-    }
+    increment_counter(counter, kind)?;
+    let evidence = diff_evidence(before_item, after_item, context);
+    let authoritative = evidence.is_empty()
+        && lineage
+            .as_ref()
+            .is_none_or(|record| record.status == LineageStatus::Matched);
     records.push(SemanticChangeRecord {
         kind,
         object_id,
         page,
-        target_type: target_type.to_owned(),
+        target_type: context.target_type.to_owned(),
         description,
         before: before_text,
         after: after_text,
-        lineage: record_lineage,
+        lineage,
+        authoritative,
+        evidence,
     });
+    Ok(())
+}
+
+fn increment_counter(counter: &mut ChangeCounter, kind: ChangeKind) -> Result<(), DocsightError> {
+    let value = match kind {
+        ChangeKind::Added => &mut counter.added,
+        ChangeKind::Removed => &mut counter.removed,
+        ChangeKind::Modified => &mut counter.modified,
+        ChangeKind::Moved => &mut counter.moved,
+    };
+    *value = value
+        .checked_add(1)
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "semantic diff changes".to_owned(),
+            limit: u64::from(u32::MAX),
+        })?;
+    Ok(())
 }
 
 fn diff_collection(
     before: &[AlignItem],
     after: &[AlignItem],
-    target_type: &str,
+    context: &DiffContext<'_>,
     records: &mut Vec<SemanticChangeRecord>,
     lineage: &mut Vec<LineageRecord>,
-) -> ChangeCounter {
+) -> Result<ChangeCounter, DocsightError> {
     let mut counter = ChangeCounter::default();
-    let pairs = align_items(before, after);
-    let stable_positions = moved_exact_pairs(&pairs);
+    let alignment = align_items(before, after);
+    let stable_positions = moved_exact_pairs(&alignment.pairs);
 
     let mut handled_before = vec![false; before.len()];
     let mut handled_after = vec![false; after.len()];
+    let mut ambiguous_before = BTreeMap::new();
+    let mut ambiguous_after = BTreeMap::new();
+    for ambiguity in &alignment.ambiguities {
+        let record = ambiguous_lineage(context.target_type, ambiguity, before, after);
+        match ambiguity.anchor {
+            AmbiguityAnchor::Before(index) => {
+                ambiguous_before.insert(index, record.clone());
+                for candidate in &ambiguity.candidates {
+                    ambiguous_after
+                        .entry(candidate.after_index)
+                        .or_insert_with(|| record.clone());
+                }
+            }
+            AmbiguityAnchor::After(index) => {
+                ambiguous_after.insert(index, record.clone());
+                for candidate in &ambiguity.candidates {
+                    ambiguous_before
+                        .entry(candidate.before_index)
+                        .or_insert_with(|| record.clone());
+                }
+            }
+        }
+        lineage.push(record);
+    }
 
-    for (position, pair) in pairs.iter().enumerate() {
+    for (position, pair) in alignment.pairs.iter().enumerate() {
         handled_before[pair.before_index] = true;
         handled_after[pair.after_index] = true;
         if pair.exact && stable_positions.contains(&position) {
-            lineage.push(LineageRecord {
-                id: lineage_id(
-                    target_type,
-                    &before[pair.before_index].key,
-                    &after[pair.after_index].key,
-                ),
-                before_object: Some(before[pair.before_index].object_id.clone()),
-                after_object: Some(after[pair.after_index].object_id.clone()),
-                match_score: 1.0,
-                kind: None,
-            });
+            lineage.push(matched_lineage(
+                context.target_type,
+                &before[pair.before_index],
+                &after[pair.after_index],
+                pair,
+                None,
+            ));
             continue;
         }
         let kind = if pair.exact {
@@ -666,112 +1244,164 @@ fn diff_collection(
         } else {
             ChangeKind::Modified
         };
+        let summary_lineage = matched_lineage(
+            context.target_type,
+            &before[pair.before_index],
+            &after[pair.after_index],
+            pair,
+            None,
+        );
+        let record_lineage = LineageRecord {
+            kind: Some(kind),
+            ..summary_lineage.clone()
+        };
+        lineage.push(summary_lineage);
         push_change_record(
             records,
-            lineage,
             &mut counter,
-            target_type,
+            context,
             kind,
             Some(&before[pair.before_index]),
             Some(&after[pair.after_index]),
-            Some(pair.score),
-        );
+            Some(record_lineage),
+        )?;
     }
 
     for (index, item) in after.iter().enumerate() {
         if !handled_after[index] {
             push_change_record(
                 records,
-                lineage,
                 &mut counter,
-                target_type,
+                context,
                 ChangeKind::Added,
                 None,
                 Some(item),
-                None,
-            );
+                ambiguous_after.get(&index).cloned(),
+            )?;
         }
     }
     for (index, item) in before.iter().enumerate() {
         if !handled_before[index] {
             push_change_record(
                 records,
-                lineage,
                 &mut counter,
-                target_type,
+                context,
                 ChangeKind::Removed,
                 Some(item),
                 None,
-                None,
-            );
+                ambiguous_before.get(&index).cloned(),
+            )?;
         }
     }
 
-    counter
+    Ok(counter)
 }
 
 pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff, DocsightError> {
     let mut records = Vec::new();
     let mut lineage = Vec::new();
+    let before_neighborhoods = document_neighborhoods(before);
+    let after_neighborhoods = document_neighborhoods(after);
 
-    let heading_items = |document: &Document| -> Vec<AlignItem> {
-        document
-            .headings()
-            .map(|(block, heading)| AlignItem {
-                object_id: block.id.to_string(),
-                page: block.page,
-                key: normalize_text(&format!("h{}:{}", heading.level, heading.text)),
-                display: heading.text.clone(),
-            })
-            .collect()
-    };
+    let heading_items =
+        |document: &Document, neighborhoods: &BTreeMap<String, Neighborhood>| -> Vec<AlignItem> {
+            document
+                .headings()
+                .map(|(block, heading)| {
+                    align_item(
+                        document,
+                        neighborhoods,
+                        block,
+                        normalize_text(&format!("h{}:{}", heading.level, heading.text)),
+                        heading.text.clone(),
+                        AlignMetadata {
+                            style_id: heading.style_id.clone(),
+                            table_shape: None,
+                            image_digest: None,
+                        },
+                    )
+                })
+                .collect()
+        };
     let headings = diff_collection(
-        &heading_items(before),
-        &heading_items(after),
-        "heading",
+        &heading_items(before, &before_neighborhoods),
+        &heading_items(after, &after_neighborhoods),
+        &DiffContext {
+            target_type: "heading",
+            before_warnings: &before.warnings,
+            after_warnings: &after.warnings,
+        },
         &mut records,
         &mut lineage,
-    );
+    )?;
 
-    let paragraph_items = |document: &Document| -> Vec<AlignItem> {
-        document
-            .paragraphs()
-            .map(|(block, paragraph)| AlignItem {
-                object_id: block.id.to_string(),
-                page: block.page,
-                key: normalize_text(&paragraph.text),
-                display: paragraph.text.clone(),
-            })
-            .collect()
-    };
+    let paragraph_items =
+        |document: &Document, neighborhoods: &BTreeMap<String, Neighborhood>| -> Vec<AlignItem> {
+            document
+                .paragraphs()
+                .map(|(block, paragraph)| {
+                    align_item(
+                        document,
+                        neighborhoods,
+                        block,
+                        normalize_text(&paragraph.text),
+                        paragraph.text.clone(),
+                        AlignMetadata {
+                            style_id: paragraph.style_id.clone(),
+                            table_shape: None,
+                            image_digest: None,
+                        },
+                    )
+                })
+                .collect()
+        };
     let paragraphs = diff_collection(
-        &paragraph_items(before),
-        &paragraph_items(after),
-        "paragraph",
+        &paragraph_items(before, &before_neighborhoods),
+        &paragraph_items(after, &after_neighborhoods),
+        &DiffContext {
+            target_type: "paragraph",
+            before_warnings: &before.warnings,
+            after_warnings: &after.warnings,
+        },
         &mut records,
         &mut lineage,
-    );
+    )?;
 
-    let table_items = |document: &Document| -> Vec<AlignItem> {
-        document
-            .tables()
-            .map(|(block, table)| AlignItem {
-                object_id: block.id.to_string(),
-                page: block.page,
-                key: normalize_text(&table_to_tsv_string(table)),
-                display: format!("{}x{}", table.rows, table.columns),
-            })
-            .collect()
-    };
+    let table_items =
+        |document: &Document, neighborhoods: &BTreeMap<String, Neighborhood>| -> Vec<AlignItem> {
+            document
+                .tables()
+                .map(|(block, table)| {
+                    align_item(
+                        document,
+                        neighborhoods,
+                        block,
+                        normalize_text(&table_to_tsv_string(table)),
+                        format!("{}x{}", table.rows, table.columns),
+                        AlignMetadata {
+                            style_id: None,
+                            table_shape: Some((table.rows, table.columns)),
+                            image_digest: None,
+                        },
+                    )
+                })
+                .collect()
+        };
     let tables = diff_collection(
-        &table_items(before),
-        &table_items(after),
-        "table",
+        &table_items(before, &before_neighborhoods),
+        &table_items(after, &after_neighborhoods),
+        &DiffContext {
+            target_type: "table",
+            before_warnings: &before.warnings,
+            after_warnings: &after.warnings,
+        },
         &mut records,
         &mut lineage,
-    );
+    )?;
 
-    let figure_items = |document: &Document| -> Vec<AlignItem> {
+    let figure_items = |document: &Document,
+                        neighborhoods: &BTreeMap<String, Neighborhood>|
+     -> Vec<AlignItem> {
         document
             .figures()
             .map(|(block, figure)| {
@@ -781,7 +1411,7 @@ pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff
                     .iter()
                     .find(|resource| resource.name == relationship)
                     .and_then(|resource| resource.content_sha256.as_deref());
-                let digest = digest.unwrap_or("<unavailable>");
+                let digest_label = digest.unwrap_or("<unavailable>");
                 let alt_text = figure.alt_text.as_deref().unwrap_or("<none>");
                 let caption = figure.caption.as_deref().unwrap_or("<none>");
                 let display = match (&figure.caption, &figure.alt_text, &figure.resource_id) {
@@ -790,24 +1420,34 @@ pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff
                     }
                     (None, None, None) => "unidentified figure".to_owned(),
                 };
-                AlignItem {
-                    object_id: block.id.to_string(),
-                    page: block.page,
-                    key: normalize_text(&format!(
-                        "resource {relationship} digest {digest} alt {alt_text} caption {caption}"
+                align_item(
+                    document,
+                    neighborhoods,
+                    block,
+                    normalize_text(&format!(
+                        "resource {relationship} digest {digest_label} alt {alt_text} caption {caption}"
                     )),
                     display,
-                }
+                    AlignMetadata {
+                        style_id: None,
+                        table_shape: None,
+                        image_digest: digest.map(str::to_owned),
+                    },
+                )
             })
             .collect()
     };
     let images = diff_collection(
-        &figure_items(before),
-        &figure_items(after),
-        "figure",
+        &figure_items(before, &before_neighborhoods),
+        &figure_items(after, &after_neighborhoods),
+        &DiffContext {
+            target_type: "figure",
+            before_warnings: &before.warnings,
+            after_warnings: &after.warnings,
+        },
         &mut records,
         &mut lineage,
-    );
+    )?;
 
     records.sort_by(|left, right| {
         left.target_type.cmp(&right.target_type).then_with(|| {
@@ -817,13 +1457,38 @@ pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff
                 .then_with(|| left.description.cmp(&right.description))
         })
     });
-    lineage.sort_by(|left, right| left.id.cmp(&right.id));
+    lineage.sort_by(|left, right| {
+        left.target_type
+            .cmp(&right.target_type)
+            .then_with(|| left.status.cmp(&right.status))
+            .then_with(|| left.id.cmp(&right.id))
+    });
 
     let total_changes = headings
         .total()
         .saturating_add(paragraphs.total())
         .saturating_add(tables.total())
         .saturating_add(images.total());
+    let lineage_ambiguous = u32::try_from(
+        lineage
+            .iter()
+            .filter(|record| record.status == LineageStatus::Ambiguous)
+            .count(),
+    )
+    .map_err(|_| DocsightError::ResourceLimit {
+        resource: "lineage ambiguity records".to_owned(),
+        limit: u64::from(u32::MAX),
+    })?;
+    let evidence_limited_changes = u32::try_from(
+        records
+            .iter()
+            .filter(|record| !record.authoritative)
+            .count(),
+    )
+    .map_err(|_| DocsightError::ResourceLimit {
+        resource: "evidence-limited semantic changes".to_owned(),
+        limit: u64::from(u32::MAX),
+    })?;
 
     Ok(SemanticDiff {
         total_changes,
@@ -833,7 +1498,181 @@ pub fn diff_semantic(before: &Document, after: &Document) -> Result<SemanticDiff
         images,
         records,
         lineage,
+        lineage_ambiguous,
+        evidence_limited_changes,
     })
+}
+
+fn align_item(
+    document: &Document,
+    neighborhoods: &BTreeMap<String, Neighborhood>,
+    block: &Block,
+    key: String,
+    display: String,
+    metadata: AlignMetadata,
+) -> AlignItem {
+    AlignItem {
+        document_sha256: document.sha256.clone(),
+        object_id: block.id.to_string(),
+        page: block.page,
+        bbox: block.bbox,
+        source_path: block.source.path.clone(),
+        style_id: metadata.style_id,
+        table_shape: metadata.table_shape,
+        image_digest: metadata.image_digest,
+        confidence: block.confidence,
+        neighborhood: neighborhoods
+            .get(block.id.as_str())
+            .cloned()
+            .unwrap_or_default(),
+        key,
+        display,
+    }
+}
+
+fn document_neighborhoods(document: &Document) -> BTreeMap<String, Neighborhood> {
+    let text: Vec<Option<String>> = document
+        .blocks
+        .iter()
+        .map(|block| {
+            let normalized = normalize_text(&block.text());
+            if normalized.is_empty() {
+                None
+            } else {
+                Some(normalized)
+            }
+        })
+        .collect();
+    let mut previous = vec![None; document.blocks.len()];
+    let mut last = None;
+    for (index, value) in text.iter().enumerate() {
+        previous[index] = last.clone();
+        if value.is_some() {
+            last = value.clone();
+        }
+    }
+    let mut next = vec![None; document.blocks.len()];
+    let mut following = None;
+    for (index, value) in text.iter().enumerate().rev() {
+        next[index] = following.clone();
+        if value.is_some() {
+            following = value.clone();
+        }
+    }
+    document
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            (
+                block.id.to_string(),
+                Neighborhood {
+                    previous: previous[index].clone(),
+                    next: next[index].clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn diff_evidence(
+    before_item: Option<&AlignItem>,
+    after_item: Option<&AlignItem>,
+    context: &DiffContext<'_>,
+) -> Vec<DiffEvidence> {
+    let mut evidence = Vec::new();
+    append_diagnostic_evidence(
+        &mut evidence,
+        DiffSide::Before,
+        before_item,
+        context.before_warnings,
+    );
+    append_diagnostic_evidence(
+        &mut evidence,
+        DiffSide::After,
+        after_item,
+        context.after_warnings,
+    );
+    append_confidence_evidence(
+        &mut evidence,
+        DiffSide::Before,
+        before_item,
+        context.target_type,
+    );
+    append_confidence_evidence(
+        &mut evidence,
+        DiffSide::After,
+        after_item,
+        context.target_type,
+    );
+    evidence.sort_by(|left, right| {
+        left.side
+            .cmp(&right.side)
+            .then_with(|| left.code.cmp(&right.code))
+            .then_with(|| left.object.cmp(&right.object))
+            .then_with(|| left.page.cmp(&right.page))
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    evidence.dedup();
+    evidence
+}
+
+fn append_diagnostic_evidence(
+    evidence: &mut Vec<DiffEvidence>,
+    side: DiffSide,
+    item: Option<&AlignItem>,
+    warnings: &[Diagnostic],
+) {
+    for warning in warnings {
+        if !warning_applies(warning, item) {
+            continue;
+        }
+        evidence.push(DiffEvidence {
+            side,
+            code: warning.code.clone(),
+            message: warning.message.clone(),
+            effect: warning.effect.clone(),
+            object: warning.object.as_ref().map(ToString::to_string),
+            page: warning.page,
+        });
+    }
+}
+
+fn warning_applies(warning: &Diagnostic, item: Option<&AlignItem>) -> bool {
+    match item {
+        Some(item) => match (&warning.object, warning.page) {
+            (Some(object), _) => object.as_str() == item.object_id,
+            (None, Some(page)) => item.page == Some(page),
+            (None, None) => true,
+        },
+        None => warning.object.is_none() && warning.page.is_none(),
+    }
+}
+
+fn append_confidence_evidence(
+    evidence: &mut Vec<DiffEvidence>,
+    side: DiffSide,
+    item: Option<&AlignItem>,
+    target_type: &str,
+) {
+    let Some(item) = item else {
+        return;
+    };
+    if item.confidence >= 0.999 {
+        return;
+    }
+    evidence.push(DiffEvidence {
+        side,
+        code: "LOW_CONFIDENCE_RECONSTRUCTION".to_owned(),
+        message: format!(
+            "{target_type} {} has reconstruction confidence {:.3}",
+            item.object_id, item.confidence
+        ),
+        effect: "the semantic change is not authoritative without corroborating source or visual evidence"
+            .to_owned(),
+        object: Some(item.object_id.clone()),
+        page: item.page,
+    });
 }
 
 fn calculate_largest_drift(before: &Document, after: &Document) -> (Option<f32>, Option<u32>) {
@@ -1180,6 +2019,8 @@ mod tests {
                 modified: 2,
                 moved: 0,
             },
+            lineage_ambiguous: 2,
+            evidence_limited_changes: 3,
             warnings: vec!["footer on page 13 overlaps body by 6.4 pt".into()],
         };
 
@@ -1190,18 +2031,35 @@ mod tests {
         assert!(formatted.contains("Largest drift      page 6, 41.2 pt vertical"));
         assert!(formatted.contains("Images             +1 / -0 / changed 0"));
         assert!(formatted.contains("Tables             2 modified / 0 moved"));
+        assert!(formatted.contains("Lineage ambiguous"));
+        assert!(formatted.contains("Evidence-limited"));
         assert!(formatted.contains("Warnings           footer on page 13 overlaps body by 6.4 pt"));
     }
 }
 
 #[cfg(test)]
-mod m8_alignment_tests {
-    use super::{AlignItem, ChangeKind, align_items, moved_exact_pairs, text_similarity};
+mod m13_lineage_tests {
+    use super::{
+        AlignItem, ChangeKind, LineageStatus, Neighborhood, align_items, ambiguous_lineage,
+        moved_exact_pairs, text_similarity,
+    };
 
     fn item(key: &str) -> AlignItem {
+        item_with(&format!("obj_{key}"), &format!("source/{key}"), key)
+    }
+
+    fn item_with(object_id: &str, source_path: &str, key: &str) -> AlignItem {
         AlignItem {
-            object_id: format!("obj_{key}"),
+            document_sha256: "a".repeat(64),
+            object_id: object_id.to_owned(),
             page: Some(1),
+            bbox: None,
+            source_path: source_path.to_owned(),
+            style_id: Some("Normal".to_owned()),
+            table_shape: None,
+            image_digest: None,
+            confidence: 1.0,
+            neighborhood: Neighborhood::default(),
             key: key.to_owned(),
             display: key.to_owned(),
         }
@@ -1216,10 +2074,12 @@ mod m8_alignment_tests {
             item("beta"),
             item("gamma"),
         ];
-        let pairs = align_items(&before, &after);
-        let stable = moved_exact_pairs(&pairs);
-        assert_eq!(pairs.len(), 3);
-        let moved = pairs
+        let alignment = align_items(&before, &after);
+        let stable = moved_exact_pairs(&alignment.pairs);
+        assert!(alignment.ambiguities.is_empty());
+        assert_eq!(alignment.pairs.len(), 3);
+        let moved = alignment
+            .pairs
             .iter()
             .enumerate()
             .filter(|(position, _)| !stable.contains(position))
@@ -1235,9 +2095,10 @@ mod m8_alignment_tests {
     fn reordered_exact_matches_are_detected_as_moved() {
         let before = vec![item("alpha"), item("beta"), item("gamma")];
         let after = vec![item("gamma"), item("alpha"), item("beta")];
-        let pairs = align_items(&before, &after);
-        let stable = moved_exact_pairs(&pairs);
-        assert_eq!(pairs.len(), 3);
+        let alignment = align_items(&before, &after);
+        let stable = moved_exact_pairs(&alignment.pairs);
+        assert!(alignment.ambiguities.is_empty());
+        assert_eq!(alignment.pairs.len(), 3);
         assert!(
             stable.len() < 3,
             "at least one pair must be flagged as moved"
@@ -1248,11 +2109,32 @@ mod m8_alignment_tests {
     fn similarity_matches_modified_pairs_with_score() {
         let before = vec![item("revenue increased by twenty percent")];
         let after = vec![item("revenue increased by twenty five percent")];
-        let pairs = align_items(&before, &after);
-        assert_eq!(pairs.len(), 1);
-        assert!(!pairs[0].exact);
-        assert!(pairs[0].score >= 0.6);
-        assert!(pairs[0].score < 1.0);
+        let alignment = align_items(&before, &after);
+        assert!(alignment.ambiguities.is_empty());
+        assert_eq!(alignment.pairs.len(), 1);
+        assert!(!alignment.pairs[0].exact);
+        assert!(alignment.pairs[0].score >= 0.6);
+        assert!(alignment.pairs[0].score < 1.0);
+    }
+
+    #[test]
+    fn identical_candidates_are_exposed_as_ambiguous_lineage() {
+        let before = vec![
+            item_with("before_a", "source/shared", "duplicate paragraph"),
+            item_with("before_b", "source/shared", "duplicate paragraph"),
+        ];
+        let after = vec![
+            item_with("after_a", "source/shared", "duplicate paragraph"),
+            item_with("after_b", "source/shared", "duplicate paragraph"),
+        ];
+        let alignment = align_items(&before, &after);
+        assert!(alignment.pairs.is_empty());
+        assert_eq!(alignment.ambiguities.len(), 2);
+        let record = ambiguous_lineage("paragraph", &alignment.ambiguities[0], &before, &after);
+        assert_eq!(record.status, LineageStatus::Ambiguous);
+        assert_eq!(record.candidates.len(), 2);
+        assert!(record.before_object.is_some());
+        assert!(record.after_object.is_none());
     }
 
     #[test]

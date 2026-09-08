@@ -8,7 +8,7 @@ use docsight_core::{
     DocumentSource, ObjectId, Rect, compute_coverage, compute_evidence, table_to_csv,
     table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
-use docsight_diff::{DiffOptions, diff_documents};
+use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, diff_documents};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
@@ -916,7 +916,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "diff",
-                summary: "compare package, semantic and supported visual changes",
+                summary: "compare changes with evidence-backed cross-version lineage",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
                 bounded: true,
@@ -2603,6 +2603,14 @@ struct DiffCommandArgs<'a> {
     json_errors: bool,
 }
 
+#[derive(Serialize)]
+struct DiffNdjsonSummary<'a> {
+    #[serde(flatten)]
+    summary: &'a DiffSummary,
+    before_document: &'a DiffDocumentIdentity,
+    after_document: &'a DiffDocumentIdentity,
+}
+
 fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
     let source_before = DocumentSource::open(args.before)?;
     let source_after = DocumentSource::open(args.after)?;
@@ -2610,17 +2618,34 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
 
     if args.ndjson {
         let stdout = io::stdout();
+        let expected_items = 1_usize
+            .checked_add(diff_result.semantic.lineage.len())
+            .and_then(|count| count.checked_add(diff_result.semantic.records.len()))
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: "diff NDJSON event count".to_owned(),
+                limit: u64::MAX,
+            })?;
         let mut writer = NdjsonWriter::new(
             stdout.lock(),
             args.limits.clone(),
             "diff".into(),
             source_after.sha256().to_owned(),
-            1 + diff_result.semantic.records.len(),
+            expected_items,
         )?;
         writer.write_meta(&(&source_after).into())?;
-        let summary_val =
-            serde_json::to_value(&diff_result.summary).map_err(output_serialization_error)?;
+        let summary_val = serde_json::to_value(DiffNdjsonSummary {
+            summary: &diff_result.summary,
+            before_document: &diff_result.before_document,
+            after_document: &diff_result.after_document,
+        })
+        .map_err(output_serialization_error)?;
         writer.write_item("diff.summary", &summary_val)?;
+        for record in &diff_result.semantic.lineage {
+            let record_val = serde_json::to_value(record).map_err(output_serialization_error)?;
+            if !writer.write_item("diff.lineage", &record_val)? {
+                break;
+            }
+        }
         for record in &diff_result.semantic.records {
             let record_val = serde_json::to_value(record).map_err(output_serialization_error)?;
             if !writer.write_item("diff.semantic", &record_val)? {
@@ -2647,6 +2672,21 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
     let mut writer = stdout.lock();
     writeln!(writer, "{}", diff_result.summary.format_summary()).map_err(stdout_error)?;
     if !args.summary {
+        for record in diff_result
+            .semantic
+            .lineage
+            .iter()
+            .filter(|record| record.status == docsight_diff::LineageStatus::Ambiguous)
+        {
+            writeln!(
+                writer,
+                "  ! ambiguous {} lineage {} with {} candidates",
+                record.target_type,
+                record.id,
+                record.candidates.len()
+            )
+            .map_err(stdout_error)?;
+        }
         for record in &diff_result.semantic.records {
             let page_str = record.page.map(|p| format!(" [p.{p}]")).unwrap_or_default();
             writeln!(
