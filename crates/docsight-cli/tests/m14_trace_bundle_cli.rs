@@ -94,3 +94,72 @@ fn replay_requires_explicit_verification_mode() -> Result<(), Box<dyn std::error
     assert!(String::from_utf8(output.stderr)?.contains("USAGE"));
     Ok(())
 }
+
+#[test]
+fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let input = temporary.path().join("synthetic.pdf");
+    std::fs::copy(fixture("synthetic_table.pdf"), &input)?;
+    let trace = temporary.path().join("page.dstrace");
+    let render = temporary.path().join("page.png");
+    let bundle = temporary.path().join("table.dse");
+    let commands = [
+        vec![
+            "render",
+            input.to_str().ok_or("path")?,
+            "--page",
+            "1",
+            "--dpi",
+            "36",
+            "--out",
+            render.to_str().ok_or("path")?,
+            "--trace",
+            trace.to_str().ok_or("path")?,
+        ],
+        vec![
+            "bundle",
+            input.to_str().ok_or("path")?,
+            "--object",
+            "tbl_b54dbb45da2a78dec493d24c309ea8c0",
+            "--dpi",
+            "36",
+            "--include-crop",
+            "--out",
+            bundle.to_str().ok_or("path")?,
+        ],
+    ];
+    for arguments in commands {
+        let output = docsight().arg("--agent").args(arguments).output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(output.stderr.is_empty());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(json["schema"], "docsight.agent/v2");
+        assert!(
+            json["warnings"]
+                .as_array()
+                .ok_or("warnings")?
+                .iter()
+                .any(|warning| warning["code"] == "APPROXIMATED_PDF_FONT")
+        );
+    }
+    std::fs::remove_file(&input)?;
+    for arguments in [
+        vec!["replay", trace.to_str().ok_or("path")?, "--verify"],
+        vec!["verify", bundle.to_str().ok_or("path")?],
+    ] {
+        let output = docsight().arg("--agent").args(arguments).output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(output.stderr.is_empty());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(json["result"]["verification"]["valid"], true);
+    }
+    Ok(())
+}

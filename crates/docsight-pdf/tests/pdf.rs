@@ -5,6 +5,79 @@ use docsight_core::{DocsightError, DocumentSource, Rect};
 use docsight_pdf::PdfDocument;
 use pdf_fixture::{build_pdf, sample_pdf};
 
+#[test]
+fn reconstructs_all_synthetic_measurements() -> Result<(), Box<dyn std::error::Error>> {
+    let source = DocumentSource::from_bytes(
+        include_bytes!("../../../fixtures/validation/synthetic_table.pdf").to_vec(),
+    )?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let tables = document.tables().collect::<Vec<_>>();
+    assert_eq!(tables.len(), 1);
+    let (block, table) = tables[0];
+    assert_eq!(block.id.as_str(), "tbl_b54dbb45da2a78dec493d24c309ea8c0");
+    assert_eq!((table.rows, table.columns), (25, 12));
+    assert_eq!(table.detector.as_deref(), Some("ruled"));
+    let expected = [
+        "3,8 10,0 8,0 9,0 2,9 14,3",
+        "18,0 10,0 5,2 4,6 13,8 13,0",
+        "5,9 7,0 10,5 14,7 4,7 2,9",
+        "9,0 5,7 17,0 3,8 13,0 14,9",
+        "6,1 13,2 14,8 13,8 18,4 5,9",
+        "8,2 15,2 17,4 8,2 13,5 17,2",
+        "18,1 4,0 7,0 16,8 18,3 18,4",
+        "5,9 15,5 15,8 10,5 6,2 7,5",
+        "10,0 9,0 7,5 12,5 4,0 15,5",
+        "3,8 2,8 13,8 12,8 10,5 4,3",
+        "17,1 3,0 4,5 6,2 7,7 7,9",
+        "15,0 4,3 17,0 15,5 13,5 16,6",
+        "16,6 3,5 8,8 17,6 15,4 8,0",
+        "14,9 5,7 18,1 17,7 5,5 13,5",
+        "3,8 16,0 3,3 18,3 16,0 13,0",
+        "5,8 16,6 7,0 11,4 8,8 7,4",
+        "13,0 15,2 16,6 15,8 18,6 6,4",
+        "8,8 15,0 17,8 3,8 16,4 17,4",
+        "5,7 7,6 8,6 9,0 11,8 14,3",
+        "17,0 13,2 4,5 17,6 3,4 18,2",
+    ];
+    for (row, values) in expected.iter().enumerate() {
+        for (column, expected) in values.split_whitespace().enumerate() {
+            let cells = table
+                .cells
+                .iter()
+                .filter(|cell| cell.row as usize == row + 3 && cell.column as usize == column + 1)
+                .collect::<Vec<_>>();
+            assert_eq!(cells.len(), 1);
+            assert_eq!(cells[0].text, expected, "row {row}, column {column}");
+            assert_eq!((cells[0].row_span, cells[0].column_span), (1, 1));
+        }
+    }
+    assert!(
+        table
+            .cells
+            .iter()
+            .any(|cell| cell.text == "EVENT A: 05/09" && cell.column_span == 2)
+    );
+    assert!(
+        table
+            .cells
+            .iter()
+            .any(|cell| cell.row == 1 && cell.column == 0 && cell.text == "GRUPO:")
+    );
+    assert!(
+        table
+            .cells
+            .iter()
+            .any(|cell| cell.row == 2 && cell.column == 1 && cell.text == "A1")
+    );
+    assert!(
+        !table
+            .cells
+            .iter()
+            .any(|cell| cell.text.contains("DATA DE") || cell.text.contains("1_P.A"))
+    );
+    Ok(())
+}
+
 fn build_pdf_with_objects(objects: &[String]) -> Vec<u8> {
     let mut pdf = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();

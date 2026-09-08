@@ -464,47 +464,104 @@ pub(crate) fn extract_rulings(commands: &[DisplayCommand]) -> Vec<RulingSegment>
                 }
             }
             DisplayCommand::Fill { path, .. } => {
-                let mut min_x = f32::INFINITY;
-                let mut max_x = f32::NEG_INFINITY;
-                let mut min_y = f32::INFINITY;
-                let mut max_y = f32::NEG_INFINITY;
-                let mut count = 0;
+                let mut points = Vec::new();
+                let mut curved = false;
                 for seg in path {
-                    let pt = match seg {
-                        PathSegment::Move(p) | PathSegment::Line(p) => Some(*p),
-                        PathSegment::Cubic(_, _, p) => Some(*p),
-                        PathSegment::Close => None,
-                    };
-                    if let Some(p) = pt {
-                        min_x = min_x.min(p.x);
-                        max_x = max_x.max(p.x);
-                        min_y = min_y.min(p.y);
-                        max_y = max_y.max(p.y);
-                        count += 1;
+                    match seg {
+                        PathSegment::Move(p) => {
+                            if !curved {
+                                append_filled_ruling(&points, &mut rulings);
+                            }
+                            curved = false;
+                            points.clear();
+                            points.push(*p);
+                        }
+                        PathSegment::Line(p) => points.push(*p),
+                        PathSegment::Cubic(_, _, _) => curved = true,
+                        PathSegment::Close => {
+                            if !curved {
+                                append_filled_ruling(&points, &mut rulings);
+                            }
+                            curved = false;
+                            points.clear();
+                        }
                     }
                 }
-                if count >= 3 {
-                    let w = (max_x - min_x).abs();
-                    let h = (max_y - min_y).abs();
-                    if h <= 3.5 && w >= 15.0 {
-                        rulings.push(RulingSegment {
-                            x0: min_x,
-                            y0: (min_y + max_y) * 0.5,
-                            x1: max_x,
-                            y1: (min_y + max_y) * 0.5,
-                        });
-                    } else if w <= 3.5 && h >= 15.0 {
-                        rulings.push(RulingSegment {
-                            x0: (min_x + max_x) * 0.5,
-                            y0: min_y,
-                            x1: (min_x + max_x) * 0.5,
-                            y1: max_y,
-                        });
-                    }
+                if !curved {
+                    append_filled_ruling(&points, &mut rulings);
                 }
             }
             _ => {}
         }
     }
     rulings
+}
+
+fn append_filled_ruling(points: &[Point], rulings: &mut Vec<RulingSegment>) {
+    if points.len() < 4 || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+        return;
+    }
+    let x0 = points.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+    let x1 = points.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+    let y0 = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let y1 = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+    if !points
+        .iter()
+        .all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1))
+    {
+        return;
+    }
+    if points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .any(|(a, b)| a.x != b.x && a.y != b.y)
+        || [(x0, y0), (x0, y1), (x1, y0), (x1, y1)]
+            .iter()
+            .any(|(x, y)| !points.iter().any(|point| point.x == *x && point.y == *y))
+    {
+        return;
+    }
+    if y1 > y0 && y1 - y0 <= 3.5 && x1 - x0 >= 6.0 {
+        rulings.push(RulingSegment {
+            x0,
+            y0: (y0 + y1) * 0.5,
+            x1,
+            y1: (y0 + y1) * 0.5,
+        });
+    } else if x1 > x0 && x1 - x0 <= 3.5 && y1 - y0 >= 6.0 {
+        rulings.push(RulingSegment {
+            x0: (x0 + x1) * 0.5,
+            y0,
+            x1: (x0 + x1) * 0.5,
+            y1,
+        });
+    }
+}
+
+#[cfg(test)]
+mod ruling_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_thin_rectangles_but_rejects_diagonals() {
+        let rectangle = [
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 6.0, y: 0.0 },
+            Point { x: 6.0, y: 1.0 },
+            Point { x: 0.0, y: 1.0 },
+        ];
+        let mut rulings = Vec::new();
+        append_filled_ruling(&rectangle, &mut rulings);
+        assert_eq!(rulings.len(), 1);
+        append_filled_ruling(
+            &[rectangle[0], rectangle[2], rectangle[1], rectangle[3]],
+            &mut rulings,
+        );
+        assert_eq!(rulings.len(), 1);
+        append_filled_ruling(
+            &[rectangle[0], rectangle[1], rectangle[2], rectangle[0]],
+            &mut rulings,
+        );
+        assert_eq!(rulings.len(), 1);
+    }
 }

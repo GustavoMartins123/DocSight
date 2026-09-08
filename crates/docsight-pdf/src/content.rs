@@ -76,6 +76,13 @@ pub(crate) struct FontInfo {
     pub bold: bool,
     pub base_font: String,
     decoder: FontDecoder,
+    cid_widths: Option<CidWidths>,
+}
+
+#[derive(Clone, Debug)]
+struct CidWidths {
+    default: f32,
+    widths: BTreeMap<u16, f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -451,6 +458,7 @@ pub(crate) fn parse_content(
                             bold: font.bold,
                             font_name: font.base_font.clone(),
                             decoder: font.decoder.clone(),
+                            cid_widths: font.cid_widths.clone(),
                         });
                         approximated_font = true;
                     }
@@ -761,10 +769,19 @@ fn append_text(
         .ok_or_else(|| malformed("text showing operator used before Tf"))?;
     let text = font.decoder.decode(bytes)?;
     let glyphs = text.chars().count() as f32;
-    let spaces = text.chars().filter(|character| *character == ' ').count() as f32;
-    let width = glyphs * font.size * 0.6
-        + (glyphs - 1.0).max(0.0) * state.text.char_spacing
-        + spaces * state.text.word_spacing;
+    let spaces = if font.cid_widths.is_some() {
+        0.0
+    } else {
+        bytes.iter().filter(|byte| **byte == b' ').count() as f32
+    };
+    let (advance, code_count) = match &font.cid_widths {
+        Some(metrics) => (
+            metrics.advance(bytes)? * font.size / 1000.0,
+            bytes.len() as f32 / 2.0,
+        ),
+        None => (glyphs * font.size * 0.6, glyphs),
+    };
+    let width = advance + code_count * state.text.char_spacing + spaces * state.text.word_spacing;
     let width = width * state.text.horizontal_scale;
     let combined = state.text.matrix.concat(state.ctm);
     validate_text_matrix(&combined)?;
@@ -1140,6 +1157,7 @@ struct FontSelection {
     bold: bool,
     font_name: String,
     decoder: FontDecoder,
+    cid_widths: Option<CidWidths>,
 }
 
 #[derive(Clone, Copy)]
@@ -1722,16 +1740,177 @@ pub(crate) fn fonts_from_resources(
             }
             None => decoder_from_encoding(dict.get("Encoding"))?,
         };
+        let cid_widths = match &descendant {
+            Some(descendant) => {
+                if !matches!(dict.get("Encoding"), Some(Value::Name(name)) if name == "Identity-H")
+                {
+                    return Err(DocsightError::UnsupportedFeature {
+                        feature: "CID metrics require Identity-H font encoding".to_owned(),
+                    });
+                }
+                Some(CidWidths::parse(descendant, &resolve)?)
+            }
+            None => None,
+        };
         fonts.insert(
             resource_name,
             FontInfo {
                 bold,
                 base_font: canonical_font.to_owned(),
                 decoder,
+                cid_widths,
             },
         );
     }
     Ok(fonts)
+}
+
+impl CidWidths {
+    fn parse(
+        dict: &BTreeMap<String, Value>,
+        resolve: &impl Fn(&Value) -> Result<Value, DocsightError>,
+    ) -> Result<Self, DocsightError> {
+        let default = match dict.get("DW") {
+            Some(value) => font_width(&resolve(value)?)?,
+            None => 1000.0,
+        };
+        let mut widths = BTreeMap::new();
+        if let Some(value) = dict.get("W") {
+            let Value::Array(values) = resolve(value)? else {
+                return Err(malformed("CID W must be an array"));
+            };
+            let mut items = values.iter();
+            while let Some(start) = items.next() {
+                let start = cid_code(start)?;
+                let next = items
+                    .next()
+                    .ok_or_else(|| malformed("incomplete CID width entry"))?;
+                match next {
+                    Value::Array(entries) => {
+                        for (offset, width) in entries.iter().enumerate() {
+                            let offset = u16::try_from(offset)
+                                .map_err(|_| malformed("CID width range overflow"))?;
+                            let code = start
+                                .checked_add(offset)
+                                .ok_or_else(|| malformed("CID width range overflow"))?;
+                            if widths.insert(code, font_width(width)?).is_some() {
+                                return Err(malformed("overlapping CID width ranges"));
+                            }
+                        }
+                    }
+                    end => {
+                        let end = cid_code(end)?;
+                        if end < start {
+                            return Err(malformed("reversed CID width range"));
+                        }
+                        let width = font_width(
+                            items
+                                .next()
+                                .ok_or_else(|| malformed("missing CID range width"))?,
+                        )?;
+                        for code in start..=end {
+                            if widths.insert(code, width).is_some() {
+                                return Err(malformed("overlapping CID width ranges"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Self { default, widths })
+    }
+
+    fn advance(&self, bytes: &[u8]) -> Result<f32, DocsightError> {
+        if bytes.len() % 2 != 0 {
+            return Err(malformed(
+                "Identity-H text requires two-byte character codes",
+            ));
+        }
+        let mut width = 0.0;
+        for code in bytes.chunks_exact(2) {
+            let code = u16::from_be_bytes([code[0], code[1]]);
+            width += self.widths.get(&code).copied().unwrap_or(self.default);
+            if !width.is_finite() {
+                return Err(malformed("CID text width overflow"));
+            }
+        }
+        Ok(width)
+    }
+}
+
+#[cfg(test)]
+mod cid_width_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_array_range_and_default_widths() -> Result<(), DocsightError> {
+        let dict = BTreeMap::from([
+            ("DW".to_owned(), Value::Int(900)),
+            (
+                "W".to_owned(),
+                Value::Array(vec![
+                    Value::Int(1),
+                    Value::Array(vec![Value::Int(300), Value::Real(450.5)]),
+                    Value::Int(3),
+                    Value::Int(4),
+                    Value::Int(600),
+                ]),
+            ),
+        ]);
+        let widths = CidWidths::parse(&dict, &|value| Ok(value.clone()))?;
+        assert_eq!(widths.advance(&[0, 1, 0, 2, 0, 3, 0, 4, 0, 5])?, 2850.5);
+        assert!(widths.advance(&[0]).is_err());
+        assert_eq!(
+            CidWidths::parse(&BTreeMap::new(), &|value| Ok(value.clone()))?.advance(&[255, 255])?,
+            1000.0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_width_ranges() {
+        for values in [
+            vec![Value::Int(-1), Value::Array(vec![Value::Int(1)])],
+            vec![Value::Int(65536), Value::Array(vec![Value::Int(1)])],
+            vec![
+                Value::Int(65535),
+                Value::Array(vec![Value::Int(1), Value::Int(1)]),
+            ],
+            vec![Value::Int(1)],
+            vec![Value::Int(2), Value::Int(1), Value::Int(300)],
+            vec![Value::Int(1), Value::Int(2)],
+            vec![Value::Int(1), Value::Array(vec![Value::Int(-1)])],
+            vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(300),
+                Value::Int(2),
+                Value::Array(vec![Value::Int(400)]),
+            ],
+        ] {
+            let dict = BTreeMap::from([("W".to_owned(), Value::Array(values))]);
+            assert!(CidWidths::parse(&dict, &|value| Ok(value.clone())).is_err());
+        }
+    }
+}
+
+fn cid_code(value: &Value) -> Result<u16, DocsightError> {
+    match value {
+        Value::Int(value) => u16::try_from(*value).map_err(|_| malformed("CID outside 0..65535")),
+        _ => Err(malformed("CID must be an integer")),
+    }
+}
+
+fn font_width(value: &Value) -> Result<f32, DocsightError> {
+    let width = match value {
+        Value::Int(value) => *value as f32,
+        Value::Real(value) => *value,
+        _ => return Err(malformed("font width must be a number")),
+    };
+    if !width.is_finite() || width < 0.0 {
+        return Err(malformed("font width must be finite and non-negative"));
+    }
+    Ok(width)
 }
 
 impl FontDecoder {

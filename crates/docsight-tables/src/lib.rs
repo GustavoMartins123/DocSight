@@ -265,12 +265,12 @@ fn build_ruled_table(
     for r in component {
         let dx = (r.x1 - r.x0).abs();
         let dy = (r.y1 - r.y0).abs();
-        if dy <= 2.0 && dx >= 15.0 {
+        if dy <= 2.0 && dx >= 6.0 {
             let y = (r.y0 + r.y1) * 0.5;
             let x_min = r.x0.min(r.x1);
             let x_max = r.x0.max(r.x1);
             h_lines.push((y, x_min, x_max));
-        } else if dx <= 2.0 && dy >= 15.0 {
+        } else if dx <= 2.0 && dy >= 6.0 {
             let x = (r.x0 + r.x1) * 0.5;
             let y_min = r.y0.min(r.y1);
             let y_max = r.y0.max(r.y1);
@@ -325,9 +325,21 @@ fn build_ruled_table(
     for r in 0..rows {
         let row_top = clustered_y[r as usize];
         let row_bot = clustered_y[(r + 1) as usize];
-        for c in 0..cols {
+        let mut c = 0;
+        while c < cols {
             let col_left = clustered_x[c as usize];
-            let col_right = clustered_x[(c + 1) as usize];
+            let mut end_column = c + 1;
+            let middle_y = (row_top + row_bot) * 0.5;
+            while end_column < cols
+                && !v_lines.iter().any(|(x, top, bottom)| {
+                    (*x - clustered_x[end_column as usize]).abs() <= 2.5
+                        && *top <= middle_y
+                        && *bottom >= middle_y
+                })
+            {
+                end_column += 1;
+            }
+            let col_right = clustered_x[end_column as usize];
 
             let cell_bbox = Rect::new(col_left, row_top, col_right, row_bot).ok();
 
@@ -336,7 +348,7 @@ fn build_ruled_table(
                 .filter(|s| {
                     let cx = (s.bbox.x0 + s.bbox.x1) * 0.5;
                     let cy = (s.bbox.y0 + s.bbox.y1) * 0.5;
-                    cx >= col_left && cx <= col_right && cy >= row_top && cy <= row_bot
+                    cx >= col_left && cx < col_right && cy >= row_top && cy < row_bot
                 })
                 .collect();
 
@@ -353,20 +365,34 @@ fn build_ruled_table(
                     })
             });
 
-            let cell_text = cell_spans
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
+            let mut cell_text = String::new();
+            let mut previous: Option<&TextSpanItem> = None;
+            for span in cell_spans {
+                if let Some(previous) = previous {
+                    let same_line = (span.bbox.y0 - previous.bbox.y0).abs()
+                        < span.bbox.height().min(previous.bbox.height()) * 0.5;
+                    if !same_line {
+                        cell_text.push('\n');
+                    } else if span.bbox.x0 - previous.bbox.x1 > span.bbox.height() * 0.15
+                        && !cell_text.ends_with(char::is_whitespace)
+                        && !span.text.starts_with(char::is_whitespace)
+                    {
+                        cell_text.push(' ');
+                    }
+                }
+                cell_text.push_str(&span.text);
+                previous = Some(span);
+            }
 
             cells.push(InferredTableCell {
                 row: r,
                 column: c,
                 row_span: 1,
-                column_span: 1,
+                column_span: end_column - c,
                 bbox: cell_bbox,
                 text: cell_text,
             });
+            c = end_column;
         }
     }
 
