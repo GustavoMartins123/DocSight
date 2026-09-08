@@ -900,6 +900,13 @@ pub fn diff_visual(
     threshold: u8,
     out_dir: Option<&Path>,
 ) -> Result<VisualDiff, DocsightError> {
+    if source_before.format() == DocumentFormat::Pdf || source_after.format() == DocumentFormat::Pdf
+    {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "source-faithful visual diff while the native PDF rasterizer is approximate"
+                .to_owned(),
+        });
+    }
     if doc_before
         .warnings
         .iter()
@@ -910,6 +917,9 @@ pub fn diff_visual(
                 "DOCX_FIGURE_RASTER_PLACEHOLDER"
                     | "DOCX_FONT_SUBSTITUTED"
                     | "APPROXIMATED_PDF_FONT"
+                    | "INITIAL_PDF_RASTERIZER"
+                    | "PDF_GRAPHICS_STYLE_APPROXIMATED"
+                    | "PDF_XOBJECT_PLACEHOLDER"
             )
         })
     {

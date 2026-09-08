@@ -242,6 +242,17 @@ fn executes_initial_text_path_and_transform_operators() -> Result<(), DocsightEr
 }
 
 #[test]
+fn composes_page_and_text_matrices_in_pdf_order() -> Result<(), DocsightError> {
+    let content = "0.5 0 0 -0.5 0 100 cm BT /F1 10 Tf 20 20 Td (A) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    let span = &page.spans[0];
+    assert!((span.bbox.x0 - 10.0).abs() < 0.001);
+    assert!((span.bbox.y0 - 9.0).abs() < 0.001);
+    Ok(())
+}
+
+#[test]
 fn rejects_unknown_content_operators() -> Result<(), DocsightError> {
     let source = DocumentSource::from_bytes(build_pdf("1 unsupported", "[0 0 10 10]", ""))?;
     let error = PdfDocument::open(&source)?.page(1);
@@ -270,5 +281,126 @@ fn decodes_simple_truetype_text_through_to_unicode() -> Result<(), DocsightError
     assert_eq!(page.spans[0].font_name, "Example-Bold");
     assert!(page.spans[0].bold);
     assert_eq!(page.warnings[0].code, "APPROXIMATED_PDF_FONT");
+    Ok(())
+}
+
+#[test]
+fn preserves_clipping_paths_in_native_rasterization() -> Result<(), DocsightError> {
+    let content = "0 0 100 100 re W n 0 0 200 100 re f";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?;
+    let raster = document.rasterize(1, 72, None)?;
+    let inside = (50usize * raster.width_px as usize + 50) * 3;
+    let outside = (50usize * raster.width_px as usize + 150) * 3;
+    assert_eq!(&raster.pixels[inside..inside + 3], &[0, 0, 0]);
+    assert_eq!(&raster.pixels[outside..outside + 3], &[255, 255, 255]);
+    Ok(())
+}
+
+#[test]
+fn marks_text_spans_with_active_clipping_paths() -> Result<(), DocsightError> {
+    let content = "0 0 100 100 re W n BT /F1 10 Tf 150 50 Td (Clipped) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert!(page.spans[0].clipped);
+    Ok(())
+}
+
+#[test]
+fn decodes_type0_font_through_to_unicode() -> Result<(), DocsightError> {
+    let content = "BT /F1 12 Tf 20 70 Td <00010002> Tj ET";
+    let cmap = "begincmap\n2 beginbfchar\n<0001> <0041>\n<0002> <0042>\nendbfchar\nendcmap";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Example-Bold /Encoding /Identity-H /DescendantFonts [5 0 R] /ToUnicode 6 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+Example-Bold /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(page.spans[0].text, "AB");
+    assert_eq!(page.spans[0].font_name, "Example-Bold");
+    assert!(page.spans[0].bold);
+    Ok(())
+}
+
+#[test]
+fn exposes_xobject_placements_as_figure_blocks() -> Result<(), DocsightError> {
+    let content = "q 100 0 0 50 10 20 cm /Im#30 Do Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let figures = document.figures().collect::<Vec<_>>();
+    assert_eq!(figures.len(), 1);
+    let block = figures[0].0;
+    assert_eq!(block.page, Some(1));
+    assert_eq!(block.bbox, Some(Rect::new(10.0, 30.0, 110.0, 80.0)?));
+    assert_eq!(figures[0].1.resource_id.as_deref(), Some("Im0"));
+    assert!(
+        document.warnings.iter().any(|warning| {
+            warning.code == "PDF_XOBJECT_PLACEHOLDER" && warning.page == Some(1)
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn renders_explicit_placeholder_for_undecoded_xobjects() -> Result<(), DocsightError> {
+    let content = "q 100 0 0 50 10 20 cm /Im0 Do Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let raster = PdfDocument::open(&source)?.rasterize(1, 72, None)?;
+    assert!(
+        raster
+            .pixels
+            .chunks_exact(3)
+            .any(|pixel| pixel != [255, 255, 255])
+    );
+    assert!(
+        raster.warnings.iter().any(|warning| {
+            warning.code == "PDF_XOBJECT_PLACEHOLDER" && warning.page == Some(1)
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn exposes_inline_images_as_explicit_figure_placeholders() -> Result<(), DocsightError> {
+    let content = "q 100 0 0 50 10 20 cm BI /W 1 /H 1 /BPC 8 /CS /RGB ID abc EI Q";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let figures = document.figures().collect::<Vec<_>>();
+    assert_eq!(figures.len(), 1);
+    assert_eq!(figures[0].1.resource_id.as_deref(), Some("<inline-image>"));
+    assert!(
+        document.warnings.iter().any(|warning| {
+            warning.code == "PDF_XOBJECT_PLACEHOLDER" && warning.page == Some(1)
+        })
+    );
     Ok(())
 }

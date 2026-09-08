@@ -1,4 +1,4 @@
-use crate::content::{Color, DisplayCommand, PathSegment, Point, TextRun};
+use crate::content::{ClipRegion, Color, DisplayCommand, PathSegment, Point, TextRun};
 use docsight_core::{DocsightError, Rect};
 
 pub const MIN_DPI: u16 = 36;
@@ -50,9 +50,22 @@ pub(crate) fn rasterize(
     for command in commands {
         match command {
             DisplayCommand::Text(run) => canvas.draw_text(run)?,
-            DisplayCommand::Fill { path, color } => canvas.fill_path(path, *color)?,
-            DisplayCommand::Stroke { path, color, width } => {
-                canvas.stroke_path(path, *color, *width)?;
+            DisplayCommand::Figure { bbox, clips, .. } => {
+                canvas.draw_figure_placeholder(*bbox, clips)
+            }
+            DisplayCommand::Fill {
+                path,
+                color,
+                even_odd,
+                clips,
+            } => canvas.fill_path(path, *color, *even_odd, clips)?,
+            DisplayCommand::Stroke {
+                path,
+                color,
+                width,
+                clips,
+            } => {
+                canvas.stroke_path(path, *color, *width, clips)?;
             }
         }
     }
@@ -74,6 +87,40 @@ struct Canvas {
 }
 
 impl Canvas {
+    fn draw_figure_placeholder(&mut self, bbox: Rect, clips: &[ClipRegion]) {
+        let color = Color {
+            red: 128,
+            green: 128,
+            blue: 128,
+        };
+        let top_left = Point {
+            x: bbox.x0,
+            y: bbox.y0,
+        };
+        let top_right = Point {
+            x: bbox.x1,
+            y: bbox.y0,
+        };
+        let bottom_left = Point {
+            x: bbox.x0,
+            y: bbox.y1,
+        };
+        let bottom_right = Point {
+            x: bbox.x1,
+            y: bbox.y1,
+        };
+        for (start, end) in [
+            (top_left, top_right),
+            (top_right, bottom_right),
+            (bottom_right, bottom_left),
+            (bottom_left, top_left),
+            (top_left, bottom_right),
+            (top_right, bottom_left),
+        ] {
+            self.stroke_line(start, end, color, 1.0, clips);
+        }
+    }
+
     fn draw_text(&mut self, run: &TextRun) -> Result<(), DocsightError> {
         let character_count = run.text.chars().count();
         if character_count == 0 {
@@ -86,7 +133,7 @@ impl Canvas {
             blue: (run.argb & 0xff) as u8,
         };
         for (index, character) in run.text.chars().enumerate() {
-            if character == ' ' {
+            if character.is_whitespace() || character == '\u{200b}' {
                 continue;
             }
             let pattern = glyph(character).ok_or_else(|| DocsightError::UnsupportedFeature {
@@ -104,38 +151,38 @@ impl Canvas {
                     let y0 = run.bbox.y0 + row as f32 * cell_height;
                     let x1 = x0 + cell_width * if run.bold { 1.35 } else { 1.0 };
                     let y1 = y0 + cell_height;
-                    self.fill_rect(x0, y0, x1, y1, color);
+                    self.fill_rect(x0, y0, x1, y1, color, &run.clips);
                 }
             }
         }
         Ok(())
     }
 
-    fn fill_path(&mut self, path: &[PathSegment], color: Color) -> Result<(), DocsightError> {
+    fn fill_path(
+        &mut self,
+        path: &[PathSegment],
+        color: Color,
+        even_odd: bool,
+        clips: &[ClipRegion],
+    ) -> Result<(), DocsightError> {
         let polygons = flatten_subpaths(path)?;
-        if polygons.len() != 1 {
-            return Err(DocsightError::UnsupportedFeature {
-                feature: "compound PDF fill paths".to_owned(),
-            });
-        }
-        let mut polygon = match polygons.into_iter().next() {
-            Some(polygon) => polygon,
-            None => {
-                return Err(DocsightError::MalformedDocument {
-                    message: "filled PDF path has no subpath".to_owned(),
-                });
-            }
-        };
-        if polygon.len() < 3 {
+        if polygons.is_empty() || polygons.iter().any(|polygon| polygon.len() < 3) {
             return Err(DocsightError::MalformedDocument {
                 message: "filled PDF path has fewer than three points".to_owned(),
             });
         }
-        if polygon.first() != polygon.last() {
-            let first = polygon[0];
-            polygon.push(first);
-        }
-        self.fill_polygon(&polygon, color);
+        let polygons = polygons
+            .into_iter()
+            .map(|mut polygon| {
+                if polygon.first() != polygon.last() {
+                    if let Some(first) = polygon.first().copied() {
+                        polygon.push(first);
+                    }
+                }
+                polygon
+            })
+            .collect::<Vec<_>>();
+        self.fill_polygons(&polygons, color, even_odd, clips);
         Ok(())
     }
 
@@ -144,30 +191,41 @@ impl Canvas {
         path: &[PathSegment],
         color: Color,
         width: f32,
+        clips: &[ClipRegion],
     ) -> Result<(), DocsightError> {
         for points in flatten_subpaths(path)? {
             for pair in points.windows(2) {
-                self.stroke_line(pair[0], pair[1], color, width);
+                self.stroke_line(pair[0], pair[1], color, width, clips);
             }
         }
         Ok(())
     }
 
-    fn fill_polygon(&mut self, polygon: &[Point], color: Color) {
-        let min_x = polygon
+    fn fill_polygons(
+        &mut self,
+        polygons: &[Vec<Point>],
+        color: Color,
+        even_odd: bool,
+        clips: &[ClipRegion],
+    ) {
+        let min_x = polygons
             .iter()
+            .flatten()
             .map(|point| point.x)
             .fold(f32::INFINITY, f32::min);
-        let min_y = polygon
+        let min_y = polygons
             .iter()
+            .flatten()
             .map(|point| point.y)
             .fold(f32::INFINITY, f32::min);
-        let max_x = polygon
+        let max_x = polygons
             .iter()
+            .flatten()
             .map(|point| point.x)
             .fold(f32::NEG_INFINITY, f32::max);
-        let max_y = polygon
+        let max_y = polygons
             .iter()
+            .flatten()
             .map(|point| point.y)
             .fold(f32::NEG_INFINITY, f32::max);
         let x0 = self.pixel_x(min_x).max(0);
@@ -180,14 +238,35 @@ impl Canvas {
                     x: (x as f32 + 0.5) / self.scale + self.offset_x,
                     y: (y as f32 + 0.5) / self.scale + self.offset_y,
                 };
-                if winding_number(point, polygon) != 0 {
-                    self.set_pixel(x, y, color);
+                let inside = if even_odd {
+                    polygons
+                        .iter()
+                        .filter(|polygon| winding_number(point, polygon) != 0)
+                        .count()
+                        % 2
+                        == 1
+                } else {
+                    polygons
+                        .iter()
+                        .map(|polygon| winding_number(point, polygon))
+                        .sum::<i32>()
+                        != 0
+                };
+                if inside {
+                    self.set_pixel(x, y, color, clips);
                 }
             }
         }
     }
 
-    fn stroke_line(&mut self, start: Point, end: Point, color: Color, width: f32) {
+    fn stroke_line(
+        &mut self,
+        start: Point,
+        end: Point,
+        color: Color,
+        width: f32,
+        clips: &[ClipRegion],
+    ) {
         let x0 = self.pixel_x(start.x);
         let y0 = self.pixel_y(start.y);
         let x1 = self.pixel_x(end.x);
@@ -203,7 +282,7 @@ impl Canvas {
         loop {
             for offset_y in -radius..=radius {
                 for offset_x in -radius..=radius {
-                    self.set_pixel(x + offset_x, y + offset_y, color);
+                    self.set_pixel(x + offset_x, y + offset_y, color, clips);
                 }
             }
             if x == x1 && y == y1 {
@@ -221,14 +300,22 @@ impl Canvas {
         }
     }
 
-    fn fill_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: Color) {
+    fn fill_rect(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        color: Color,
+        clips: &[ClipRegion],
+    ) {
         let left = self.pixel_x(x0).max(0);
         let top = self.pixel_y(y0).max(0);
         let right = self.pixel_x(x1).min(self.width as i32);
         let bottom = self.pixel_y(y1).min(self.height as i32);
         for y in top..bottom {
             for x in left..right {
-                self.set_pixel(x, y, color);
+                self.set_pixel(x, y, color, clips);
             }
         }
     }
@@ -241,14 +328,38 @@ impl Canvas {
         ((value - self.offset_y) * self.scale).round() as i32
     }
 
-    fn set_pixel(&mut self, x: i32, y: i32, color: Color) {
+    fn set_pixel(&mut self, x: i32, y: i32, color: Color, clips: &[ClipRegion]) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+        let point = Point {
+            x: (x as f32 + 0.5) / self.scale + self.offset_x,
+            y: (y as f32 + 0.5) / self.scale + self.offset_y,
+        };
+        if clips.iter().any(|clip| !clip_contains(clip, point)) {
             return;
         }
         let index = (y as usize * self.width as usize + x as usize) * 3;
         self.pixels[index] = color.red;
         self.pixels[index + 1] = color.green;
         self.pixels[index + 2] = color.blue;
+    }
+}
+
+fn clip_contains(clip: &ClipRegion, point: Point) -> bool {
+    if clip.even_odd {
+        clip.polygons
+            .iter()
+            .filter(|polygon| winding_number(point, polygon) != 0)
+            .count()
+            % 2
+            == 1
+    } else {
+        clip.polygons
+            .iter()
+            .map(|polygon| winding_number(point, polygon))
+            .sum::<i32>()
+            != 0
     }
 }
 
@@ -456,31 +567,44 @@ fn glyph(character: char) -> Option<[u8; 7]> {
         'Y' => [17, 17, 10, 4, 4, 4, 4],
         'Z' => [31, 1, 2, 4, 8, 16, 31],
         'a' => [0, 0, 14, 1, 15, 17, 15],
+        'á' => [4, 2, 14, 1, 15, 17, 15],
+        'ã' => [10, 0, 14, 1, 15, 17, 15],
         'b' => [16, 16, 22, 25, 17, 17, 30],
         'c' => [0, 0, 14, 17, 16, 17, 14],
+        'ç' => [0, 0, 14, 17, 16, 17, 8],
         'd' => [1, 1, 13, 19, 17, 17, 15],
         'e' => [0, 0, 14, 17, 31, 16, 14],
+        'é' => [4, 2, 14, 17, 31, 16, 14],
+        'ê' => [10, 0, 14, 17, 31, 16, 14],
         'f' => [6, 9, 8, 28, 8, 8, 8],
         'g' => [0, 0, 15, 17, 15, 1, 14],
         'h' => [16, 16, 22, 25, 17, 17, 17],
         'i' => [4, 0, 12, 4, 4, 4, 14],
+        'í' => [4, 2, 12, 4, 4, 4, 14],
         'j' => [2, 0, 6, 2, 2, 18, 12],
         'k' => [16, 16, 18, 20, 24, 20, 18],
         'l' => [12, 4, 4, 4, 4, 4, 14],
         'm' => [0, 0, 26, 21, 21, 17, 17],
         'n' => [0, 0, 22, 25, 17, 17, 17],
         'o' => [0, 0, 14, 17, 17, 17, 14],
+        'ó' => [4, 2, 14, 17, 17, 17, 14],
+        'ö' => [10, 0, 14, 17, 17, 17, 14],
         'p' => [0, 0, 30, 17, 30, 16, 16],
         'q' => [0, 0, 15, 17, 15, 1, 1],
         'r' => [0, 0, 22, 25, 16, 16, 16],
         's' => [0, 0, 15, 16, 14, 1, 30],
         't' => [8, 8, 28, 8, 8, 9, 6],
         'u' => [0, 0, 17, 17, 17, 19, 13],
+        'ú' => [4, 2, 17, 17, 17, 19, 13],
+        'ü' => [10, 0, 17, 17, 17, 19, 13],
+        'ő' => [10, 2, 14, 17, 17, 19, 13],
+        'ű' => [10, 2, 17, 17, 17, 19, 13],
         'v' => [0, 0, 17, 17, 17, 10, 4],
         'w' => [0, 0, 17, 17, 21, 21, 10],
         'x' => [0, 0, 17, 10, 4, 10, 17],
         'y' => [0, 0, 17, 17, 15, 1, 14],
         'z' => [0, 0, 31, 2, 4, 8, 31],
+        'Ö' => [10, 0, 14, 17, 17, 17, 14],
         '0' => [14, 17, 19, 21, 25, 17, 14],
         '1' => [4, 12, 4, 4, 4, 4, 14],
         '2' => [14, 17, 1, 2, 4, 8, 31],
@@ -507,8 +631,22 @@ fn glyph(character: char) -> Option<[u8; 7]> {
         ']' => [14, 2, 2, 2, 2, 2, 14],
         '+' => [0, 4, 4, 31, 4, 4, 0],
         '=' => [0, 0, 31, 0, 31, 0, 0],
-        '\'' => [4, 4, 2, 0, 0, 0, 0],
-        '"' => [10, 10, 5, 0, 0, 0, 0],
+        '°' => [6, 9, 6, 0, 0, 0, 0],
+        '±' => [0, 4, 4, 31, 4, 4, 0],
+        '−' | '–' | '—' => [0, 0, 0, 31, 0, 0, 0],
+        '‘' | '’' | '\'' => [4, 4, 2, 0, 0, 0, 0],
+        '“' | '”' | '"' => [10, 10, 5, 0, 0, 0, 0],
+        'ϵ' => [0, 0, 14, 16, 30, 16, 14],
+        '∑' => [31, 16, 8, 4, 2, 1, 31],
+        '∫' => [6, 4, 4, 4, 4, 4, 12],
+        '©' => [14, 17, 23, 21, 23, 17, 14],
+        '§' => [14, 16, 12, 18, 5, 3, 14],
+        '●' => [0, 14, 31, 31, 31, 14, 0],
+        '□' => [31, 17, 17, 17, 17, 17, 31],
+        '\u{f02a}' => [0, 14, 31, 31, 31, 14, 0],
+        '$' => [4, 14, 20, 12, 5, 11, 4],
+        '|' => [4, 4, 4, 4, 4, 4, 4],
+        '*' => [0, 4, 21, 14, 21, 4, 0],
         '#' => [10, 31, 10, 10, 31, 10, 0],
         '%' => [25, 25, 2, 4, 8, 19, 19],
         '&' => [12, 18, 20, 8, 21, 18, 13],

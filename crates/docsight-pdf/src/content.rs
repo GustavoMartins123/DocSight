@@ -1,9 +1,10 @@
 use crate::syntax::{Value, malformed};
 use docsight_core::{DocsightError, Rect};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_OPERATIONS: usize = 1_000_000;
 const MAX_GRAPHICS_DEPTH: usize = 64;
+const MAX_PATH_SEGMENTS: usize = 100_000;
 const MAX_OPERANDS: usize = 100_000;
 const MAX_STRING_DEPTH: usize = 64;
 
@@ -29,6 +30,12 @@ pub(crate) enum PathSegment {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ClipRegion {
+    pub polygons: Vec<Vec<Point>>,
+    pub even_odd: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TextRun {
     pub text: String,
     pub bbox: Rect,
@@ -39,19 +46,28 @@ pub(crate) struct TextRun {
     pub argb: u32,
     pub source_offset: u64,
     pub source_length: u64,
+    pub clips: Vec<ClipRegion>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DisplayCommand {
     Text(TextRun),
+    Figure {
+        bbox: Rect,
+        resource_name: String,
+        clips: Vec<ClipRegion>,
+    },
     Fill {
         path: Vec<PathSegment>,
         color: Color,
+        even_odd: bool,
+        clips: Vec<ClipRegion>,
     },
     Stroke {
         path: Vec<PathSegment>,
         color: Color,
         width: f32,
+        clips: Vec<ClipRegion>,
     },
 }
 
@@ -79,6 +95,8 @@ pub(crate) struct ParsedContent {
     pub commands: Vec<DisplayCommand>,
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
+    pub approximated_graphics: bool,
+    pub omitted_xobjects: bool,
 }
 
 pub(crate) fn parse_content(
@@ -86,6 +104,7 @@ pub(crate) fn parse_content(
     page_left: f32,
     page_height: f32,
     fonts: &BTreeMap<String, FontInfo>,
+    xobjects: &BTreeSet<String>,
 ) -> Result<ParsedContent, DocsightError> {
     let mut lexer = ContentLexer::new(bytes);
     let mut operands = Vec::new();
@@ -98,6 +117,9 @@ pub(crate) fn parse_content(
     let mut marked_content_depth = 0usize;
     let mut operations = 0usize;
     let mut approximated_font = false;
+    let mut approximated_graphics = false;
+    let mut omitted_xobjects = false;
+    let mut inline_image = false;
     while let Some(token) = lexer.next_token()? {
         match token {
             ContentToken::Operand(value) => {
@@ -120,6 +142,31 @@ pub(crate) fn parse_content(
                 let anchor_offset = token_start as u64;
                 let anchor_length = (token_end - token_start) as u64;
                 match operator.as_str() {
+                    "BX" | "EX" => {
+                        require_empty(&operands, &operator)?;
+                    }
+                    "BI" => {
+                        require_empty(&operands, &operator)?;
+                        inline_image = true;
+                        approximated_graphics = true;
+                    }
+                    "ID" => {
+                        if !inline_image {
+                            return Err(DocsightError::UnsupportedFeature {
+                                feature: "PDF inline image data marker outside BI/ID/EI".to_owned(),
+                            });
+                        }
+                        validate_inline_image_dictionary(&operands)?;
+                        commands.push(DisplayCommand::Figure {
+                            bbox: transformed_unit_bbox(&state.ctm, page_left, page_height)?,
+                            resource_name: "<inline-image>".to_owned(),
+                            clips: state.clips.clone(),
+                        });
+                        operands.clear();
+                        lexer.skip_inline_image()?;
+                        inline_image = false;
+                        omitted_xobjects = true;
+                    }
                     "q" => {
                         require_empty(&operands, &operator)?;
                         if stack.len() >= MAX_GRAPHICS_DEPTH {
@@ -138,17 +185,21 @@ pub(crate) fn parse_content(
                     }
                     "cm" => {
                         let values = numbers(&operands, 6, &operator)?;
-                        state.ctm = state.ctm.concat(Matrix::new(
+                        state.ctm = Matrix::new(
                             values[0], values[1], values[2], values[3], values[4], values[5],
-                        ));
+                        )
+                        .concat(state.ctm);
                         if !state.ctm.is_finite() {
                             return Err(malformed("cm operator produced a non-finite matrix"));
                         }
                     }
                     "w" => {
                         let values = numbers(&operands, 1, &operator)?;
-                        if values[0] <= 0.0 {
-                            return Err(malformed("line width must be positive"));
+                        if values[0] < 0.0 {
+                            return Err(malformed("line width must be non-negative"));
+                        }
+                        if values[0] == 0.0 {
+                            approximated_graphics = true;
                         }
                         state.line_width = values[0];
                     }
@@ -167,6 +218,59 @@ pub(crate) fn parse_content(
                     "G" => {
                         let values = numbers(&operands, 1, &operator)?;
                         state.stroke_color = rgb(values[0], values[0], values[0])?;
+                    }
+                    "k" => {
+                        let values = numbers(&operands, 4, &operator)?;
+                        state.fill_color = cmyk(values[0], values[1], values[2], values[3])?;
+                    }
+                    "K" => {
+                        let values = numbers(&operands, 4, &operator)?;
+                        state.stroke_color = cmyk(values[0], values[1], values[2], values[3])?;
+                    }
+                    "cs" | "CS" => {
+                        if operands.len() != 1 {
+                            return Err(malformed(format!(
+                                "{operator} requires one color-space name"
+                            )));
+                        }
+                        name(&operands[0], &operator)?;
+                        approximated_graphics = true;
+                    }
+                    "sc" | "SC" | "scn" | "SCN" => {
+                        if operands
+                            .iter()
+                            .any(|value| matches!(value, ContentValue::Name(_)))
+                        {
+                            approximated_graphics = true;
+                        }
+                        let values = operands
+                            .iter()
+                            .filter(|value| matches!(value, ContentValue::Number(_)))
+                            .map(|value| number(value, &operator))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if values.is_empty() || values.len() > 4 {
+                            if matches!(operator.as_str(), "scn" | "SCN")
+                                && operands
+                                    .iter()
+                                    .any(|value| matches!(value, ContentValue::Name(_)))
+                            {
+                                approximated_graphics = true;
+                            } else {
+                                return Err(malformed(format!(
+                                    "{operator} requires one to four color components"
+                                )));
+                            }
+                        } else {
+                            let color = color_components(&values, &operator)?;
+                            if matches!(operator.as_str(), "sc" | "scn") {
+                                state.fill_color = color;
+                            } else {
+                                state.stroke_color = color;
+                            }
+                        }
+                        if operator == "scn" || operator == "SCN" {
+                            approximated_graphics = true;
+                        }
                     }
                     "m" => {
                         let values = numbers(&operands, 2, &operator)?;
@@ -206,6 +310,42 @@ pub(crate) fn parse_content(
                             )?,
                         ));
                     }
+                    "v" => {
+                        let values = numbers(&operands, 4, &operator)?;
+                        let first = current_path_point(&path)?;
+                        require_open_subpath(&path, &operator)?;
+                        path.push(PathSegment::Cubic(
+                            first,
+                            public_point(
+                                state.ctm.transform(values[0], values[1]),
+                                page_left,
+                                page_height,
+                            )?,
+                            public_point(
+                                state.ctm.transform(values[2], values[3]),
+                                page_left,
+                                page_height,
+                            )?,
+                        ));
+                    }
+                    "y" => {
+                        let values = numbers(&operands, 4, &operator)?;
+                        let end = public_point(
+                            state.ctm.transform(values[2], values[3]),
+                            page_left,
+                            page_height,
+                        )?;
+                        require_open_subpath(&path, &operator)?;
+                        path.push(PathSegment::Cubic(
+                            public_point(
+                                state.ctm.transform(values[0], values[1]),
+                                page_left,
+                                page_height,
+                            )?,
+                            end,
+                            end,
+                        ));
+                    }
                     "re" => {
                         let values = numbers(&operands, 4, &operator)?;
                         append_rectangle(&mut path, &state.ctm, page_left, page_height, &values)?;
@@ -224,29 +364,58 @@ pub(crate) fn parse_content(
                             return Err(malformed("stroke operator has no current path"));
                         }
                         let width = state.ctm.stroke_width(state.line_width)?;
+                        commit_pending_clip(&mut state)?;
                         commands.push(DisplayCommand::Stroke {
                             path: std::mem::take(&mut path),
                             color: state.stroke_color,
                             width,
+                            clips: state.clips.clone(),
                         });
                     }
                     "f" | "F" | "f*" => {
                         require_empty(&operands, &operator)?;
-                        if operator == "f*" {
-                            return Err(DocsightError::UnsupportedFeature {
-                                feature: "even-odd PDF path filling".to_owned(),
-                            });
-                        }
                         if path.is_empty() {
                             return Err(malformed("fill operator has no current path"));
                         }
+                        commit_pending_clip(&mut state)?;
                         commands.push(DisplayCommand::Fill {
                             path: std::mem::take(&mut path),
                             color: state.fill_color,
+                            even_odd: operator == "f*",
+                            clips: state.clips.clone(),
                         });
+                    }
+                    "B" | "B*" | "b" | "b*" => {
+                        require_empty(&operands, &operator)?;
+                        if path.is_empty() {
+                            return Err(malformed(
+                                "combined fill and stroke operator has no current path",
+                            ));
+                        }
+                        if matches!(operator.as_str(), "b" | "b*") {
+                            path.push(PathSegment::Close);
+                        }
+                        commit_pending_clip(&mut state)?;
+                        let even_odd = matches!(operator.as_str(), "B*" | "b*");
+                        let stroke_path = path.clone();
+                        let width = state.ctm.stroke_width(state.line_width)?;
+                        commands.push(DisplayCommand::Fill {
+                            path,
+                            color: state.fill_color,
+                            even_odd,
+                            clips: state.clips.clone(),
+                        });
+                        commands.push(DisplayCommand::Stroke {
+                            path: stroke_path,
+                            color: state.stroke_color,
+                            width,
+                            clips: state.clips.clone(),
+                        });
+                        path = Vec::new();
                     }
                     "n" => {
                         require_empty(&operands, &operator)?;
+                        commit_pending_clip(&mut state)?;
                         path.clear();
                     }
                     "BT" => {
@@ -255,7 +424,8 @@ pub(crate) fn parse_content(
                             return Err(malformed("nested BT operator"));
                         }
                         in_text = true;
-                        state.text = TextState::default();
+                        state.text.matrix = Matrix::identity();
+                        state.text.line_matrix = Matrix::identity();
                     }
                     "ET" => {
                         require_empty(&operands, &operator)?;
@@ -265,7 +435,6 @@ pub(crate) fn parse_content(
                         in_text = false;
                     }
                     "Tf" => {
-                        require_text(in_text, &operator)?;
                         if operands.len() != 2 {
                             return Err(malformed("Tf requires a font name and size"));
                         }
@@ -311,7 +480,6 @@ pub(crate) fn parse_content(
                         state.text.matrix = state.text.line_matrix;
                     }
                     "TL" => {
-                        require_text(in_text, &operator)?;
                         state.text.leading = numbers(&operands, 1, &operator)?[0];
                     }
                     "T*" => {
@@ -322,12 +490,29 @@ pub(crate) fn parse_content(
                         state.text.matrix = state.text.line_matrix;
                     }
                     "Tc" => {
-                        require_text(in_text, &operator)?;
                         state.text.char_spacing = numbers(&operands, 1, &operator)?[0];
                     }
                     "Tw" => {
-                        require_text(in_text, &operator)?;
                         state.text.word_spacing = numbers(&operands, 1, &operator)?[0];
+                    }
+                    "Tz" => {
+                        let value = numbers(&operands, 1, &operator)?[0];
+                        if value <= 0.0 {
+                            return Err(malformed("text horizontal scale must be positive"));
+                        }
+                        state.text.horizontal_scale = value / 100.0;
+                    }
+                    "Ts" => {
+                        state.text.rise = numbers(&operands, 1, &operator)?[0];
+                    }
+                    "Tr" => {
+                        let value = numbers(&operands, 1, &operator)?[0];
+                        if value.fract() != 0.0 || !(0.0..=7.0).contains(&value) {
+                            return Err(malformed("text rendering mode must be between 0 and 7"));
+                        }
+                        if value != 0.0 {
+                            approximated_graphics = true;
+                        }
                     }
                     "Tj" => {
                         require_text(in_text, &operator)?;
@@ -407,7 +592,14 @@ pub(crate) fn parse_content(
                             ));
                         }
                         name(&operands[0], &operator)?;
-                        name(&operands[1], &operator)?;
+                        if !matches!(
+                            operands[1],
+                            ContentValue::Name(_) | ContentValue::Dictionary
+                        ) {
+                            return Err(malformed(
+                                "BDC property list must be a name or inline dictionary",
+                            ));
+                        }
                         if marked_content_depth >= MAX_GRAPHICS_DEPTH {
                             return Err(DocsightError::ResourceLimit {
                                 resource: "PDF marked-content depth".to_owned(),
@@ -422,26 +614,106 @@ pub(crate) fn parse_content(
                             .checked_sub(1)
                             .ok_or_else(|| malformed("EMC has no matching BMC or BDC"))?;
                     }
+                    "J" | "j" => {
+                        let value = numbers(&operands, 1, &operator)?[0];
+                        if value.fract() != 0.0 || !(0.0..=2.0).contains(&value) {
+                            return Err(malformed(format!(
+                                "{operator} line style must be 0, 1, or 2"
+                            )));
+                        }
+                        approximated_graphics = true;
+                    }
+                    "M" => {
+                        let value = numbers(&operands, 1, &operator)?[0];
+                        if value < 0.0 {
+                            return Err(malformed("miter limit must be non-negative"));
+                        }
+                        approximated_graphics = true;
+                    }
+                    "d" => {
+                        if operands.len() != 2 {
+                            return Err(malformed("d requires a dash array and phase"));
+                        }
+                        let dash = match &operands[0] {
+                            ContentValue::Array(values) => values,
+                            _ => return Err(malformed("d requires an array dash pattern")),
+                        };
+                        if dash.iter().any(|value| {
+                            number(value, &operator)
+                                .map(|value| value < 0.0)
+                                .unwrap_or(true)
+                        }) {
+                            return Err(malformed("d dash array requires numeric values"));
+                        }
+                        let phase = number(&operands[1], &operator)?;
+                        if phase < 0.0 {
+                            return Err(malformed("d dash phase must be non-negative"));
+                        }
+                        approximated_graphics = true;
+                    }
+                    "ri" | "i" => {
+                        if operator == "ri" {
+                            if operands.len() != 1 {
+                                return Err(malformed("ri requires one intent name"));
+                            }
+                            name(&operands[0], &operator)?;
+                        } else {
+                            let value = numbers(&operands, 1, &operator)?[0];
+                            if value < 0.0 {
+                                return Err(malformed("flatness must be non-negative"));
+                            }
+                        }
+                        approximated_graphics = true;
+                    }
                     "Do" => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF XObjects".to_owned(),
+                        if operands.len() != 1 {
+                            return Err(malformed("Do requires one XObject name"));
+                        }
+                        let resource_name = name(&operands[0], &operator)?.to_owned();
+                        if !xobjects.contains(&resource_name) {
+                            return Err(malformed("Do references an unknown XObject resource"));
+                        }
+                        let bbox = transformed_unit_bbox(&state.ctm, page_left, page_height)?;
+                        commands.push(DisplayCommand::Figure {
+                            bbox,
+                            resource_name,
+                            clips: state.clips.clone(),
                         });
+                        approximated_graphics = true;
+                        omitted_xobjects = true;
                     }
                     "gs" => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF extended graphics state".to_owned(),
-                        });
+                        if operands.len() != 1 {
+                            return Err(malformed("gs requires one graphics state name"));
+                        }
+                        name(&operands[0], &operator)?;
+                        approximated_graphics = true;
+                    }
+                    "sh" => {
+                        if operands.len() != 1 {
+                            return Err(malformed("sh requires one shading name"));
+                        }
+                        name(&operands[0], &operator)?;
+                        approximated_graphics = true;
                     }
                     "W" | "W*" => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF clipping paths".to_owned(),
-                        });
+                        require_empty(&operands, &operator)?;
+                        if path.is_empty() {
+                            return Err(malformed("clipping operator has no current path"));
+                        }
+                        state.pending_clip = Some(clip_region_from_path(&path, operator == "W*")?);
                     }
                     _ => {
                         return Err(DocsightError::UnsupportedFeature {
                             feature: format!("PDF content operator {operator}"),
                         });
                     }
+                }
+                if path.len() > MAX_PATH_SEGMENTS {
+                    return Err(DocsightError::ResourceLimit {
+                        resource: "PDF path segments".to_owned(),
+                        limit: MAX_PATH_SEGMENTS as u64,
+                    });
                 }
                 operands.clear();
             }
@@ -459,10 +731,15 @@ pub(crate) fn parse_content(
     if marked_content_depth != 0 {
         return Err(malformed("unbalanced PDF marked content"));
     }
+    if inline_image {
+        return Err(malformed("unterminated PDF inline image"));
+    }
     Ok(ParsedContent {
         commands,
         text_runs,
         approximated_font,
+        approximated_graphics,
+        omitted_xobjects,
     })
 }
 
@@ -488,17 +765,40 @@ fn append_text(
     let width = glyphs * font.size * 0.6
         + (glyphs - 1.0).max(0.0) * state.text.char_spacing
         + spaces * state.text.word_spacing;
-    let combined = state.ctm.concat(state.text.matrix);
+    let width = width * state.text.horizontal_scale;
+    let combined = state.text.matrix.concat(state.ctm);
     validate_text_matrix(&combined)?;
-    let baseline = combined.transform(0.0, 0.0);
+    let baseline = combined.transform(0.0, state.text.rise);
     let baseline_y = page_height - baseline.y;
-    let lower_left = combined.transform(0.0, -font.size * 0.2);
-    let upper_right = combined.transform(width, font.size * 0.8);
+    let text_y0 = state.text.rise - font.size * 0.2;
+    let text_y1 = state.text.rise + font.size * 0.8;
+    let corners = [
+        combined.transform(0.0, text_y0),
+        combined.transform(width, text_y0),
+        combined.transform(0.0, text_y1),
+        combined.transform(width, text_y1),
+    ];
+    let min_x = corners
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min);
+    let min_y = corners
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let max_y = corners
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::NEG_INFINITY, f32::max);
     let bbox = Rect::new(
-        lower_left.x.min(upper_right.x) - page_left,
-        page_height - lower_left.y.max(upper_right.y),
-        lower_left.x.max(upper_right.x) - page_left,
-        page_height - lower_left.y.min(upper_right.y),
+        min_x - page_left,
+        page_height - max_y,
+        max_x - page_left,
+        page_height - min_y,
     )
     .map_err(|_| malformed("text operator produced invalid geometry"))?;
     let argb = 0xff00_0000
@@ -515,6 +815,7 @@ fn append_text(
         argb,
         source_offset: anchor_offset,
         source_length: anchor_length,
+        clips: state.clips.clone(),
     };
     commands.push(DisplayCommand::Text(run.clone()));
     text_runs.push(run);
@@ -577,14 +878,44 @@ fn public_point(point: Point, page_left: f32, page_height: f32) -> Result<Point,
     Ok(point)
 }
 
+fn transformed_unit_bbox(
+    matrix: &Matrix,
+    page_left: f32,
+    page_height: f32,
+) -> Result<Rect, DocsightError> {
+    let points = [
+        public_point(matrix.transform(0.0, 0.0), page_left, page_height)?,
+        public_point(matrix.transform(1.0, 0.0), page_left, page_height)?,
+        public_point(matrix.transform(0.0, 1.0), page_left, page_height)?,
+        public_point(matrix.transform(1.0, 1.0), page_left, page_height)?,
+    ];
+    let x0 = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min);
+    let y0 = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min);
+    let x1 = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let y1 = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    Rect::new(x0, y0, x1, y1).map_err(|_| malformed("XObject transform produced invalid geometry"))
+}
+
 fn validate_text_matrix(matrix: &Matrix) -> Result<(), DocsightError> {
     let values = [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
     if values.iter().any(|value| !value.is_finite()) {
         return Err(malformed("text matrix contains non-finite values"));
     }
-    if matrix.b != 0.0 || matrix.c != 0.0 || matrix.a <= 0.0 || matrix.d <= 0.0 {
+    if (matrix.a * matrix.d - matrix.b * matrix.c).abs() <= f32::EPSILON {
         return Err(DocsightError::UnsupportedFeature {
-            feature: "rotated, skewed, mirrored, or vertical PDF text".to_owned(),
+            feature: "degenerate PDF text matrix".to_owned(),
         });
     }
     Ok(())
@@ -603,6 +934,32 @@ fn rgb(red: f32, green: f32, blue: f32) -> Result<Color, DocsightError> {
         green: (green * 255.0).round() as u8,
         blue: (blue * 255.0).round() as u8,
     })
+}
+
+fn cmyk(cyan: f32, magenta: f32, yellow: f32, black: f32) -> Result<Color, DocsightError> {
+    let values = [cyan, magenta, yellow, black];
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
+        return Err(malformed("CMYK components must be between zero and one"));
+    }
+    Ok(Color {
+        red: ((1.0 - cyan) * (1.0 - black) * 255.0).round() as u8,
+        green: ((1.0 - magenta) * (1.0 - black) * 255.0).round() as u8,
+        blue: ((1.0 - yellow) * (1.0 - black) * 255.0).round() as u8,
+    })
+}
+
+fn color_components(values: &[f32], operator: &str) -> Result<Color, DocsightError> {
+    match values {
+        [gray] => rgb(*gray, *gray, *gray),
+        [red, green, blue] => rgb(*red, *green, *blue),
+        [cyan, magenta, yellow, black] => cmyk(*cyan, *magenta, *yellow, *black),
+        _ => Err(malformed(format!(
+            "{operator} has an unsupported component count"
+        ))),
+    }
 }
 
 fn require_text(in_text: bool, operator: &str) -> Result<(), DocsightError> {
@@ -634,6 +991,17 @@ fn require_open_subpath(path: &[PathSegment], operator: &str) -> Result<(), Docs
             "{operator} requires an open current subpath"
         )))
     }
+}
+
+fn current_path_point(path: &[PathSegment]) -> Result<Point, DocsightError> {
+    path.iter()
+        .rev()
+        .find_map(|segment| match segment {
+            PathSegment::Move(point) | PathSegment::Line(point) => Some(*point),
+            PathSegment::Cubic(_, _, point) => Some(*point),
+            PathSegment::Close => None,
+        })
+        .ok_or_else(|| malformed("curve operator has no current point"))
 }
 
 fn numbers(
@@ -692,6 +1060,20 @@ fn array_operand<'a>(
     }
 }
 
+fn validate_inline_image_dictionary(operands: &[ContentValue]) -> Result<(), DocsightError> {
+    if operands.is_empty() || operands.len() % 2 != 0 {
+        return Err(malformed(
+            "inline PDF image dictionary requires key-value pairs",
+        ));
+    }
+    for pair in operands.chunks_exact(2) {
+        if !matches!(pair[0], ContentValue::Name(_)) {
+            return Err(malformed("inline PDF image dictionary keys must be names"));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct GraphicsState {
     ctm: Matrix,
@@ -699,6 +1081,8 @@ struct GraphicsState {
     stroke_color: Color,
     line_width: f32,
     text: TextState,
+    clips: Vec<ClipRegion>,
+    pending_clip: Option<ClipRegion>,
 }
 
 impl Default for GraphicsState {
@@ -717,6 +1101,8 @@ impl Default for GraphicsState {
             },
             line_width: 1.0,
             text: TextState::default(),
+            clips: Vec::new(),
+            pending_clip: None,
         }
     }
 }
@@ -729,6 +1115,8 @@ struct TextState {
     leading: f32,
     char_spacing: f32,
     word_spacing: f32,
+    horizontal_scale: f32,
+    rise: f32,
 }
 
 impl Default for TextState {
@@ -740,6 +1128,8 @@ impl Default for TextState {
             leading: 0.0,
             char_spacing: 0.0,
             word_spacing: 0.0,
+            horizontal_scale: 1.0,
+            rise: 0.0,
         }
     }
 }
@@ -760,6 +1150,90 @@ struct Matrix {
     d: f32,
     e: f32,
     f: f32,
+}
+
+fn commit_pending_clip(state: &mut GraphicsState) -> Result<(), DocsightError> {
+    if let Some(clip) = state.pending_clip.take() {
+        if state.clips.len() >= MAX_GRAPHICS_DEPTH {
+            return Err(DocsightError::ResourceLimit {
+                resource: "PDF clipping path depth".to_owned(),
+                limit: MAX_GRAPHICS_DEPTH as u64,
+            });
+        }
+        state.clips.push(clip);
+    }
+    Ok(())
+}
+
+fn clip_region_from_path(
+    path: &[PathSegment],
+    even_odd: bool,
+) -> Result<ClipRegion, DocsightError> {
+    let polygons = flatten_clip_path(path)?;
+    if polygons.is_empty() || polygons.iter().any(|polygon| polygon.len() < 3) {
+        return Err(malformed("clipping path has no closed area"));
+    }
+    Ok(ClipRegion { polygons, even_odd })
+}
+
+fn flatten_clip_path(path: &[PathSegment]) -> Result<Vec<Vec<Point>>, DocsightError> {
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+    let mut cursor = None;
+    for segment in path {
+        match segment {
+            PathSegment::Move(point) => {
+                if !current.is_empty() {
+                    close_polygon(&mut current);
+                    result.push(std::mem::take(&mut current));
+                }
+                current.push(*point);
+                cursor = Some(*point);
+            }
+            PathSegment::Line(point) => {
+                if cursor.is_none() {
+                    return Err(malformed("clipping line has no starting point"));
+                }
+                current.push(*point);
+                cursor = Some(*point);
+            }
+            PathSegment::Cubic(first, second, end) => {
+                let start =
+                    cursor.ok_or_else(|| malformed("clipping curve has no starting point"))?;
+                for step in 1..=24 {
+                    let t = step as f32 / 24.0;
+                    let inverse = 1.0 - t;
+                    current.push(Point {
+                        x: inverse.powi(3) * start.x
+                            + 3.0 * inverse.powi(2) * t * first.x
+                            + 3.0 * inverse * t.powi(2) * second.x
+                            + t.powi(3) * end.x,
+                        y: inverse.powi(3) * start.y
+                            + 3.0 * inverse.powi(2) * t * first.y
+                            + 3.0 * inverse * t.powi(2) * second.y
+                            + t.powi(3) * end.y,
+                    });
+                }
+                cursor = Some(*end);
+            }
+            PathSegment::Close => {
+                close_polygon(&mut current);
+            }
+        }
+    }
+    if !current.is_empty() {
+        close_polygon(&mut current);
+        result.push(current);
+    }
+    Ok(result)
+}
+
+fn close_polygon(polygon: &mut Vec<Point>) {
+    if let Some(first) = polygon.first().copied()
+        && polygon.last().copied() != Some(first)
+    {
+        polygon.push(first);
+    }
 }
 
 impl Matrix {
@@ -815,7 +1289,7 @@ impl Matrix {
             });
         }
         let transformed = width * horizontal;
-        if !transformed.is_finite() || transformed <= 0.0 {
+        if !transformed.is_finite() || transformed < 0.0 {
             return Err(malformed("stroke transform produced an invalid width"));
         }
         Ok(transformed)
@@ -828,6 +1302,7 @@ enum ContentValue {
     Name(String),
     String(Vec<u8>),
     Array(Vec<ContentValue>),
+    Dictionary,
 }
 
 enum ContentToken {
@@ -857,6 +1332,7 @@ impl<'a> ContentLexer<'a> {
             b'<' if self.bytes.get(self.cursor + 1) != Some(&b'<') => {
                 ContentToken::Operand(ContentValue::String(self.parse_hex_string()?))
             }
+            b'<' => ContentToken::Operand(self.parse_dictionary()?),
             b'[' => ContentToken::Operand(ContentValue::Array(self.parse_array()?)),
             b'+' | b'-' | b'.' | b'0'..=b'9' => {
                 ContentToken::Operand(ContentValue::Number(self.parse_number()?))
@@ -885,6 +1361,7 @@ impl<'a> ContentLexer<'a> {
                 Some(b'<') if self.bytes.get(self.cursor + 1) != Some(&b'<') => {
                     values.push(ContentValue::String(self.parse_hex_string()?));
                 }
+                Some(b'<') => values.push(self.parse_dictionary()?),
                 Some(b'/') => values.push(ContentValue::Name(self.parse_name()?)),
                 Some(b'+' | b'-' | b'.' | b'0'..=b'9') => {
                     values.push(ContentValue::Number(self.parse_number()?));
@@ -893,6 +1370,39 @@ impl<'a> ContentLexer<'a> {
                 None => return Err(malformed("unterminated PDF content array")),
             }
         }
+    }
+
+    fn parse_dictionary(&mut self) -> Result<ContentValue, DocsightError> {
+        if self.bytes.get(self.cursor..self.cursor + 2) != Some(b"<<") {
+            return Err(malformed("invalid inline PDF dictionary"));
+        }
+        self.cursor += 2;
+        let mut depth = 1usize;
+        while self.cursor < self.bytes.len() {
+            if self.bytes.get(self.cursor..self.cursor + 2) == Some(b"<<") {
+                depth = depth
+                    .checked_add(1)
+                    .ok_or_else(|| malformed("PDF dictionary depth overflow"))?;
+                if depth > MAX_STRING_DEPTH {
+                    return Err(DocsightError::ResourceLimit {
+                        resource: "PDF inline dictionary depth".to_owned(),
+                        limit: MAX_STRING_DEPTH as u64,
+                    });
+                }
+                self.cursor += 2;
+            } else if self.bytes.get(self.cursor..self.cursor + 2) == Some(b">>") {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| malformed("unbalanced inline PDF dictionary"))?;
+                self.cursor += 2;
+                if depth == 0 {
+                    return Ok(ContentValue::Dictionary);
+                }
+            } else {
+                self.cursor += 1;
+            }
+        }
+        Err(malformed("unterminated inline PDF dictionary"))
     }
 
     fn parse_string(&mut self) -> Result<Vec<u8>, DocsightError> {
@@ -951,15 +1461,25 @@ impl<'a> ContentLexer<'a> {
 
     fn parse_name(&mut self) -> Result<String, DocsightError> {
         self.cursor += 1;
-        let start = self.cursor;
+        let mut bytes = Vec::new();
         while self.peek().is_some_and(|byte| !is_delimiter(byte)) {
-            self.cursor += 1;
+            let byte = self.take().ok_or_else(|| malformed("truncated PDF name"))?;
+            if byte == b'#' {
+                let high = self
+                    .take()
+                    .ok_or_else(|| malformed("truncated PDF name escape"))?;
+                let low = self
+                    .take()
+                    .ok_or_else(|| malformed("truncated PDF name escape"))?;
+                bytes.push(hex_digit(high)? << 4 | hex_digit(low)?);
+            } else {
+                bytes.push(byte);
+            }
         }
-        if self.cursor == start {
+        if bytes.is_empty() {
             return Err(malformed("empty PDF content name"));
         }
-        String::from_utf8(self.bytes[start..self.cursor].to_vec())
-            .map_err(|_| malformed("PDF content name is not UTF-8"))
+        String::from_utf8(bytes).map_err(|_| malformed("PDF content name is not UTF-8"))
     }
 
     fn parse_number(&mut self) -> Result<f32, DocsightError> {
@@ -987,7 +1507,10 @@ impl<'a> ContentLexer<'a> {
             self.cursor += 1;
         }
         if self.cursor == start {
-            return Err(malformed("invalid PDF content token"));
+            return Err(malformed(format!(
+                "invalid PDF content token at byte {start} (0x{:02x})",
+                self.bytes[start]
+            )));
         }
         String::from_utf8(self.bytes[start..self.cursor].to_vec())
             .map_err(|_| malformed("PDF content operator is not ASCII"))
@@ -1017,6 +1540,26 @@ impl<'a> ContentLexer<'a> {
         let byte = self.peek()?;
         self.cursor += 1;
         Some(byte)
+    }
+
+    fn skip_inline_image(&mut self) -> Result<(), DocsightError> {
+        while self.peek().is_some_and(is_space) {
+            self.cursor += 1;
+        }
+        let data_start = self.cursor;
+        let mut cursor = data_start;
+        while cursor + 2 < self.bytes.len() {
+            if self.bytes[cursor] == b'E'
+                && self.bytes[cursor + 1] == b'I'
+                && is_space(self.bytes[cursor.saturating_sub(1)])
+                && is_space(self.bytes[cursor + 2])
+            {
+                self.cursor = cursor + 2;
+                return Ok(());
+            }
+            cursor += 1;
+        }
+        Err(malformed("inline PDF image has no EI terminator"))
     }
 }
 
@@ -1097,13 +1640,45 @@ pub(crate) fn fonts_from_resources(
             Value::Name(value) => value.as_str(),
             _ => return Err(malformed("font Subtype must be a name")),
         };
-        if !matches!(subtype, "Type1" | "TrueType") {
+        if !matches!(subtype, "Type0" | "Type1" | "TrueType") {
             return Err(DocsightError::UnsupportedFeature {
-                feature: "PDF fonts other than simple Type1 or TrueType".to_owned(),
+                feature: "PDF fonts other than Type0, Type1, or TrueType".to_owned(),
             });
         }
+        let descendant = if subtype == "Type0" {
+            let descendants = match dict.get("DescendantFonts") {
+                Some(value) => resolve(value)?,
+                None => return Err(malformed("Type0 font has no DescendantFonts")),
+            };
+            let descendants = match descendants {
+                Value::Array(values) if !values.is_empty() => values,
+                _ => return Err(malformed("Type0 DescendantFonts must be a non-empty array")),
+            };
+            let descendant = resolve(&descendants[0])?;
+            let descendant = match descendant {
+                Value::Dict(dict) => dict,
+                _ => {
+                    return Err(malformed(
+                        "Type0 descendant font must resolve to a dictionary",
+                    ));
+                }
+            };
+            let descendant_subtype = match descendant.get("Subtype") {
+                Some(Value::Name(value)) => value.as_str(),
+                _ => return Err(malformed("Type0 descendant has no valid Subtype")),
+            };
+            if !matches!(descendant_subtype, "CIDFontType0" | "CIDFontType2") {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: format!("PDF Type0 descendant font {descendant_subtype}"),
+                });
+            }
+            Some(descendant)
+        } else {
+            None
+        };
         let base_font = dict
             .get("BaseFont")
+            .or_else(|| descendant.as_ref().and_then(|dict| dict.get("BaseFont")))
             .ok_or_else(|| malformed("font has no BaseFont"))?;
         let base_font = match base_font {
             Value::Name(value) => value.as_str(),
@@ -1119,15 +1694,26 @@ pub(crate) fn fonts_from_resources(
             | "Times-BoldItalic"
             | "Courier-Bold"
             | "Courier-BoldOblique" => true,
-            _ if subtype == "TrueType" => canonical_font.contains("Bold"),
+            _ if matches!(subtype, "Type0" | "Type1" | "TrueType") => {
+                canonical_font.contains("Bold")
+            }
             _ => {
                 return Err(DocsightError::UnsupportedFeature {
                     feature: format!("PDF base font {base_font}"),
                 });
             }
         };
-        let decoder = match dict.get("ToUnicode") {
+        let decoder = match dict.get("ToUnicode").or_else(|| {
+            descendant
+                .as_ref()
+                .and_then(|descendant| descendant.get("ToUnicode"))
+        }) {
             Some(value) => FontDecoder::ToUnicode(parse_to_unicode(&decode_stream_value(value)?)?),
+            None if subtype == "Type0" => {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: "Type0 PDF font without ToUnicode CMap".to_owned(),
+                });
+            }
             None if subtype == "TrueType" && !dict.contains_key("Encoding") => {
                 return Err(DocsightError::UnsupportedFeature {
                     feature: "TrueType PDF font without ToUnicode or an explicit encoding"

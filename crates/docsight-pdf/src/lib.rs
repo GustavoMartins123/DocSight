@@ -168,11 +168,16 @@ impl<'a> PdfDocument<'a> {
             .enumerate()
             .map(|(index, run)| self.make_span(number, index, run, parsed.approximated_font))
             .collect::<Result<Vec<_>, DocsightError>>()?;
-        let warnings = if parsed.approximated_font {
-            vec![font_approximation_warning(number)]
-        } else {
-            Vec::new()
-        };
+        let mut warnings = Vec::new();
+        if parsed.approximated_font {
+            warnings.push(font_approximation_warning(number));
+        }
+        if parsed.approximated_graphics {
+            warnings.push(graphics_approximation_warning(number));
+        }
+        if parsed.omitted_xobjects {
+            warnings.push(xobject_placeholder_warning(number));
+        }
         let page = self.page_record(number)?;
         Ok(PdfPage {
             number,
@@ -206,6 +211,12 @@ impl<'a> PdfDocument<'a> {
             let parsed = self.parse_page(page_num)?;
             if parsed.approximated_font {
                 all_warnings.push(font_approximation_warning(page_num));
+            }
+            if parsed.approximated_graphics {
+                all_warnings.push(graphics_approximation_warning(page_num));
+            }
+            if parsed.omitted_xobjects {
+                all_warnings.push(xobject_placeholder_warning(page_num));
             }
 
             let reconstructed = reconstruction::reconstruct_page_semantics(
@@ -273,6 +284,12 @@ impl<'a> PdfDocument<'a> {
         if parsed.approximated_font {
             warnings.push(font_approximation_warning(number));
         }
+        if parsed.approximated_graphics {
+            warnings.push(graphics_approximation_warning(number));
+        }
+        if parsed.omitted_xobjects {
+            warnings.push(xobject_placeholder_warning(number));
+        }
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
             page: number,
@@ -308,12 +325,24 @@ impl<'a> PdfDocument<'a> {
                 }
             },
         )?;
+        let xobjects = match resources.get("XObject") {
+            Some(value) => self.store.resolve_dict(value)?.into_keys().collect(),
+            None => BTreeSet::new(),
+        };
         let content = self.read_content_streams(&page.contents)?;
-        let parsed = parse_content(&content, page.media_box.x0, page.media_box.y1, &fonts)?;
+        let parsed = parse_content(
+            &content,
+            page.media_box.x0,
+            page.media_box.y1,
+            &fonts,
+            &xobjects,
+        )?;
         Ok(ParsedPage {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
+            approximated_graphics: parsed.approximated_graphics,
+            omitted_xobjects: parsed.omitted_xobjects,
         })
     }
 
@@ -378,7 +407,7 @@ impl<'a> PdfDocument<'a> {
             baseline_y_pt: run.baseline_y,
             argb: run.argb,
             bold: run.bold,
-            clipped: false,
+            clipped: !run.clips.is_empty(),
             synthetic: false,
             confidence: if approximated { 0.75 } else { 1.0 },
             source: SourceSpan::with_range(source_path, run.source_offset, run.source_length),
@@ -390,6 +419,8 @@ struct ParsedPage {
     commands: Vec<DisplayCommand>,
     text_runs: Vec<TextRun>,
     approximated_font: bool,
+    approximated_graphics: bool,
+    omitted_xobjects: bool,
 }
 
 struct ObjectStore<'a> {
@@ -564,11 +595,30 @@ fn pdf_number(value: &Value) -> Result<f32, DocsightError> {
 const MAX_FLATE_OUTPUT_BYTES: u64 = docsight_core::MAX_INSPECT_BYTES;
 
 fn decode_stream(stream: &StreamValue) -> Result<Vec<u8>, DocsightError> {
+    if stream
+        .dict
+        .get("DecodeParms")
+        .is_some_and(|value| !matches!(value, Value::Null))
+    {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "PDF stream DecodeParms predictors".to_owned(),
+        });
+    }
     let Some(filter) = stream.dict.get("Filter") else {
         return Ok(stream.data.clone());
     };
     match filter {
         Value::Name(name) if name == "FlateDecode" => inflate_zlib(&stream.data),
+        Value::Array(values) if values.len() == 1 => match &values[0] {
+            Value::Name(name) if name == "FlateDecode" => inflate_zlib(&stream.data),
+            Value::Name(name) => Err(DocsightError::UnsupportedFeature {
+                feature: format!("PDF stream filter {name}"),
+            }),
+            _ => Err(malformed("stream Filter array must contain a name")),
+        },
+        Value::Array(_) => Err(DocsightError::UnsupportedFeature {
+            feature: "PDF stream filter chains".to_owned(),
+        }),
         Value::Name(name) => Err(DocsightError::UnsupportedFeature {
             feature: format!("PDF stream filter {name}"),
         }),
@@ -612,6 +662,32 @@ fn renderer_warning(page: u32) -> Diagnostic {
         severity: DiagnosticSeverity::Warning,
         message: format!("page {page} was rasterized by DOCSIGHT's initial native renderer"),
         effect: "supported paths and glyphs are rasterized without antialiasing".to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn graphics_approximation_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_GRAPHICS_STYLE_APPROXIMATED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "page {page} uses PDF graphics state features with approximate raster semantics"
+        ),
+        effect: "line caps, joins, dash patterns, flatness, intents, transparency, or shading may differ or be omitted".to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn xobject_placeholder_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_XOBJECT_PLACEHOLDER".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "page {page} contains XObject content represented as a figure placeholder"
+        ),
+        effect: "embedded image or form pixels are not decoded by the initial renderer".to_owned(),
         object: None,
         page: Some(page),
     }

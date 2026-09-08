@@ -7,6 +7,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub const SANDBOX_CHILD_ENV: &str = "DOCSIGHT_SANDBOX_CHILD";
+pub const SANDBOX_READ_PATHS_ENV: &str = "DOCSIGHT_SANDBOX_READ_PATHS";
+pub const SANDBOX_WRITE_PATHS_ENV: &str = "DOCSIGHT_SANDBOX_WRITE_PATHS";
+pub const SANDBOX_TEMP_PATH_ENV: &str = "DOCSIGHT_SANDBOX_TEMP_PATH";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
@@ -32,13 +35,18 @@ pub struct SandboxLimitsReport {
     pub memory_enforced: bool,
     pub cpu_enforced: bool,
     pub network_isolated: bool,
+    pub filesystem_isolated: bool,
 }
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod sys {
-    use super::{SandboxLimitsReport, SandboxPolicy};
+    use super::{
+        SANDBOX_READ_PATHS_ENV, SANDBOX_TEMP_PATH_ENV, SANDBOX_WRITE_PATHS_ENV,
+        SandboxLimitsReport, SandboxPolicy,
+    };
     use docsight_core::DocsightError;
+    use std::os::unix::ffi::OsStrExt;
 
     pub fn apply_resource_limits(
         policy: &SandboxPolicy,
@@ -47,6 +55,7 @@ mod sys {
             memory_enforced: false,
             cpu_enforced: false,
             network_isolated: false,
+            filesystem_isolated: false,
         };
 
         let memory_limit = libc::rlimit {
@@ -68,12 +77,17 @@ mod sys {
 
         install_network_filter()?;
         report.network_isolated = true;
+        install_filesystem_filter()?;
+        report.filesystem_isolated = true;
 
-        if !report.memory_enforced || !report.cpu_enforced || !report.network_isolated {
+        if !report.memory_enforced
+            || !report.cpu_enforced
+            || !report.network_isolated
+            || !report.filesystem_isolated
+        {
             return Err(DocsightError::BackendFailure {
                 backend: "sandbox".to_owned(),
-                message: "failed to enforce memory, CPU, or network isolation on this platform"
-                    .to_owned(),
+                message: "failed to enforce memory, CPU, network, or filesystem isolation on this platform".to_owned(),
             });
         }
         Ok(report)
@@ -120,6 +134,235 @@ mod sys {
             });
         }
         Ok(())
+    }
+
+    fn install_filesystem_filter() -> Result<(), DocsightError> {
+        let read_paths = parse_paths(SANDBOX_READ_PATHS_ENV)?;
+        let write_paths = parse_paths(SANDBOX_WRITE_PATHS_ENV)?;
+        let temp_path = std::env::var_os(SANDBOX_TEMP_PATH_ENV).map(std::path::PathBuf::from);
+        let handled_access = ACCESS_FS_EXECUTE
+            | ACCESS_FS_WRITE_FILE
+            | ACCESS_FS_READ_FILE
+            | ACCESS_FS_READ_DIR
+            | ACCESS_FS_REMOVE_DIR
+            | ACCESS_FS_REMOVE_FILE
+            | ACCESS_FS_MAKE_CHAR
+            | ACCESS_FS_MAKE_DIR
+            | ACCESS_FS_MAKE_REG
+            | ACCESS_FS_MAKE_SOCK
+            | ACCESS_FS_MAKE_FIFO
+            | ACCESS_FS_MAKE_BLOCK
+            | ACCESS_FS_MAKE_SYM;
+        let ruleset = RulesetAttr {
+            handled_access_fs: handled_access,
+            handled_access_net: 0,
+            ..RulesetAttr::default()
+        };
+        let ruleset_fd = landlock_create_ruleset(&ruleset)?;
+        let system_read_paths = ["/bin", "/etc", "/lib", "/lib64", "/sbin", "/usr"];
+        for path in system_read_paths {
+            add_path_rule(
+                ruleset_fd,
+                std::path::Path::new(path),
+                ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_READ_DIR,
+            )?;
+        }
+        for path in read_paths {
+            let path = std::path::PathBuf::from(path);
+            let canonical = path
+                .canonicalize()
+                .map_err(|error| DocsightError::BackendFailure {
+                    backend: "sandbox".to_owned(),
+                    message: format!(
+                        "sandbox read path {} is unavailable: {error}",
+                        path.display()
+                    ),
+                })?;
+            if let Some(parent) = canonical.parent() {
+                add_path_rule(ruleset_fd, parent, ACCESS_FS_EXECUTE | ACCESS_FS_READ_DIR)?;
+            }
+            add_path_rule(ruleset_fd, &canonical, ACCESS_FS_READ_FILE)?;
+        }
+        for path in write_paths {
+            let path = std::path::PathBuf::from(path);
+            let canonical_parent = path
+                .canonicalize()
+                .or_else(|_| {
+                    path.parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .canonicalize()
+                })
+                .map_err(|error| DocsightError::BackendFailure {
+                    backend: "sandbox".to_owned(),
+                    message: format!(
+                        "sandbox write path {} is unavailable: {error}",
+                        path.display()
+                    ),
+                })?;
+            let directory = if canonical_parent.is_dir() {
+                canonical_parent
+            } else {
+                canonical_parent
+                    .parent()
+                    .ok_or_else(|| DocsightError::BackendFailure {
+                        backend: "sandbox".to_owned(),
+                        message: format!(
+                            "sandbox write path {} has no parent directory",
+                            path.display()
+                        ),
+                    })?
+                    .to_path_buf()
+            };
+            add_path_rule(
+                ruleset_fd,
+                &directory,
+                ACCESS_FS_EXECUTE
+                    | ACCESS_FS_READ_DIR
+                    | ACCESS_FS_WRITE_FILE
+                    | ACCESS_FS_REMOVE_FILE
+                    | ACCESS_FS_REMOVE_DIR
+                    | ACCESS_FS_MAKE_DIR
+                    | ACCESS_FS_MAKE_REG,
+            )?;
+        }
+        if let Some(temp_path) = temp_path {
+            add_path_rule(ruleset_fd, &temp_path, handled_access)?;
+        }
+        if unsafe { libc::syscall(LANDLOCK_RESTRICT_SELF, ruleset_fd, 0) } != 0 {
+            let error = std::io::Error::last_os_error();
+            close_fd(ruleset_fd);
+            return Err(DocsightError::BackendFailure {
+                backend: "sandbox".to_owned(),
+                message: format!("failed to restrict worker filesystem access: {error}"),
+            });
+        }
+        close_fd(ruleset_fd);
+        Ok(())
+    }
+
+    fn parse_paths(variable: &str) -> Result<Vec<String>, DocsightError> {
+        let Some(value) = std::env::var_os(variable) else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_str(
+            value
+                .to_str()
+                .ok_or_else(|| DocsightError::BackendFailure {
+                    backend: "sandbox".to_owned(),
+                    message: format!("{variable} is not valid UTF-8"),
+                })?,
+        )
+        .map_err(|error| DocsightError::BackendFailure {
+            backend: "sandbox".to_owned(),
+            message: format!("{variable} is invalid: {error}"),
+        })
+    }
+
+    fn add_path_rule(
+        ruleset_fd: i32,
+        path: &std::path::Path,
+        allowed_access: u64,
+    ) -> Result<(), DocsightError> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let path_bytes = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            DocsightError::BackendFailure {
+                backend: "sandbox".to_owned(),
+                message: format!("sandbox path {} contains a NUL byte", path.display()),
+            }
+        })?;
+        let fd = unsafe { libc::open(path_bytes.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(DocsightError::BackendFailure {
+                backend: "sandbox".to_owned(),
+                message: format!("failed to open sandbox path {}: {error}", path.display()),
+            });
+        }
+        let rule = PathBeneathAttr {
+            allowed_access,
+            parent_fd: fd,
+        };
+        let result = unsafe {
+            libc::syscall(
+                LANDLOCK_ADD_RULE,
+                ruleset_fd,
+                LANDLOCK_RULE_TYPE_PATH_BENEATH,
+                &rule,
+                0,
+            )
+        };
+        close_fd(fd);
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(DocsightError::BackendFailure {
+                backend: "sandbox".to_owned(),
+                message: format!(
+                    "failed to add sandbox path rule for {}: {error}",
+                    path.display()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn landlock_create_ruleset(attr: &RulesetAttr) -> Result<i32, DocsightError> {
+        let fd = unsafe {
+            libc::syscall(
+                LANDLOCK_CREATE_RULESET,
+                attr,
+                std::mem::size_of::<RulesetAttr>(),
+                0,
+            )
+        };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(DocsightError::BackendFailure {
+                backend: "sandbox".to_owned(),
+                message: format!("Landlock filesystem isolation is unavailable: {error}"),
+            });
+        }
+        Ok(fd as i32)
+    }
+
+    fn close_fd(fd: i32) {
+        unsafe {
+            libc::close(fd);
+        }
+    }
+
+    const LANDLOCK_CREATE_RULESET: libc::c_long = 444;
+    const LANDLOCK_ADD_RULE: libc::c_long = 445;
+    const LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
+    const LANDLOCK_RULE_TYPE_PATH_BENEATH: u32 = 1;
+    const ACCESS_FS_EXECUTE: u64 = 1 << 0;
+    const ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+    const ACCESS_FS_READ_FILE: u64 = 1 << 2;
+    const ACCESS_FS_READ_DIR: u64 = 1 << 3;
+    const ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+    const ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+    const ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+    const ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+    const ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+    const ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+    const ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+    const ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+    const ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct RulesetAttr {
+        handled_access_fs: u64,
+        handled_access_net: u64,
+        scoped: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct PathBeneathAttr {
+        allowed_access: u64,
+        parent_fd: i32,
     }
 
     fn statement(code: u16, value: u32) -> libc::sock_filter {
@@ -287,6 +530,20 @@ pub fn run_in_sandbox_with_env(
         cmd.env(key, value);
     }
 
+    let (read_paths, write_paths) = sandbox_paths(args, extra_env)?;
+    let read_json =
+        serde_json::to_string(&read_paths).map_err(|error| DocsightError::BackendFailure {
+            backend: "sandbox".to_owned(),
+            message: format!("failed to serialize sandbox read paths: {error}"),
+        })?;
+    let write_json =
+        serde_json::to_string(&write_paths).map_err(|error| DocsightError::BackendFailure {
+            backend: "sandbox".to_owned(),
+            message: format!("failed to serialize sandbox write paths: {error}"),
+        })?;
+    cmd.env(SANDBOX_READ_PATHS_ENV, read_json);
+    cmd.env(SANDBOX_WRITE_PATHS_ENV, write_json);
+
     let _temp_guard = if policy.isolated_temp_dir {
         let temp_dir = tempfile::tempdir().map_err(|e| DocsightError::Io {
             path: PathBuf::from("<sandbox-temp>"),
@@ -295,6 +552,7 @@ pub fn run_in_sandbox_with_env(
         cmd.env("TMPDIR", temp_dir.path());
         cmd.env("TEMP", temp_dir.path());
         cmd.env("TMP", temp_dir.path());
+        cmd.env(SANDBOX_TEMP_PATH_ENV, temp_dir.path());
         Some(temp_dir)
     } else {
         None
@@ -409,6 +667,82 @@ pub fn run_in_sandbox_with_env(
             }
         }
     }
+}
+
+fn sandbox_paths(
+    args: &[String],
+    extra_env: &[(String, String)],
+) -> Result<(Vec<String>, Vec<String>), DocsightError> {
+    let mut read_paths = infer_read_paths(args);
+    let mut write_paths = infer_write_paths(args);
+    for (key, value) in extra_env {
+        if key == SANDBOX_READ_PATHS_ENV {
+            read_paths.extend(serde_json::from_str::<Vec<String>>(value).map_err(|error| {
+                DocsightError::BackendFailure {
+                    backend: "sandbox".to_owned(),
+                    message: format!("{SANDBOX_READ_PATHS_ENV} is invalid: {error}"),
+                }
+            })?);
+        }
+        if key == SANDBOX_WRITE_PATHS_ENV {
+            write_paths.extend(serde_json::from_str::<Vec<String>>(value).map_err(|error| {
+                DocsightError::BackendFailure {
+                    backend: "sandbox".to_owned(),
+                    message: format!("{SANDBOX_WRITE_PATHS_ENV} is invalid: {error}"),
+                }
+            })?);
+        }
+    }
+    Ok((normalize_paths(read_paths), normalize_paths(write_paths)))
+}
+
+fn infer_read_paths(args: &[String]) -> Vec<String> {
+    args.iter()
+        .filter(|argument| !argument.starts_with('-'))
+        .filter_map(|argument| {
+            let path = Path::new(argument);
+            path.is_file()
+                .then(|| path.canonicalize().ok())
+                .flatten()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+fn infer_write_paths(args: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut expects_path = false;
+    for argument in args {
+        if expects_path {
+            paths.push(argument.clone());
+            expects_path = false;
+            continue;
+        }
+        if argument == "--out" || argument == "--out-dir" {
+            expects_path = true;
+        } else if let Some(path) = argument.strip_prefix("--out=") {
+            paths.push(path.to_owned());
+        } else if let Some(path) = argument.strip_prefix("--out-dir=") {
+            paths.push(path.to_owned());
+        }
+    }
+    paths
+}
+
+fn normalize_paths(paths: Vec<String>) -> Vec<String> {
+    let mut normalized = paths
+        .into_iter()
+        .filter_map(|path| {
+            let path = PathBuf::from(path);
+            path.canonicalize()
+                .or_else(|_| path.parent().unwrap_or(Path::new(".")).canonicalize())
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
 }
 
 struct BoundedPipeOutput {

@@ -1,6 +1,7 @@
 use crate::content::{DisplayCommand, PathSegment, Point, TextRun};
 use docsight_core::{
-    Block, BlockContent, BlockKind, HeadingBlock, ObjectId, ParagraphBlock, Rect, SourceSpan,
+    Block, BlockContent, BlockKind, FigureBlock, HeadingBlock, ObjectId, ParagraphBlock, Rect,
+    SourceSpan,
 };
 use docsight_tables::{RulingSegment, TextSpanItem, detect_tables};
 
@@ -18,7 +19,19 @@ pub(crate) fn reconstruct_page_semantics(
     commands: &[DisplayCommand],
     global_reading_order: &mut u32,
 ) -> Result<ReconstructedPage, docsight_core::DocsightError> {
-    if text_runs.is_empty() {
+    let figures = commands
+        .iter()
+        .filter_map(|command| match command {
+            DisplayCommand::Figure {
+                bbox,
+                resource_name,
+                ..
+            } => Some((*bbox, resource_name.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if text_runs.is_empty() && figures.is_empty() {
         return Ok(ReconstructedPage {
             blocks: Vec::new(),
             block_ids: Vec::new(),
@@ -223,6 +236,31 @@ pub(crate) fn reconstruct_page_semantics(
     let mut all_page_blocks: Vec<Block> = Vec::new();
     for (t_idx, table) in tables.into_iter().enumerate() {
         all_page_blocks.push(table.to_block(document_digest, t_idx, 0));
+    }
+    for (figure_index, (bbox, resource_name)) in figures.into_iter().enumerate() {
+        let figure_id = ObjectId::new(
+            "fig",
+            document_digest,
+            &format!("pdf::page[{page}]::xobject[{figure_index}]::{resource_name}"),
+        );
+        all_page_blocks.push(Block {
+            id: figure_id,
+            kind: BlockKind::Figure,
+            page: Some(page),
+            bbox: Some(bbox),
+            z_index: 0,
+            reading_order: 0,
+            source: SourceSpan::new(format!("pdf::page[{page}]::xobject::{resource_name}")),
+            flags: docsight_core::LayoutFlags::default(),
+            confidence: 0.75,
+            content: BlockContent::Figure(FigureBlock {
+                alt_text: None,
+                caption: None,
+                resource_id: Some(resource_name),
+                width_pt: Some(bbox.width()),
+                height_pt: Some(bbox.height()),
+            }),
+        });
     }
     all_page_blocks.extend(text_blocks);
 
