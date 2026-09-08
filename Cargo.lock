@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "serde",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "docsight-agent",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-diff"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "docsight-layout",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-layout"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "serde",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-ooxml"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "roxmltree",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-pdf"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "docsight-tables",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "docsight-layout",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-search"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "serde",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-tables"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "docsight-core",
  "serde",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "docsight-worker"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "docsight-core",

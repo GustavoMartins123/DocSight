@@ -1,4 +1,5 @@
 mod content;
+mod font;
 mod raster;
 mod reconstruction;
 mod syntax;
@@ -646,10 +647,8 @@ fn font_approximation_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "APPROXIMATED_PDF_FONT".to_owned(),
         severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} uses DOCSIGHT's initial bitmap font and approximate text metrics"
-        ),
-        effect: "embedded glyph outlines, shaping, and exact font metrics are not reproduced"
+        message: format!("page {page} contains text without an embedded TrueType outline"),
+        effect: "the renderer uses the declared deterministic fallback glyph set for that font"
             .to_owned(),
         object: None,
         page: Some(page),
@@ -660,8 +659,8 @@ fn renderer_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "INITIAL_PDF_RASTERIZER".to_owned(),
         severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} was rasterized by DOCSIGHT's initial native renderer"),
-        effect: "supported paths and glyphs are rasterized without antialiasing".to_owned(),
+        message: format!("page {page} was rasterized by DOCSIGHT's deterministic native renderer"),
+        effect: "vector fills and strokes use deterministic pixel coverage without full PDF antialiasing; embedded font outlines use coverage rasterization".to_owned(),
         object: None,
         page: Some(page),
     }

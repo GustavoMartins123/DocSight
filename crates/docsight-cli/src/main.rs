@@ -1365,8 +1365,8 @@ fn inspect_pdf_source(
         warnings.push(Diagnostic {
             code: "INITIAL_PDF_RASTERIZER".to_owned(),
             severity: DiagnosticSeverity::Warning,
-            message: "PDF rendering uses DOCSIGHT's initial native rasterizer".to_owned(),
-            effect: "visual output is available with limited antialiasing and glyph fidelity"
+            message: "PDF rendering uses DOCSIGHT's deterministic native rasterizer".to_owned(),
+            effect: "vector fills and strokes have limited antialiasing; embedded TrueType outlines are rasterized with coverage"
                 .to_owned(),
             object: None,
             page: None,

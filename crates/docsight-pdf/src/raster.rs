@@ -1,4 +1,5 @@
 use crate::content::{ClipRegion, Color, DisplayCommand, PathSegment, Point, TextRun};
+use crate::font::GlyphOutline;
 use docsight_core::{DocsightError, Rect};
 
 pub const MIN_DPI: u16 = 36;
@@ -122,6 +123,15 @@ impl Canvas {
     }
 
     fn draw_text(&mut self, run: &TextRun) -> Result<(), DocsightError> {
+        if !run.glyphs.is_empty() {
+            let color = Color {
+                red: ((run.argb >> 16) & 0xff) as u8,
+                green: ((run.argb >> 8) & 0xff) as u8,
+                blue: (run.argb & 0xff) as u8,
+            };
+            self.draw_outline_text(run, color);
+            return Ok(());
+        }
         let character_count = run.text.chars().count();
         if character_count == 0 {
             return Ok(());
@@ -156,6 +166,127 @@ impl Canvas {
             }
         }
         Ok(())
+    }
+
+    fn draw_outline_text(&mut self, run: &TextRun, color: Color) {
+        let units_per_em = run
+            .glyphs
+            .first()
+            .map(|glyph| glyph.units_per_em)
+            .unwrap_or(1000.0);
+        let nominal_scale = run.font_size / units_per_em;
+        let advance = run
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.advance * nominal_scale)
+            .sum::<f32>();
+        let horizontal_scale = if advance > 0.0 {
+            run.bbox.width() / advance
+        } else {
+            1.0
+        };
+        let mut cursor = run.bbox.x0;
+        for glyph in &run.glyphs {
+            self.fill_glyph(
+                glyph,
+                cursor,
+                run.baseline_y,
+                nominal_scale * horizontal_scale,
+                nominal_scale,
+                color,
+                &run.clips,
+            );
+            cursor += glyph.advance * nominal_scale * horizontal_scale;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_glyph(
+        &mut self,
+        glyph: &GlyphOutline,
+        origin_x: f32,
+        baseline_y: f32,
+        scale_x: f32,
+        scale_y: f32,
+        color: Color,
+        clips: &[ClipRegion],
+    ) {
+        if glyph.contours.is_empty() {
+            return;
+        }
+        let transformed = glyph
+            .contours
+            .iter()
+            .map(|contour| {
+                contour
+                    .iter()
+                    .map(|point| Point {
+                        x: origin_x + point.x * scale_x,
+                        y: baseline_y - point.y * scale_y,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let min_x = transformed
+            .iter()
+            .flatten()
+            .map(|point| point.x)
+            .fold(f32::INFINITY, f32::min);
+        let min_y = transformed
+            .iter()
+            .flatten()
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = transformed
+            .iter()
+            .flatten()
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let max_y = transformed
+            .iter()
+            .flatten()
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let x0 = self.pixel_x(min_x).max(0);
+        let y0 = self.pixel_y(min_y).max(0);
+        let x1 = self.pixel_x(max_x).min(self.width as i32);
+        let y1 = self.pixel_y(max_y).min(self.height as i32);
+        const SAMPLES: [(f32, f32); 16] = [
+            (0.125, 0.125),
+            (0.375, 0.125),
+            (0.625, 0.125),
+            (0.875, 0.125),
+            (0.125, 0.375),
+            (0.375, 0.375),
+            (0.625, 0.375),
+            (0.875, 0.375),
+            (0.125, 0.625),
+            (0.375, 0.625),
+            (0.625, 0.625),
+            (0.875, 0.625),
+            (0.125, 0.875),
+            (0.375, 0.875),
+            (0.625, 0.875),
+            (0.875, 0.875),
+        ];
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let inside = SAMPLES
+                    .iter()
+                    .filter(|(sample_x, sample_y)| {
+                        let point = Point {
+                            x: (x as f32 + sample_x) / self.scale + self.offset_x,
+                            y: (y as f32 + sample_y) / self.scale + self.offset_y,
+                        };
+                        contours_winding(point, &transformed) != 0
+                            && clips.iter().all(|clip| clip_contains(clip, point))
+                    })
+                    .count();
+                if inside != 0 {
+                    self.blend_pixel(x, y, color, inside as f32 / SAMPLES.len() as f32);
+                }
+            }
+        }
     }
 
     fn fill_path(
@@ -344,6 +475,30 @@ impl Canvas {
         self.pixels[index + 1] = color.green;
         self.pixels[index + 2] = color.blue;
     }
+
+    fn blend_pixel(&mut self, x: i32, y: i32, color: Color, coverage: f32) {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+        let index = (y as usize * self.width as usize + x as usize) * 3;
+        let inverse = 1.0 - coverage;
+        self.pixels[index] = (f32::from(color.red) * coverage
+            + f32::from(self.pixels[index]) * inverse)
+            .round() as u8;
+        self.pixels[index + 1] = (f32::from(color.green) * coverage
+            + f32::from(self.pixels[index + 1]) * inverse)
+            .round() as u8;
+        self.pixels[index + 2] = (f32::from(color.blue) * coverage
+            + f32::from(self.pixels[index + 2]) * inverse)
+            .round() as u8;
+    }
+}
+
+fn contours_winding(point: Point, contours: &[Vec<Point>]) -> i32 {
+    contours
+        .iter()
+        .map(|contour| winding_number(point, contour))
+        .sum()
 }
 
 fn clip_contains(clip: &ClipRegion, point: Point) -> bool {
@@ -674,5 +829,49 @@ pub fn glyph_coverage(text: &str) -> f32 {
         1.0
     } else {
         covered as f32 / total as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::FontPoint;
+
+    #[test]
+    fn embedded_outline_uses_fractional_pixel_coverage() {
+        let mut canvas = Canvas {
+            width: 20,
+            height: 20,
+            pixels: vec![255; 20 * 20 * 3],
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        };
+        let glyph = GlyphOutline {
+            contours: vec![vec![
+                FontPoint { x: 1.0, y: 1.0 },
+                FontPoint { x: 12.0, y: 1.0 },
+                FontPoint { x: 1.0, y: 12.0 },
+                FontPoint { x: 1.0, y: 1.0 },
+            ]],
+            advance: 1000.0,
+            units_per_em: 1000.0,
+        };
+        canvas.fill_glyph(
+            &glyph,
+            2.0,
+            16.0,
+            1.0,
+            1.0,
+            Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            &[],
+        );
+        assert!(canvas.pixels.chunks_exact(3).any(|pixel| {
+            pixel[0] > 0 && pixel[0] < 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2]
+        }));
     }
 }

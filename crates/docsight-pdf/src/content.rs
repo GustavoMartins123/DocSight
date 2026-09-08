@@ -1,6 +1,8 @@
+use crate::font::{FontProgram, GlyphOutline};
 use crate::syntax::{Value, malformed};
 use docsight_core::{DocsightError, Rect};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 const MAX_OPERATIONS: usize = 1_000_000;
 const MAX_GRAPHICS_DEPTH: usize = 64;
@@ -47,6 +49,7 @@ pub(crate) struct TextRun {
     pub source_offset: u64,
     pub source_length: u64,
     pub clips: Vec<ClipRegion>,
+    pub glyphs: Vec<GlyphOutline>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +80,8 @@ pub(crate) struct FontInfo {
     pub base_font: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
+    outline: Option<Arc<FontProgram>>,
+    cid_identity: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -459,8 +464,10 @@ pub(crate) fn parse_content(
                             font_name: font.base_font.clone(),
                             decoder: font.decoder.clone(),
                             cid_widths: font.cid_widths.clone(),
+                            outline: font.outline.clone(),
+                            cid_identity: font.cid_identity,
                         });
-                        approximated_font = true;
+                        approximated_font |= font.outline.is_none();
                     }
                     "Tm" => {
                         require_text(in_text, &operator)?;
@@ -768,7 +775,12 @@ fn append_text(
         .as_ref()
         .ok_or_else(|| malformed("text showing operator used before Tf"))?;
     let text = font.decoder.decode(bytes)?;
-    let glyphs = text.chars().count() as f32;
+    let glyphs = match &font.outline {
+        Some(program) if font.cid_identity => program.glyphs_for_identity(bytes)?,
+        Some(program) => program.glyphs_for_text(&text)?,
+        None => Vec::new(),
+    };
+    let character_count = text.chars().count() as f32;
     let spaces = if font.cid_widths.is_some() {
         0.0
     } else {
@@ -779,7 +791,7 @@ fn append_text(
             metrics.advance(bytes)? * font.size / 1000.0,
             bytes.len() as f32 / 2.0,
         ),
-        None => (glyphs * font.size * 0.6, glyphs),
+        None => (character_count * font.size * 0.6, character_count),
     };
     let width = advance + code_count * state.text.char_spacing + spaces * state.text.word_spacing;
     let width = width * state.text.horizontal_scale;
@@ -833,6 +845,7 @@ fn append_text(
         source_offset: anchor_offset,
         source_length: anchor_length,
         clips: state.clips.clone(),
+        glyphs,
     };
     commands.push(DisplayCommand::Text(run.clone()));
     text_runs.push(run);
@@ -1158,6 +1171,8 @@ struct FontSelection {
     font_name: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
+    outline: Option<Arc<FontProgram>>,
+    cid_identity: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1740,7 +1755,7 @@ pub(crate) fn fonts_from_resources(
             }
             None => decoder_from_encoding(dict.get("Encoding"))?,
         };
-        let cid_widths = match &descendant {
+        let cid_identity = match &descendant {
             Some(descendant) => {
                 if !matches!(dict.get("Encoding"), Some(Value::Name(name)) if name == "Identity-H")
                 {
@@ -1748,7 +1763,39 @@ pub(crate) fn fonts_from_resources(
                         feature: "CID metrics require Identity-H font encoding".to_owned(),
                     });
                 }
-                Some(CidWidths::parse(descendant, &resolve)?)
+                match descendant.get("CIDToGIDMap") {
+                    None => {}
+                    Some(Value::Name(name)) if name == "Identity" => {}
+                    Some(_) => {
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: "PDF CIDToGIDMap streams".to_owned(),
+                        });
+                    }
+                }
+                true
+            }
+            None => false,
+        };
+        let cid_widths = match &descendant {
+            Some(descendant) => Some(CidWidths::parse(descendant, &resolve)?),
+            None => None,
+        };
+        let descriptor_value = dict.get("FontDescriptor").or_else(|| {
+            descendant
+                .as_ref()
+                .and_then(|descendant| descendant.get("FontDescriptor"))
+        });
+        let outline = match descriptor_value {
+            Some(value) => {
+                let descriptor = resolve(value)?;
+                let descriptor = match descriptor {
+                    Value::Dict(descriptor) => descriptor,
+                    _ => return Err(malformed("FontDescriptor must resolve to a dictionary")),
+                };
+                match descriptor.get("FontFile2") {
+                    Some(value) => Some(Arc::new(FontProgram::parse(decode_stream_value(value)?)?)),
+                    None => None,
+                }
             }
             None => None,
         };
@@ -1759,6 +1806,8 @@ pub(crate) fn fonts_from_resources(
                 base_font: canonical_font.to_owned(),
                 decoder,
                 cid_widths,
+                outline,
+                cid_identity,
             },
         );
     }
