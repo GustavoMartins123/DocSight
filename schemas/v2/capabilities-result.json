@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/capabilities-result.json",
+  "title": "AgentCapabilitiesResult",
+  "type": "object",
+  "required": [
+    "profile",
+    "protocol",
+    "error_schema",
+    "document_formats",
+    "output_modes",
+    "agent_defaults",
+    "limits",
+    "coordinate_system",
+    "commands"
+  ],
+  "properties": {
+    "profile": { "type": "string", "const": "agent-first-v1" },
+    "protocol": { "type": "string", "const": "docsight.agent/v2" },
+    "error_schema": { "type": "string", "format": "uri" },
+    "document_formats": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["docx", "pdf"] },
+      "minItems": 1
+    },
+    "output_modes": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["json", "ndjson"] },
+      "minItems": 1
+    },
+    "agent_defaults": { "type": "string", "minLength": 1 },
+    "limits": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "coordinate_system": { "type": "string" },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "summary", "formats", "ndjson", "bounded"],
+        "properties": {
+          "name": { "type": "string" },
+          "summary": { "type": "string" },
+          "formats": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "ndjson": { "type": "boolean" },
+          "bounded": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -17,6 +17,7 @@
       "enum": [
         "meta",
         "done",
+        "capabilities",
         "warning",
         "page.begin",
         "page.end",

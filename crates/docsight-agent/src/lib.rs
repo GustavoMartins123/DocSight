@@ -25,12 +25,18 @@ pub struct OutputLimits {
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub text_truncated: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub warnings_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuation_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_items: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub returned_items: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_warnings: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_warnings: Option<usize>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -353,9 +359,12 @@ pub fn apply_collection_limits<T: Clone>(
             OutputLimits {
                 truncated: false,
                 text_truncated: false,
+                warnings_truncated: false,
                 continuation_token: None,
                 total_items: Some(total_items),
                 returned_items: Some(0),
+                total_warnings: None,
+                returned_warnings: None,
             },
         ));
     }
@@ -381,9 +390,12 @@ pub fn apply_collection_limits<T: Clone>(
         OutputLimits {
             truncated,
             text_truncated: false,
+            warnings_truncated: false,
             continuation_token,
             total_items: Some(total_items),
             returned_items: Some(count),
+            total_warnings: None,
+            returned_warnings: None,
         },
     ))
 }
@@ -418,7 +430,7 @@ where
         available.len()
     };
 
-    loop {
+    'items: loop {
         let current_slice = available[..count].to_vec();
         let mut val = wrap_result(current_slice)?;
         let mut text_truncated = false;
@@ -442,35 +454,52 @@ where
             None
         };
 
-        let output_limits = OutputLimits {
-            truncated,
-            text_truncated,
-            continuation_token,
-            total_items: Some(total_items),
-            returned_items: Some(count),
-        };
+        let total_warnings = warnings.len();
+        let mut selected_warnings = warnings.clone();
+        let mut warnings_truncated = false;
+        loop {
+            let output_limits = OutputLimits {
+                truncated,
+                text_truncated,
+                warnings_truncated,
+                continuation_token: continuation_token.clone(),
+                total_items: Some(total_items),
+                returned_items: Some(count),
+                total_warnings: warnings_truncated.then_some(total_warnings),
+                returned_warnings: warnings_truncated.then_some(selected_warnings.len()),
+            };
+            let envelope = AgentEnvelope::with_limits(
+                source,
+                val.clone(),
+                selected_warnings.clone(),
+                output_limits,
+            );
 
-        let envelope = AgentEnvelope::with_limits(source, val, warnings.clone(), output_limits);
-
-        if let Some(max_bytes) = limits.max_bytes {
-            let serialized =
-                serde_json::to_string(&envelope).map_err(|e| DocsightError::MalformedDocument {
-                    message: e.to_string(),
+            if let Some(max_bytes) = limits.max_bytes {
+                let serialized = serde_json::to_string(&envelope).map_err(|e| {
+                    DocsightError::MalformedDocument {
+                        message: e.to_string(),
+                    }
                 })?;
-            if serialized.len().saturating_add(1) > max_bytes {
-                if count > 0 {
-                    count -= 1;
-                    continue;
+                if serialized.len().saturating_add(1) > max_bytes {
+                    if selected_warnings.pop().is_some() {
+                        warnings_truncated = true;
+                        continue;
+                    }
+                    if count > 0 {
+                        count -= 1;
+                        continue 'items;
+                    }
+                    return Err(DocsightError::InvalidArgument {
+                        message: format!(
+                            "--max-bytes {max_bytes} is smaller than the minimum agent envelope; increase the cap or use --select to reduce the payload"
+                        ),
+                    });
                 }
-                return Err(DocsightError::InvalidArgument {
-                    message: format!(
-                        "--max-bytes {max_bytes} is smaller than the minimum agent envelope; increase the cap or use --select to reduce the payload"
-                    ),
-                });
             }
-        }
 
-        return Ok(envelope);
+            return Ok(envelope);
+        }
     }
 }
 
@@ -486,6 +515,8 @@ pub struct NdjsonWriter<W: Write> {
     continuation_offset: usize,
     total_items: usize,
     text_truncated: bool,
+    warnings_seen: usize,
+    warnings_emitted: usize,
     page_end_reserve: Option<usize>,
 }
 
@@ -515,6 +546,8 @@ impl<W: Write> NdjsonWriter<W> {
             continuation_offset,
             total_items,
             text_truncated: false,
+            warnings_seen: 0,
+            warnings_emitted: 0,
             page_end_reserve: None,
         })
     }
@@ -555,16 +588,36 @@ impl<W: Write> NdjsonWriter<W> {
         let limits = OutputLimits {
             truncated: true,
             text_truncated: self.text_truncated,
-            continuation_token,
+            warnings_truncated: false,
+            continuation_token: continuation_token.clone(),
             total_items: Some(self.total_items),
             returned_items: Some(self.total_items),
+            total_warnings: None,
+            returned_warnings: None,
         };
         let line = serde_json::json!({
             "seq": u64::MAX,
             "type": "done",
             "limits": limits,
         });
-        Ok(Self::serialized_line(&line)?.len() + 1)
+        let warning_limits = OutputLimits {
+            truncated: true,
+            text_truncated: self.text_truncated,
+            warnings_truncated: true,
+            continuation_token,
+            total_items: Some(self.total_items),
+            returned_items: Some(self.total_items),
+            total_warnings: Some(self.warnings_seen),
+            returned_warnings: Some(self.warnings_emitted),
+        };
+        let warning_line = serde_json::json!({
+            "seq": u64::MAX,
+            "type": "done",
+            "limits": warning_limits,
+        });
+        Ok(Self::serialized_line(&line)
+            .map(|value| value.len() + 1)?
+            .max(Self::serialized_line(&warning_line)?.len() + 1))
     }
 
     fn fits(
@@ -671,6 +724,7 @@ impl<W: Write> NdjsonWriter<W> {
     }
 
     pub fn write_warning(&mut self, diag: &Diagnostic) -> Result<bool, DocsightError> {
+        self.warnings_seen += 1;
         let seq = self.seq.saturating_add(1);
         let line = serde_json::json!({
             "seq": seq,
@@ -679,6 +733,7 @@ impl<W: Write> NdjsonWriter<W> {
         });
         if self.write_optional_line(&line)? {
             self.seq = seq;
+            self.warnings_emitted += 1;
             Ok(true)
         } else {
             Ok(false)
@@ -774,9 +829,14 @@ impl<W: Write> NdjsonWriter<W> {
         let limits = OutputLimits {
             truncated,
             text_truncated: self.text_truncated,
+            warnings_truncated: self.warnings_emitted < self.warnings_seen,
             continuation_token,
             total_items: Some(self.total_items),
             returned_items: Some(self.items_emitted),
+            total_warnings: (self.warnings_emitted < self.warnings_seen)
+                .then_some(self.warnings_seen),
+            returned_warnings: (self.warnings_emitted < self.warnings_seen)
+                .then_some(self.warnings_emitted),
         };
         let line = serde_json::json!({
             "seq": self.seq,

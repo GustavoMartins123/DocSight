@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/error-envelope.json",
+  "title": "AgentErrorEnvelope",
+  "type": "object",
+  "required": ["schema", "engine", "error"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "docsight.agent/v2"
+    },
+    "engine": {
+      "type": "string"
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "exit_code", "message", "effect"],
+      "properties": {
+        "code": { "type": "string" },
+        "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "message": { "type": "string" },
+        "effect": { "type": "string" },
+        "object": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

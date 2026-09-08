@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use docsight_agent::{
-    AgentEnvelope, NdjsonWriter, OutputLimits, QueryLimits, apply_bounded_collection, project_json,
-    truncate_json_text_fields, validate_projection,
+    AgentEnvelope, AgentErrorEnvelope, NdjsonWriter, OutputLimits, QueryLimits,
+    apply_bounded_collection, project_json, truncate_json_text_fields, validate_projection,
 };
 use docsight_core::{
     BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
@@ -26,28 +26,44 @@ use std::process::ExitCode;
     about = "Headless document inspection for agents"
 )]
 struct Cli {
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        help = "Use the canonical machine-readable agent contract"
+    )]
+    agent: bool,
+
+    #[arg(long, global = true, help = "Run the parser in an isolated worker")]
     sandbox: bool,
 
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Emit structured diagnostics on stderr")]
     json_errors: bool,
 
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Emit one JSON object per line")]
     ndjson: bool,
 
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Hard limit for serialized output bytes")]
     max_bytes: Option<usize>,
 
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Maximum number of result items")]
     max_items: Option<usize>,
 
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Maximum characters in text fields")]
     text_limit: Option<usize>,
 
-    #[arg(long = "continue", global = true)]
+    #[arg(
+        long = "continue",
+        global = true,
+        help = "Resume from a continuation token"
+    )]
     continue_token: Option<String>,
 
-    #[arg(long, global = true, value_delimiter = ',')]
+    #[arg(
+        long,
+        global = true,
+        value_delimiter = ',',
+        help = "Project selected result fields"
+    )]
     select: Option<Vec<String>>,
 
     #[arg(short, long, global = true)]
@@ -69,17 +85,30 @@ impl Cli {
     }
 
     fn is_agent_json(&self, subcommand_json: bool) -> bool {
-        subcommand_json
+        self.agent
+            || subcommand_json
             || self.max_bytes.is_some()
             || self.max_items.is_some()
             || self.text_limit.is_some()
             || self.continue_token.is_some()
             || self.select.is_some()
     }
+
+    fn quiet_mode(&self) -> bool {
+        self.quiet || self.agent
+    }
+
+    fn structured_errors(&self) -> bool {
+        self.json_errors || self.agent
+    }
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Capabilities {
+        #[arg(long)]
+        json: bool,
+    },
     Inspect {
         path: PathBuf,
         #[arg(long)]
@@ -212,10 +241,25 @@ struct InspectCapabilities {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct CapabilityAssessment {
+    available: bool,
+    source_faithful: bool,
+    fidelity: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct InspectCapabilityDetails {
+    structure: CapabilityAssessment,
+    text: CapabilityAssessment,
+    render: CapabilityAssessment,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct InspectResult {
     format: DocumentFormat,
     size_bytes: u64,
     capabilities: InspectCapabilities,
+    capability_details: InspectCapabilityDetails,
     paragraphs: Option<usize>,
     headings: Option<usize>,
     tables: Option<usize>,
@@ -332,19 +376,63 @@ struct LinksResult {
     links: Vec<LinkRecord>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct CommandCapability {
+    name: &'static str,
+    summary: &'static str,
+    formats: &'static [&'static str],
+    ndjson: bool,
+    bounded: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AgentCapabilitiesResult {
+    profile: &'static str,
+    protocol: &'static str,
+    error_schema: &'static str,
+    document_formats: &'static [&'static str],
+    output_modes: &'static [&'static str],
+    agent_defaults: &'static str,
+    limits: &'static [&'static str],
+    coordinate_system: &'static str,
+    commands: Vec<CommandCapability>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct CapabilitiesEnvelope {
+    schema: &'static str,
+    engine: &'static str,
+    result: AgentCapabilitiesResult,
+}
+
 fn main() -> ExitCode {
-    let sandbox_json_errors = std::env::args().any(|argument| argument == "--json-errors");
+    let agent_mode = std::env::args().any(|argument| argument == "--agent");
+    let sandbox_json_errors =
+        agent_mode || std::env::args().any(|argument| argument == "--json-errors");
     if let Err(error) =
         docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
     {
         let exit_code = error.exit_code();
-        return if emit_error(&error, sandbox_json_errors).is_ok() {
+        return if emit_error(&error, sandbox_json_errors, agent_mode).is_ok() {
             ExitCode::from(exit_code)
         } else {
             ExitCode::from(40)
         };
     }
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) if agent_mode => {
+            let docsight_error = DocsightError::InvalidArgument {
+                message: error.to_string(),
+            };
+            let exit_code = docsight_error.exit_code();
+            if emit_error(&docsight_error, true, true).is_err() {
+                return ExitCode::from(40);
+            }
+            return ExitCode::from(exit_code);
+        }
+        Err(error) => error.exit(),
+    };
     if cli.sandbox {
         let exe = match std::env::current_exe() {
             Ok(exe) => exe,
@@ -357,7 +445,7 @@ fn main() -> ExitCode {
                     source: error,
                 };
                 let exit_code = error.exit_code();
-                return if emit_error(&error, cli.json_errors).is_ok() {
+                return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
                     ExitCode::from(exit_code)
                 } else {
                     ExitCode::from(40)
@@ -387,7 +475,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 let exit_code = error.exit_code();
-                if emit_error(&error, cli.json_errors).is_err() {
+                if emit_error(&error, cli.structured_errors(), cli.agent).is_err() {
                     return ExitCode::from(40);
                 }
                 return ExitCode::from(exit_code);
@@ -398,7 +486,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let exit_code = error.exit_code();
-            if emit_error(&error, cli.json_errors).is_err() {
+            if emit_error(&error, cli.structured_errors(), cli.agent).is_err() {
                 return ExitCode::from(40);
             }
             ExitCode::from(exit_code)
@@ -408,38 +496,41 @@ fn main() -> ExitCode {
 
 fn execute(cli: &Cli) -> Result<(), DocsightError> {
     let limits = cli.query_limits();
+    let quiet = cli.quiet_mode();
+    let json_errors = cli.structured_errors();
     match &cli.command {
+        Command::Capabilities { json } => capabilities(cli.is_agent_json(*json), cli.ndjson),
         Command::Inspect { path, json } => inspect(
             path,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Outline { path, json } => outline(
             path,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Text { path, json } => document_text(
             path,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Tables { path, json } => tables(
             path,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Table {
             path,
@@ -452,8 +543,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json: cli.is_agent_json(*format == TableFormat::Json),
             ndjson: cli.ndjson,
             limits: &limits,
-            quiet: cli.quiet,
-            json_errors: cli.json_errors,
+            quiet,
+            json_errors,
         }),
         Command::Page { path, page, json } => page_command(
             path,
@@ -461,8 +552,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Render {
             path,
@@ -478,8 +569,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json: cli.is_agent_json(false),
             ndjson: cli.ndjson,
             limits: &limits,
-            quiet: cli.quiet,
-            json_errors: cli.json_errors,
+            quiet,
+            json_errors,
         }),
         Command::Crop {
             path,
@@ -511,8 +602,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 json: cli.is_agent_json(false),
                 ndjson: cli.ndjson,
                 limits: &limits,
-                quiet: cli.quiet,
-                json_errors: cli.json_errors,
+                quiet,
+                json_errors,
             })
         }
         Command::Images { path, json } => images(
@@ -520,16 +611,16 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Links { path, json } => links(
             path,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Diff {
             before,
@@ -553,16 +644,16 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 out_dir: out_dir.clone(),
             },
             limits: &limits,
-            quiet: cli.quiet,
-            json_errors: cli.json_errors,
+            quiet,
+            json_errors,
         }),
         Command::Fingerprint { path, json } => fingerprint(
             path,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
-            cli.quiet,
-            cli.json_errors,
+            quiet,
+            json_errors,
         ),
         Command::Evidence {
             path,
@@ -576,8 +667,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
-            quiet: cli.quiet,
-            json_errors: cli.json_errors,
+            quiet,
+            json_errors,
         }),
         Command::Coverage {
             path,
@@ -591,8 +682,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
-            quiet: cli.quiet,
-            json_errors: cli.json_errors,
+            quiet,
+            json_errors,
         }),
         Command::Hit {
             path,
@@ -608,8 +699,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
-            quiet: cli.quiet,
-            json_errors: cli.json_errors,
+            quiet,
+            json_errors,
         }),
     }
 }
@@ -626,6 +717,208 @@ fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
             pdf.to_document()
         }
     }
+}
+
+const ALL_DOCUMENT_FORMATS: &[&str] = &["docx", "pdf"];
+const DOCX_PDF_FORMATS: &[&str] = &["docx", "pdf"];
+const NO_DOCUMENT_FORMATS: &[&str] = &[];
+const OUTPUT_MODES: &[&str] = &["json", "ndjson"];
+const AGENT_LIMITS: &[&str] = &[
+    "--max-bytes",
+    "--max-items",
+    "--text-limit",
+    "--continue",
+    "--select",
+];
+
+fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
+    let result = AgentCapabilitiesResult {
+        profile: "agent-first-v1",
+        protocol: docsight_agent::AGENT_SCHEMA,
+        error_schema: "https://docsight.dev/schemas/v2/error-envelope.json",
+        document_formats: ALL_DOCUMENT_FORMATS,
+        output_modes: OUTPUT_MODES,
+        agent_defaults: "JSON on stdout, no diagnostics on stderr, structured errors on stderr",
+        limits: AGENT_LIMITS,
+        coordinate_system: "points at 1/72 inch with page origin at the top-left",
+        commands: vec![
+            CommandCapability {
+                name: "capabilities",
+                summary: "discover the machine contract and command surface",
+                formats: NO_DOCUMENT_FORMATS,
+                ndjson: true,
+                bounded: false,
+            },
+            CommandCapability {
+                name: "inspect",
+                summary: "summarize format, counts, capabilities and fidelity",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "outline",
+                summary: "return headings in reading order",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "text",
+                summary: "return text blocks and deterministic continuation",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "tables",
+                summary: "list structural or inferred tables with confidence",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "table",
+                summary: "export one table or return its machine record",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "page",
+                summary: "return page geometry, spans and overlays",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "images",
+                summary: "list figure resources and placements",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "links",
+                summary: "list link metadata without fetching targets",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "render",
+                summary: "write a PNG artifact with provenance metadata",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "crop",
+                summary: "write a page or object crop with provenance metadata",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "diff",
+                summary: "compare package, semantic and supported visual changes",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "fingerprint",
+                summary: "return reproducibility inputs and result fingerprint",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: false,
+            },
+            CommandCapability {
+                name: "evidence",
+                summary: "return provenance and fidelity for one object",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: false,
+            },
+            CommandCapability {
+                name: "coverage",
+                summary: "return per-dimension fidelity and reason codes",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "hit",
+                summary: "resolve a point or region to document objects",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+        ],
+    };
+
+    if ndjson {
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        let meta = serde_json::json!({
+            "seq": 1,
+            "type": "meta",
+            "schema": docsight_agent::AGENT_SCHEMA,
+            "engine": env!("CARGO_PKG_VERSION"),
+            "scope": "capabilities",
+        });
+        let item = serde_json::json!({
+            "seq": 2,
+            "type": "capabilities",
+            "profile": result.profile,
+            "protocol": result.protocol,
+            "error_schema": result.error_schema,
+            "document_formats": result.document_formats,
+            "output_modes": result.output_modes,
+            "agent_defaults": result.agent_defaults,
+            "limits": result.limits,
+            "coordinate_system": result.coordinate_system,
+            "commands": result.commands,
+        });
+        let done = serde_json::json!({
+            "seq": 3,
+            "type": "done",
+            "limits": {
+                "truncated": false,
+                "total_items": 1,
+                "returned_items": 1,
+            },
+        });
+        for value in [meta, item, done] {
+            serde_json::to_writer(&mut writer, &value).map_err(output_serialization_error)?;
+            writer.write_all(b"\n").map_err(stdout_error)?;
+        }
+        return Ok(());
+    }
+
+    if json {
+        let value = CapabilitiesEnvelope {
+            schema: docsight_agent::AGENT_SCHEMA,
+            engine: env!("CARGO_PKG_VERSION"),
+            result,
+        };
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        serde_json::to_writer(&mut writer, &value).map_err(output_serialization_error)?;
+        writer.write_all(b"\n").map_err(stdout_error)?;
+        return Ok(());
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Profile: {}", result.profile).map_err(stdout_error)?;
+    writeln!(writer, "Protocol: {}", result.protocol).map_err(stdout_error)?;
+    writeln!(writer, "Formats: {}", result.document_formats.join(", ")).map_err(stdout_error)?;
+    writeln!(writer, "Output: {}", result.agent_defaults).map_err(stdout_error)?;
+    for command in result.commands {
+        writeln!(writer, "{}: {}", command.name, command.summary).map_err(stdout_error)?;
+    }
+    Ok(())
 }
 
 fn inspect(
@@ -741,6 +1034,35 @@ fn inspect_source(
                     text: text_complete,
                     render: render_complete,
                 },
+                capability_details: InspectCapabilityDetails {
+                    structure: CapabilityAssessment {
+                        available: true,
+                        source_faithful: structure_complete,
+                        fidelity: if structure_complete {
+                            "exact"
+                        } else {
+                            "approximated"
+                        },
+                    },
+                    text: CapabilityAssessment {
+                        available: true,
+                        source_faithful: text_complete,
+                        fidelity: if text_complete {
+                            "exact"
+                        } else {
+                            "approximated"
+                        },
+                    },
+                    render: CapabilityAssessment {
+                        available: true,
+                        source_faithful: render_complete,
+                        fidelity: if render_complete {
+                            "exact"
+                        } else {
+                            "approximated"
+                        },
+                    },
+                },
                 paragraphs: Some(paragraphs),
                 headings: Some(document.headings().count()),
                 tables: Some(document.tables().count()),
@@ -769,6 +1091,23 @@ fn inspect_pdf_source(
                 structure: false,
                 text: false,
                 render: false,
+            },
+            capability_details: InspectCapabilityDetails {
+                structure: CapabilityAssessment {
+                    available: false,
+                    source_faithful: false,
+                    fidelity: "unsupported",
+                },
+                text: CapabilityAssessment {
+                    available: false,
+                    source_faithful: false,
+                    fidelity: "unsupported",
+                },
+                render: CapabilityAssessment {
+                    available: false,
+                    source_faithful: false,
+                    fidelity: "unsupported",
+                },
             },
             paragraphs: None,
             headings: None,
@@ -819,6 +1158,23 @@ fn inspect_pdf_source(
             structure: true,
             text: true,
             render: false,
+        },
+        capability_details: InspectCapabilityDetails {
+            structure: CapabilityAssessment {
+                available: true,
+                source_faithful: false,
+                fidelity: "inferred",
+            },
+            text: CapabilityAssessment {
+                available: true,
+                source_faithful: true,
+                fidelity: "exact",
+            },
+            render: CapabilityAssessment {
+                available: true,
+                source_faithful: false,
+                fidelity: "approximated",
+            },
         },
         paragraphs: Some(document.paragraphs().count()),
         headings: Some(document.headings().count()),
@@ -1338,18 +1694,56 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
         },
     )?;
     rendered.write(args.out)?;
+    if !args.ndjson && !args.json {
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        writeln!(
+            writer,
+            "Rendered page {} at {} DPI to {} ({}x{} px)",
+            rendered.metadata.page,
+            rendered.metadata.dpi,
+            args.out.display(),
+            rendered.metadata.width_px,
+            rendered.metadata.height_px
+        )
+        .map_err(stdout_error)?;
+        return emit_warnings(&rendered.warnings, args.quiet, args.json_errors);
+    }
     #[derive(Serialize)]
     struct RenderResult {
         page: u32,
         dpi: u16,
+        bbox: Rect,
         width_px: u32,
         height_px: u32,
+        media_type: &'static str,
+        output_path: String,
+        output_sha256: String,
+        output_bytes: u64,
     }
+    let output_path = args
+        .out
+        .to_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "output path must be valid UTF-8 for agent output".to_owned(),
+        })?
+        .to_owned();
+    let output_sha256 = digest_bytes(rendered.png());
+    let output_bytes =
+        u64::try_from(rendered.png().len()).map_err(|_| DocsightError::ResourceLimit {
+            resource: "rendered artifact bytes".to_owned(),
+            limit: u64::MAX,
+        })?;
     let result = RenderResult {
         page: rendered.metadata.page,
         dpi: rendered.metadata.dpi,
+        bbox: rendered.metadata.bbox,
         width_px: rendered.metadata.width_px,
         height_px: rendered.metadata.height_px,
+        media_type: rendered.metadata.media_type,
+        output_path,
+        output_sha256,
+        output_bytes,
     };
     if args.ndjson {
         return write_single_ndjson(
@@ -1361,22 +1755,7 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
             args.limits,
         );
     }
-    if args.json {
-        return write_single_json(&source, &result, rendered.warnings.clone(), args.limits);
-    }
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    writeln!(
-        writer,
-        "Rendered page {} at {} DPI to {} ({}x{} px)",
-        rendered.metadata.page,
-        rendered.metadata.dpi,
-        args.out.display(),
-        rendered.metadata.width_px,
-        rendered.metadata.height_px
-    )
-    .map_err(stdout_error)?;
-    emit_warnings(&rendered.warnings, args.quiet, args.json_errors)
+    write_single_json(&source, &result, rendered.warnings.clone(), args.limits)
 }
 
 fn images(
@@ -1559,26 +1938,40 @@ fn write_single_json<T: Serialize>(
         validate_projection(&val, select)?;
         val = project_json(&val, select);
     }
-    let envelope = AgentEnvelope::with_limits(
-        source,
-        val,
-        warnings,
-        OutputLimits {
+    let total_warnings = warnings.len();
+    let mut selected_warnings = warnings;
+    let mut warnings_truncated = false;
+    loop {
+        let limits_record = OutputLimits {
             text_truncated,
+            warnings_truncated,
+            total_warnings: warnings_truncated.then_some(total_warnings),
+            returned_warnings: warnings_truncated.then_some(selected_warnings.len()),
             ..OutputLimits::default()
-        },
-    );
-    if let Some(max_bytes) = limits.max_bytes {
-        let serialized = serde_json::to_string(&envelope).map_err(output_serialization_error)?;
-        if serialized.len().saturating_add(1) > max_bytes {
-            return Err(DocsightError::InvalidArgument {
-                message: format!(
-                    "--max-bytes {max_bytes} is smaller than the requested single-result payload; increase the cap or use --select to reduce the output"
-                ),
-            });
+        };
+        let envelope = AgentEnvelope::with_limits(
+            source,
+            val.clone(),
+            selected_warnings.clone(),
+            limits_record,
+        );
+        if let Some(max_bytes) = limits.max_bytes {
+            let serialized =
+                serde_json::to_string(&envelope).map_err(output_serialization_error)?;
+            if serialized.len().saturating_add(1) > max_bytes {
+                if selected_warnings.pop().is_some() {
+                    warnings_truncated = true;
+                    continue;
+                }
+                return Err(DocsightError::InvalidArgument {
+                    message: format!(
+                        "--max-bytes {max_bytes} is smaller than the requested single-result payload; increase the cap or use --select to reduce the output"
+                    ),
+                });
+            }
         }
+        return write_envelope(&envelope);
     }
-    write_envelope(&envelope)
 }
 
 fn write_single_ndjson<T: Serialize>(
@@ -1639,14 +2032,19 @@ fn emit_warnings(
     Ok(())
 }
 
-fn emit_error(error: &DocsightError, json: bool) -> io::Result<()> {
+fn emit_error(error: &DocsightError, json: bool, agent: bool) -> io::Result<()> {
     let stderr = io::stderr();
     let mut writer = stderr.lock();
-    let diagnostic = error.diagnostic();
-    if json {
+    if agent {
+        let envelope = AgentErrorEnvelope::from_error(error);
+        serde_json::to_writer(&mut writer, &envelope).map_err(io::Error::other)?;
+        writer.write_all(b"\n")
+    } else if json {
+        let diagnostic = error.diagnostic();
         serde_json::to_writer(&mut writer, &diagnostic).map_err(io::Error::other)?;
         writer.write_all(b"\n")
     } else {
+        let diagnostic = error.diagnostic();
         writeln!(writer, "{}: {}", diagnostic.code, diagnostic.message)
     }
 }
@@ -1656,6 +2054,16 @@ fn output_serialization_error(source: serde_json::Error) -> DocsightError {
         path: PathBuf::from("<stdout>"),
         source: io::Error::other(source),
     }
+}
+
+fn digest_bytes(bytes: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(bytes);
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
 }
 
 fn stdout_error(source: io::Error) -> DocsightError {

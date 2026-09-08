@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/capabilities-envelope.json",
+  "title": "CapabilitiesEnvelope",
+  "type": "object",
+  "required": ["schema", "engine", "result"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "docsight.agent/v2"
+    },
+    "engine": { "type": "string" },
+    "result": { "$ref": "capabilities-result.json" }
+  },
+  "additionalProperties": false
+}

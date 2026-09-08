@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/inspect-result.json",
+  "title": "InspectResult",
+  "type": "object",
+  "required": ["format", "size_bytes", "capabilities", "capability_details"],
+  "properties": {
+    "format": { "type": "string", "enum": ["docx", "pdf"] },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "capabilities": {
+      "type": "object",
+      "required": ["structure", "text", "render"],
+      "properties": {
+        "structure": { "type": "boolean" },
+        "text": { "type": "boolean" },
+        "render": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "capability_details": {
+      "type": "object",
+      "required": ["structure", "text", "render"],
+      "properties": {
+        "structure": { "$ref": "#/$defs/capability" },
+        "text": { "$ref": "#/$defs/capability" },
+        "render": { "$ref": "#/$defs/capability" }
+      },
+      "additionalProperties": false
+    },
+    "paragraphs": { "type": ["integer", "null"], "minimum": 0 },
+    "headings": { "type": ["integer", "null"], "minimum": 0 },
+    "tables": { "type": ["integer", "null"], "minimum": 0 },
+    "figures": { "type": ["integer", "null"], "minimum": 0 },
+    "comments": { "type": ["integer", "null"], "minimum": 0 },
+    "pages": { "type": ["integer", "null"], "minimum": 0 },
+    "engine": { "type": ["string", "null"] },
+    "tracked": { "type": ["object", "null"] }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "required": ["available", "source_faithful", "fidelity"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "source_faithful": { "type": "boolean" },
+        "fidelity": {
+          "type": "string",
+          "enum": ["exact", "inferred", "approximated", "unsupported"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

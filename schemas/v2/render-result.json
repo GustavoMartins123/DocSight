@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/render-result.json",
+  "title": "RenderResult",
+  "type": "object",
+  "required": [
+    "page",
+    "dpi",
+    "bbox",
+    "width_px",
+    "height_px",
+    "media_type",
+    "output_path",
+    "output_sha256",
+    "output_bytes"
+  ],
+  "properties": {
+    "page": { "type": "integer", "minimum": 1 },
+    "dpi": { "type": "integer", "minimum": 1 },
+    "bbox": {
+      "type": "object",
+      "required": ["x0", "y0", "x1", "y1"],
+      "properties": {
+        "x0": { "type": "number" },
+        "y0": { "type": "number" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "width_px": { "type": "integer", "minimum": 1 },
+    "height_px": { "type": "integer", "minimum": 1 },
+    "media_type": { "const": "image/png" },
+    "output_path": { "type": "string", "minLength": 1 },
+    "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "output_bytes": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": false
+}

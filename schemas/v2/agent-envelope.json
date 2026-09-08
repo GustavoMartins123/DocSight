@@ -56,6 +56,9 @@
         "text_truncated": {
           "type": "boolean"
         },
+        "warnings_truncated": {
+          "type": "boolean"
+        },
         "continuation_token": {
           "type": [
             "string",
@@ -69,6 +72,18 @@
           ]
         },
         "returned_items": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_warnings": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "returned_warnings": {
           "type": [
             "integer",
             "null"

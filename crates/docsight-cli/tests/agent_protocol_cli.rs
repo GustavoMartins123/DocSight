@@ -292,6 +292,112 @@ fn quiet_suppresses_stderr_diagnostics() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn agent_mode_normalizes_json_errors_capabilities_and_artifacts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = headings_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+    let inspect = docsight().args(["--agent", "inspect", path_str]).output()?;
+    assert!(inspect.status.success());
+    assert!(inspect.stderr.is_empty());
+    let inspect_json: serde_json::Value = serde_json::from_slice(&inspect.stdout)?;
+    assert_eq!(inspect_json["schema"], "docsight.agent/v2");
+    assert_eq!(
+        inspect_json["result"]["capability_details"]["render"]["available"],
+        true
+    );
+    assert_eq!(
+        inspect_json["result"]["capability_details"]["render"]["source_faithful"],
+        false
+    );
+
+    let directory = tempfile::tempdir()?;
+    let output_path = directory.path().join("page.png");
+    let output_path_str = output_path.to_str().ok_or("invalid output path")?;
+    let render = docsight()
+        .args([
+            "--agent",
+            "render",
+            path_str,
+            "--page",
+            "1",
+            "--out",
+            output_path_str,
+        ])
+        .output()?;
+    assert!(render.status.success());
+    assert!(render.stderr.is_empty());
+    let render_json: serde_json::Value = serde_json::from_slice(&render.stdout)?;
+    assert_eq!(render_json["result"]["output_path"], output_path_str);
+    assert_eq!(
+        render_json["result"]["output_bytes"].as_u64(),
+        Some(std::fs::metadata(&output_path)?.len())
+    );
+    assert_eq!(
+        render_json["result"]["output_sha256"]
+            .as_str()
+            .ok_or("missing output digest")?
+            .len(),
+        64
+    );
+    assert_eq!(render_json["result"]["media_type"], "image/png");
+
+    let invalid = docsight()
+        .args(["--agent", "inspect", "nonexistent_file_xyz.docx"])
+        .output()?;
+    assert_eq!(invalid.status.code(), Some(40));
+    assert!(invalid.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&invalid.stderr)?;
+    assert_eq!(error["schema"], "docsight.agent/v2");
+    assert_eq!(error["error"]["code"], "IO_ERROR");
+    assert_eq!(error["error"]["exit_code"], 40);
+    Ok(())
+}
+
+#[test]
+fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::error::Error>> {
+    let output = docsight().args(["--agent", "capabilities"]).output()?;
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let repeat = docsight().args(["--agent", "capabilities"]).output()?;
+    assert_eq!(output.stdout, repeat.stdout);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(value["schema"], "docsight.agent/v2");
+    assert_eq!(value["result"]["profile"], "agent-first-v1");
+    let commands = value["result"]["commands"]
+        .as_array()
+        .ok_or("missing commands")?;
+    assert!(commands.iter().any(|command| command["name"] == "evidence"));
+    assert!(commands.iter().any(|command| command["name"] == "hit"));
+
+    let ndjson = docsight()
+        .args(["--agent", "--ndjson", "capabilities"])
+        .output()?;
+    assert!(ndjson.status.success());
+    let records = ndjson
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    assert_eq!(records[0]["type"], "meta");
+    assert_eq!(records[1]["type"], "capabilities");
+    assert_eq!(records[2]["type"], "done");
+    Ok(())
+}
+
+#[test]
+fn agent_mode_structures_cli_parse_errors() -> Result<(), Box<dyn std::error::Error>> {
+    let output = docsight().args(["--agent", "unknown-command"]).output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
+    assert_eq!(error["schema"], "docsight.agent/v2");
+    assert_eq!(error["error"]["code"], "USAGE");
+    assert_eq!(error["error"]["exit_code"], 2);
+    Ok(())
+}
+
+#[test]
 fn json_errors_emits_structured_diagnostic() -> Result<(), Box<dyn std::error::Error>> {
     let output = docsight()
         .args(["--json-errors", "inspect", "nonexistent_file_xyz.docx"])
@@ -378,8 +484,62 @@ fn max_bytes_never_emits_oversized_single_item() -> Result<(), Box<dyn std::erro
         assert!(out.stdout.len() <= 700, "stdout exceeded the hard cap");
         let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
         assert!(value["limits"]["truncated"] == true);
+        assert!(value["limits"]["warnings_truncated"] == true);
+        assert_eq!(value["limits"]["total_warnings"], 3);
     } else {
         assert_eq!(out.status.code(), Some(2));
     }
+    Ok(())
+}
+
+#[test]
+fn max_bytes_truncates_warnings_without_losing_single_result()
+-> Result<(), Box<dyn std::error::Error>> {
+    let docx_path = headings_fixture();
+    let out = docsight()
+        .args([
+            "inspect",
+            docx_path.to_str().ok_or("path")?,
+            "--json",
+            "--max-bytes",
+            "1000",
+        ])
+        .output()?;
+    assert!(out.status.success());
+    assert!(out.stdout.len() <= 1000);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    assert_eq!(value["limits"]["truncated"], false);
+    assert_eq!(value["limits"]["warnings_truncated"], true);
+    assert_eq!(value["limits"]["total_warnings"], 3);
+    assert_eq!(value["limits"]["returned_warnings"], 1);
+    Ok(())
+}
+
+#[test]
+fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::error::Error>> {
+    let docx_path = headings_fixture();
+    let out = docsight()
+        .args([
+            "--ndjson",
+            "inspect",
+            docx_path.to_str().ok_or("path")?,
+            "--max-bytes",
+            "1000",
+        ])
+        .output()?;
+    assert!(out.status.success());
+    assert!(out.stdout.len() <= 1000);
+    let records = out
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let done = records.last().ok_or("missing done")?;
+    assert_eq!(done["type"], "done");
+    assert_eq!(done["limits"]["truncated"], true);
+    assert_eq!(done["limits"]["warnings_truncated"], true);
+    assert_eq!(done["limits"]["total_warnings"], 3);
+    assert_eq!(done["limits"]["returned_warnings"], 0);
     Ok(())
 }
