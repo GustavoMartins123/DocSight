@@ -129,7 +129,7 @@ fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Er
         ],
     ];
     for arguments in commands {
-        let output = docsight().arg("--agent").args(arguments).output()?;
+        let output = docsight().arg("--agent").args(&arguments).output()?;
         assert!(
             output.status.success(),
             "{}",
@@ -145,13 +145,34 @@ fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Er
                 .iter()
                 .any(|warning| warning["code"] == "APPROXIMATED_PDF_FONT")
         );
+        assert!(
+            json["warnings"]
+                .as_array()
+                .ok_or("warnings")?
+                .iter()
+                .all(|warning| warning["code"] != "TRACE_DECISION_PARTIAL")
+        );
+        if arguments[0] == "render" {
+            assert_eq!(json["result"]["trace"]["trace_schema"], "docsight.trace/v2");
+            assert_eq!(
+                json["result"]["trace"]["decision_coverage"]["display_list_operations"],
+                "verified"
+            );
+            assert_eq!(
+                json["result"]["trace"]["decision_coverage"]["pagination"],
+                "not_applicable"
+            );
+            assert!(json["result"]["trace"]["resource_count"].is_u64());
+            assert!(json["result"]["trace"]["glyph_run_count"].is_u64());
+            assert!(json["result"]["trace"]["display_operation_count"].is_u64());
+        }
     }
     std::fs::remove_file(&input)?;
     for arguments in [
         vec!["replay", trace.to_str().ok_or("path")?, "--verify"],
         vec!["verify", bundle.to_str().ok_or("path")?],
     ] {
-        let output = docsight().arg("--agent").args(arguments).output()?;
+        let output = docsight().arg("--agent").args(&arguments).output()?;
         assert!(
             output.status.success(),
             "{}",
@@ -160,6 +181,22 @@ fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Er
         assert!(output.stderr.is_empty());
         let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
         assert_eq!(json["result"]["verification"]["valid"], true);
+        let expected_schema = if arguments[0] == "replay" {
+            "docsight.trace/v2"
+        } else {
+            "docsight.proof-bundle/v2"
+        };
+        assert_eq!(json["result"]["verification"]["schema"], expected_schema);
+        if arguments[0] == "replay" {
+            assert_eq!(json["result"]["trace_schema"], "docsight.trace/v2");
+            assert_eq!(
+                json["result"]["decision_coverage"]["display_list_operations"],
+                "verified"
+            );
+            assert!(json["result"]["resource_count"].is_u64());
+            assert!(json["result"]["glyph_run_count"].is_u64());
+            assert!(json["result"]["display_operation_count"].is_u64());
+        }
     }
     Ok(())
 }

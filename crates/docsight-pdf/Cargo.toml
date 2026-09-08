@@ -10,6 +10,7 @@ docsight-core = { path = "../docsight-core" }
 docsight-tables = { path = "../docsight-tables" }
 flate2.workspace = true
 serde.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true

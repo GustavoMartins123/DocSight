@@ -1357,28 +1357,20 @@ fn inspect_pdf_source(
         }
         Err(error) => return Err(error),
     };
-    let mut warnings = document.warnings.clone();
-    if !warnings
-        .iter()
-        .any(|warning| warning.code == "INITIAL_PDF_RASTERIZER")
-    {
-        warnings.push(Diagnostic {
-            code: "INITIAL_PDF_RASTERIZER".to_owned(),
-            severity: DiagnosticSeverity::Warning,
-            message: "PDF rendering uses DOCSIGHT's deterministic native rasterizer".to_owned(),
-            effect: "vector fills and strokes have limited antialiasing; embedded TrueType outlines are rasterized with coverage"
-                .to_owned(),
-            object: None,
-            page: None,
-        });
-    }
+    let warnings = document.warnings.clone();
+    let render_source_faithful = !warnings.iter().any(|warning| {
+        matches!(
+            warning.code.as_str(),
+            "APPROXIMATED_PDF_FONT" | "PDF_XOBJECT_PLACEHOLDER"
+        )
+    });
     let result = InspectResult {
         format: DocumentFormat::Pdf,
         size_bytes: source.size_bytes(),
         capabilities: InspectCapabilities {
             structure: true,
             text: true,
-            render: false,
+            render: render_source_faithful,
         },
         capability_details: InspectCapabilityDetails {
             structure: CapabilityAssessment {
@@ -1393,8 +1385,12 @@ fn inspect_pdf_source(
             },
             render: CapabilityAssessment {
                 available: true,
-                source_faithful: false,
-                fidelity: "approximated",
+                source_faithful: render_source_faithful,
+                fidelity: if render_source_faithful {
+                    "exact"
+                } else {
+                    "approximated"
+                },
             },
         },
         paragraphs: Some(document.paragraphs().count()),
@@ -1938,10 +1934,16 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
                         limit: u64::MAX,
                     }
                 })?,
-                target: trace.manifest.target,
-                display_list_sha256: trace.manifest.display_list.sha256,
-                raster_sha256: trace.manifest.raster.sha256,
-                decision_coverage: trace.manifest.decision_coverage,
+                trace_schema: trace.manifest.schema.clone(),
+                target: trace.manifest.target.clone(),
+                display_list_sha256: trace.manifest.display_list.sha256.clone(),
+                raster_sha256: trace.manifest.raster.sha256.clone(),
+                decision_coverage: trace.manifest.decision_coverage.clone(),
+                resource_count: trace.manifest.resources.len(),
+                glyph_run_count: trace.manifest.glyph_runs.len(),
+                table_sizing_decision_count: trace.manifest.table_sizing.len(),
+                pagination_decision_count: trace.manifest.pagination.len(),
+                display_operation_count: trace.manifest.display_list.operations.len(),
             };
             Ok((path, trace_bytes, output))
         })
@@ -2022,10 +2024,16 @@ struct TraceOutput {
     output_path: String,
     output_sha256: String,
     output_bytes: u64,
+    trace_schema: String,
     target: TraceTarget,
     display_list_sha256: String,
     raster_sha256: String,
     decision_coverage: TraceDecisionCoverage,
+    resource_count: usize,
+    glyph_run_count: usize,
+    table_sizing_decision_count: usize,
+    pagination_decision_count: usize,
+    display_operation_count: usize,
 }
 
 struct BundleArgs<'a> {
@@ -2142,6 +2150,14 @@ fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
     #[derive(Serialize)]
     struct ReplayResult {
         trace_path: String,
+        trace_schema: String,
+        target: TraceTarget,
+        decision_coverage: TraceDecisionCoverage,
+        resource_count: usize,
+        glyph_run_count: usize,
+        table_sizing_decision_count: usize,
+        pagination_decision_count: usize,
+        display_operation_count: usize,
         verification: docsight_render::trace::ReplayVerification,
     }
     let trace_path = args
@@ -2153,6 +2169,14 @@ fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
         .to_owned();
     let result = ReplayResult {
         trace_path,
+        trace_schema: trace.manifest.schema.clone(),
+        target: trace.manifest.target.clone(),
+        decision_coverage: trace.manifest.decision_coverage.clone(),
+        resource_count: trace.manifest.resources.len(),
+        glyph_run_count: trace.manifest.glyph_runs.len(),
+        table_sizing_decision_count: trace.manifest.table_sizing.len(),
+        pagination_decision_count: trace.manifest.pagination.len(),
+        display_operation_count: trace.manifest.display_list.operations.len(),
         verification,
     };
     if args.ndjson {

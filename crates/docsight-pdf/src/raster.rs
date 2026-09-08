@@ -1,10 +1,32 @@
-use crate::content::{ClipRegion, Color, DisplayCommand, PathSegment, Point, TextRun};
+use crate::content::{
+    ClipRegion, Color, DisplayCommand, LineCap, LineJoin, Paint, PathSegment, Point, StrokeStyle,
+    TextRun,
+};
 use crate::font::GlyphOutline;
 use docsight_core::{DocsightError, Rect};
 
 pub const MIN_DPI: u16 = 36;
 pub const MAX_DPI: u16 = 600;
 pub const MAX_RASTER_PIXELS: u64 = 25_000_000;
+const MAX_FLATTENED_POINTS: usize = 1_000_000;
+const COVERAGE_SAMPLES: [(f32, f32); 16] = [
+    (0.125, 0.125),
+    (0.375, 0.125),
+    (0.625, 0.125),
+    (0.875, 0.125),
+    (0.125, 0.375),
+    (0.375, 0.375),
+    (0.625, 0.375),
+    (0.875, 0.375),
+    (0.125, 0.625),
+    (0.375, 0.625),
+    (0.625, 0.625),
+    (0.875, 0.625),
+    (0.125, 0.875),
+    (0.375, 0.875),
+    (0.625, 0.875),
+    (0.875, 0.875),
+];
 
 pub(crate) struct Raster {
     pub width: u32,
@@ -52,21 +74,21 @@ pub(crate) fn rasterize(
         match command {
             DisplayCommand::Text(run) => canvas.draw_text(run)?,
             DisplayCommand::Figure { bbox, clips, .. } => {
-                canvas.draw_figure_placeholder(*bbox, clips)
+                canvas.draw_figure_placeholder(*bbox, clips)?
             }
             DisplayCommand::Fill {
                 path,
-                color,
+                paint,
                 even_odd,
                 clips,
-            } => canvas.fill_path(path, *color, *even_odd, clips)?,
+            } => canvas.fill_path(path, *paint, *even_odd, clips)?,
             DisplayCommand::Stroke {
                 path,
-                color,
-                width,
+                paint,
+                style,
                 clips,
             } => {
-                canvas.stroke_path(path, *color, *width, clips)?;
+                canvas.stroke_path(path, *paint, style, clips)?;
             }
         }
     }
@@ -88,7 +110,11 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn draw_figure_placeholder(&mut self, bbox: Rect, clips: &[ClipRegion]) {
+    fn draw_figure_placeholder(
+        &mut self,
+        bbox: Rect,
+        clips: &[ClipRegion],
+    ) -> Result<(), DocsightError> {
         let color = Color {
             red: 128,
             green: 128,
@@ -118,8 +144,21 @@ impl Canvas {
             (top_left, bottom_right),
             (top_right, bottom_left),
         ] {
-            self.stroke_line(start, end, color, 1.0, clips);
+            self.stroke_path(
+                &[PathSegment::Move(start), PathSegment::Line(end)],
+                Paint { color, alpha: 1.0 },
+                &StrokeStyle {
+                    width: 1.0,
+                    cap: LineCap::Butt,
+                    join: LineJoin::Miter,
+                    miter_limit: 10.0,
+                    dash: Vec::new(),
+                    dash_phase: 0.0,
+                },
+                clips,
+            )?;
         }
+        Ok(())
     }
 
     fn draw_text(&mut self, run: &TextRun) -> Result<(), DocsightError> {
@@ -129,7 +168,7 @@ impl Canvas {
                 green: ((run.argb >> 8) & 0xff) as u8,
                 blue: (run.argb & 0xff) as u8,
             };
-            self.draw_outline_text(run, color);
+            self.draw_outline_text(run, color, ((run.argb >> 24) & 0xff) as f32 / 255.0);
             return Ok(());
         }
         let character_count = run.text.chars().count();
@@ -142,6 +181,7 @@ impl Canvas {
             green: ((run.argb >> 8) & 0xff) as u8,
             blue: (run.argb & 0xff) as u8,
         };
+        let alpha = ((run.argb >> 24) & 0xff) as f32 / 255.0;
         for (index, character) in run.text.chars().enumerate() {
             if character.is_whitespace() || character == '\u{200b}' {
                 continue;
@@ -161,14 +201,14 @@ impl Canvas {
                     let y0 = run.bbox.y0 + row as f32 * cell_height;
                     let x1 = x0 + cell_width * if run.bold { 1.35 } else { 1.0 };
                     let y1 = y0 + cell_height;
-                    self.fill_rect(x0, y0, x1, y1, color, &run.clips);
+                    self.fill_rect(x0, y0, x1, y1, Paint { color, alpha }, &run.clips);
                 }
             }
         }
         Ok(())
     }
 
-    fn draw_outline_text(&mut self, run: &TextRun, color: Color) {
+    fn draw_outline_text(&mut self, run: &TextRun, color: Color, alpha: f32) {
         let units_per_em = run
             .glyphs
             .first()
@@ -194,6 +234,7 @@ impl Canvas {
                 nominal_scale * horizontal_scale,
                 nominal_scale,
                 color,
+                alpha,
                 &run.clips,
             );
             cursor += glyph.advance * nominal_scale * horizontal_scale;
@@ -209,6 +250,7 @@ impl Canvas {
         scale_x: f32,
         scale_y: f32,
         color: Color,
+        alpha: f32,
         clips: &[ClipRegion],
     ) {
         if glyph.contours.is_empty() {
@@ -227,76 +269,17 @@ impl Canvas {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let min_x = transformed
-            .iter()
-            .flatten()
-            .map(|point| point.x)
-            .fold(f32::INFINITY, f32::min);
-        let min_y = transformed
-            .iter()
-            .flatten()
-            .map(|point| point.y)
-            .fold(f32::INFINITY, f32::min);
-        let max_x = transformed
-            .iter()
-            .flatten()
-            .map(|point| point.x)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let max_y = transformed
-            .iter()
-            .flatten()
-            .map(|point| point.y)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let x0 = self.pixel_x(min_x).max(0);
-        let y0 = self.pixel_y(min_y).max(0);
-        let x1 = self.pixel_x(max_x).min(self.width as i32);
-        let y1 = self.pixel_y(max_y).min(self.height as i32);
-        const SAMPLES: [(f32, f32); 16] = [
-            (0.125, 0.125),
-            (0.375, 0.125),
-            (0.625, 0.125),
-            (0.875, 0.125),
-            (0.125, 0.375),
-            (0.375, 0.375),
-            (0.625, 0.375),
-            (0.875, 0.375),
-            (0.125, 0.625),
-            (0.375, 0.625),
-            (0.625, 0.625),
-            (0.875, 0.625),
-            (0.125, 0.875),
-            (0.375, 0.875),
-            (0.625, 0.875),
-            (0.875, 0.875),
-        ];
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let inside = SAMPLES
-                    .iter()
-                    .filter(|(sample_x, sample_y)| {
-                        let point = Point {
-                            x: (x as f32 + sample_x) / self.scale + self.offset_x,
-                            y: (y as f32 + sample_y) / self.scale + self.offset_y,
-                        };
-                        contours_winding(point, &transformed) != 0
-                            && clips.iter().all(|clip| clip_contains(clip, point))
-                    })
-                    .count();
-                if inside != 0 {
-                    self.blend_pixel(x, y, color, inside as f32 / SAMPLES.len() as f32);
-                }
-            }
-        }
+        self.fill_polygons(&transformed, Paint { color, alpha }, false, clips);
     }
 
     fn fill_path(
         &mut self,
         path: &[PathSegment],
-        color: Color,
+        paint: Paint,
         even_odd: bool,
         clips: &[ClipRegion],
     ) -> Result<(), DocsightError> {
-        let polygons = flatten_subpaths(path)?;
+        let polygons = flatten_subpaths(path, 0.125 / self.scale)?;
         if polygons.is_empty() || polygons.iter().any(|polygon| polygon.len() < 3) {
             return Err(DocsightError::MalformedDocument {
                 message: "filled PDF path has fewer than three points".to_owned(),
@@ -313,29 +296,30 @@ impl Canvas {
                 polygon
             })
             .collect::<Vec<_>>();
-        self.fill_polygons(&polygons, color, even_odd, clips);
+        self.fill_polygons(&polygons, paint, even_odd, clips);
         Ok(())
     }
 
     fn stroke_path(
         &mut self,
         path: &[PathSegment],
-        color: Color,
-        width: f32,
+        paint: Paint,
+        style: &StrokeStyle,
         clips: &[ClipRegion],
     ) -> Result<(), DocsightError> {
-        for points in flatten_subpaths(path)? {
-            for pair in points.windows(2) {
-                self.stroke_line(pair[0], pair[1], color, width, clips);
-            }
+        let subpaths = flatten_subpaths(path, 0.125 / self.scale)?;
+        let mut pieces = Vec::new();
+        for points in subpaths {
+            pieces.extend(dashed_pieces(&points, &style.dash, style.dash_phase));
         }
+        self.stroke_pieces(&pieces, paint, style, clips);
         Ok(())
     }
 
     fn fill_polygons(
         &mut self,
         polygons: &[Vec<Point>],
-        color: Color,
+        paint: Paint,
         even_odd: bool,
         clips: &[ClipRegion],
     ) {
@@ -359,74 +343,119 @@ impl Canvas {
             .flatten()
             .map(|point| point.y)
             .fold(f32::NEG_INFINITY, f32::max);
-        let x0 = self.pixel_x(min_x).max(0);
-        let y0 = self.pixel_y(min_y).max(0);
-        let x1 = self.pixel_x(max_x).min(self.width as i32);
-        let y1 = self.pixel_y(max_y).min(self.height as i32);
+        let x0 = self.pixel_floor_x(min_x).max(0);
+        let y0 = self.pixel_floor_y(min_y).max(0);
+        let x1 = self.pixel_ceil_x(max_x).min(self.width as i32);
+        let y1 = self.pixel_ceil_y(max_y).min(self.height as i32);
+        let raster_width = (x1 - x0).max(0) as usize;
+        let raster_height = (y1 - y0).max(0) as usize;
+        if raster_width == 0 || raster_height == 0 {
+            return;
+        }
+        let mut coverage = vec![0u8; raster_width.saturating_mul(raster_height)];
         for y in y0..y1 {
-            for x in x0..x1 {
-                let point = Point {
-                    x: (x as f32 + 0.5) / self.scale + self.offset_x,
-                    y: (y as f32 + 0.5) / self.scale + self.offset_y,
-                };
-                let inside = if even_odd {
-                    polygons
-                        .iter()
-                        .filter(|polygon| winding_number(point, polygon) != 0)
-                        .count()
-                        % 2
-                        == 1
-                } else {
-                    polygons
-                        .iter()
-                        .map(|polygon| winding_number(point, polygon))
-                        .sum::<i32>()
-                        != 0
-                };
-                if inside {
-                    self.set_pixel(x, y, color, clips);
+            for sample_y in [0.125, 0.375, 0.625, 0.875] {
+                let scan_y = (y as f32 + sample_y) / self.scale + self.offset_y;
+                let spans = scanline_spans(polygons, scan_y, even_odd);
+                if spans.is_empty() {
+                    continue;
+                }
+                let mut span_index = 0usize;
+                for x in x0..x1 {
+                    for sample_x in [0.125, 0.375, 0.625, 0.875] {
+                        let point = self.sample_point(x, y, sample_x, sample_y);
+                        while span_index < spans.len() && point.x >= spans[span_index].1 {
+                            span_index += 1;
+                        }
+                        if span_index == spans.len() {
+                            break;
+                        }
+                        if point.x >= spans[span_index].0
+                            && clips.iter().all(|clip| clip_contains(clip, point))
+                        {
+                            let local_x = (x - x0) as usize;
+                            let local_y = (y - y0) as usize;
+                            let index = local_y * raster_width + local_x;
+                            coverage[index] = coverage[index].saturating_add(1);
+                        }
+                    }
+                }
+            }
+        }
+        for (local_y, row) in coverage.chunks_exact(raster_width).enumerate() {
+            for (local_x, count) in row.iter().enumerate() {
+                if *count != 0 {
+                    self.blend_pixel(
+                        x0 + local_x as i32,
+                        y0 + local_y as i32,
+                        paint.color,
+                        f32::from(*count) / COVERAGE_SAMPLES.len() as f32 * paint.alpha,
+                    );
                 }
             }
         }
     }
 
-    fn stroke_line(
+    fn stroke_pieces(
         &mut self,
-        start: Point,
-        end: Point,
-        color: Color,
-        width: f32,
+        pieces: &[StrokePiece],
+        paint: Paint,
+        style: &StrokeStyle,
         clips: &[ClipRegion],
     ) {
-        let x0 = self.pixel_x(start.x);
-        let y0 = self.pixel_y(start.y);
-        let x1 = self.pixel_x(end.x);
-        let y1 = self.pixel_y(end.y);
-        let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1 } else { -1 };
-        let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1 } else { -1 };
-        let mut error = dx + dy;
-        let mut x = x0;
-        let mut y = y0;
-        let radius = ((width * self.scale / 2.0).ceil() as i32).max(1);
-        loop {
-            for offset_y in -radius..=radius {
-                for offset_x in -radius..=radius {
-                    self.set_pixel(x + offset_x, y + offset_y, color, clips);
+        if pieces.is_empty() {
+            return;
+        }
+        let half_width = if style.width == 0.0 {
+            0.5 / self.scale
+        } else {
+            style.width / 2.0
+        };
+        let expansion = half_width * style.miter_limit.max(1.0) + 1.0 / self.scale;
+        let min_x = pieces
+            .iter()
+            .flat_map(|piece| piece.points.iter())
+            .map(|point| point.x)
+            .fold(f32::INFINITY, f32::min)
+            - expansion;
+        let min_y = pieces
+            .iter()
+            .flat_map(|piece| piece.points.iter())
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min)
+            - expansion;
+        let max_x = pieces
+            .iter()
+            .flat_map(|piece| piece.points.iter())
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+            + expansion;
+        let max_y = pieces
+            .iter()
+            .flat_map(|piece| piece.points.iter())
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max)
+            + expansion;
+        let x0 = self.pixel_floor_x(min_x).max(0);
+        let y0 = self.pixel_floor_y(min_y).max(0);
+        let x1 = self.pixel_ceil_x(max_x).min(self.width as i32);
+        let y1 = self.pixel_ceil_y(max_y).min(self.height as i32);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let coverage = COVERAGE_SAMPLES
+                    .iter()
+                    .filter(|(sample_x, sample_y)| {
+                        let point = self.sample_point(x, y, *sample_x, *sample_y);
+                        pieces
+                            .iter()
+                            .any(|piece| stroke_contains(piece, point, half_width, style))
+                            && clips.iter().all(|clip| clip_contains(clip, point))
+                    })
+                    .count() as f32
+                    / COVERAGE_SAMPLES.len() as f32;
+                if coverage > 0.0 {
+                    self.blend_pixel(x, y, paint.color, coverage * paint.alpha);
                 }
-            }
-            if x == x1 && y == y1 {
-                break;
-            }
-            let doubled = 2 * error;
-            if doubled >= dy {
-                error += dy;
-                x += sx;
-            }
-            if doubled <= dx {
-                error += dx;
-                y += sy;
             }
         }
     }
@@ -437,43 +466,40 @@ impl Canvas {
         y0: f32,
         x1: f32,
         y1: f32,
-        color: Color,
+        paint: Paint,
         clips: &[ClipRegion],
     ) {
-        let left = self.pixel_x(x0).max(0);
-        let top = self.pixel_y(y0).max(0);
-        let right = self.pixel_x(x1).min(self.width as i32);
-        let bottom = self.pixel_y(y1).min(self.height as i32);
-        for y in top..bottom {
-            for x in left..right {
-                self.set_pixel(x, y, color, clips);
-            }
-        }
+        let polygon = vec![
+            Point { x: x0, y: y0 },
+            Point { x: x1, y: y0 },
+            Point { x: x1, y: y1 },
+            Point { x: x0, y: y1 },
+            Point { x: x0, y: y0 },
+        ];
+        self.fill_polygons(&[polygon], paint, false, clips);
     }
 
-    fn pixel_x(&self, value: f32) -> i32 {
-        ((value - self.offset_x) * self.scale).round() as i32
+    fn pixel_floor_x(&self, value: f32) -> i32 {
+        ((value - self.offset_x) * self.scale).floor() as i32
     }
 
-    fn pixel_y(&self, value: f32) -> i32 {
-        ((value - self.offset_y) * self.scale).round() as i32
+    fn pixel_floor_y(&self, value: f32) -> i32 {
+        ((value - self.offset_y) * self.scale).floor() as i32
     }
 
-    fn set_pixel(&mut self, x: i32, y: i32, color: Color, clips: &[ClipRegion]) {
-        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
-            return;
+    fn pixel_ceil_x(&self, value: f32) -> i32 {
+        ((value - self.offset_x) * self.scale).ceil() as i32
+    }
+
+    fn pixel_ceil_y(&self, value: f32) -> i32 {
+        ((value - self.offset_y) * self.scale).ceil() as i32
+    }
+
+    fn sample_point(&self, x: i32, y: i32, sample_x: f32, sample_y: f32) -> Point {
+        Point {
+            x: (x as f32 + sample_x) / self.scale + self.offset_x,
+            y: (y as f32 + sample_y) / self.scale + self.offset_y,
         }
-        let point = Point {
-            x: (x as f32 + 0.5) / self.scale + self.offset_x,
-            y: (y as f32 + 0.5) / self.scale + self.offset_y,
-        };
-        if clips.iter().any(|clip| !clip_contains(clip, point)) {
-            return;
-        }
-        let index = (y as usize * self.width as usize + x as usize) * 3;
-        self.pixels[index] = color.red;
-        self.pixels[index + 1] = color.green;
-        self.pixels[index + 2] = color.blue;
     }
 
     fn blend_pixel(&mut self, x: i32, y: i32, color: Color, coverage: f32) {
@@ -481,6 +507,7 @@ impl Canvas {
             return;
         }
         let index = (y as usize * self.width as usize + x as usize) * 3;
+        let coverage = coverage.clamp(0.0, 1.0);
         let inverse = 1.0 - coverage;
         self.pixels[index] = (f32::from(color.red) * coverage
             + f32::from(self.pixels[index]) * inverse)
@@ -492,13 +519,6 @@ impl Canvas {
             + f32::from(self.pixels[index + 2]) * inverse)
             .round() as u8;
     }
-}
-
-fn contours_winding(point: Point, contours: &[Vec<Point>]) -> i32 {
-    contours
-        .iter()
-        .map(|contour| winding_number(point, contour))
-        .sum()
 }
 
 fn clip_contains(clip: &ClipRegion, point: Point) -> bool {
@@ -518,7 +538,318 @@ fn clip_contains(clip: &ClipRegion, point: Point) -> bool {
     }
 }
 
-fn flatten_subpaths(path: &[PathSegment]) -> Result<Vec<Vec<Point>>, DocsightError> {
+fn scanline_spans(polygons: &[Vec<Point>], y: f32, even_odd: bool) -> Vec<(f32, f32)> {
+    let mut crossings = Vec::new();
+    for edge in polygons.iter().flat_map(|polygon| polygon.windows(2)) {
+        let start = edge[0];
+        let end = edge[1];
+        let delta = if start.y <= y && end.y > y {
+            1
+        } else if start.y > y && end.y <= y {
+            -1
+        } else {
+            continue;
+        };
+        let amount = (y - start.y) / (end.y - start.y);
+        crossings.push((start.x + amount * (end.x - start.x), delta));
+    }
+    crossings.sort_by(|first, second| first.0.total_cmp(&second.0));
+    let mut spans = Vec::new();
+    let mut winding = 0i32;
+    let mut parity = false;
+    let mut previous = None;
+    let mut cursor = 0usize;
+    while cursor < crossings.len() {
+        let x = crossings[cursor].0;
+        let inside = if even_odd { parity } else { winding != 0 };
+        if let Some(start) = previous
+            && inside
+            && start < x
+        {
+            spans.push((start, x));
+        }
+        let mut delta = 0i32;
+        let mut count = 0usize;
+        while cursor < crossings.len() && crossings[cursor].0 == x {
+            delta += crossings[cursor].1;
+            count += 1;
+            cursor += 1;
+        }
+        winding -= delta;
+        if count % 2 != 0 {
+            parity = !parity;
+        }
+        previous = Some(x);
+    }
+    spans
+}
+
+#[derive(Clone, Debug)]
+struct StrokePiece {
+    points: Vec<Point>,
+    closed: bool,
+}
+
+fn dashed_pieces(points: &[Point], pattern: &[f32], phase: f32) -> Vec<StrokePiece> {
+    if points.len() < 2 {
+        return Vec::new();
+    }
+    let closed = points.first() == points.last();
+    if pattern.is_empty() {
+        return vec![StrokePiece {
+            points: points.to_vec(),
+            closed,
+        }];
+    }
+    let mut effective = pattern.to_vec();
+    if effective.len() % 2 == 1 {
+        effective.extend_from_slice(pattern);
+    }
+    let total = effective.iter().sum::<f32>();
+    let mut offset = phase % total;
+    let mut pattern_index = 0usize;
+    for _ in 0..effective.len() {
+        let length = effective[pattern_index];
+        if length > 0.0 && offset < length {
+            break;
+        }
+        if length > 0.0 {
+            offset -= length;
+        }
+        pattern_index = (pattern_index + 1) % effective.len();
+    }
+    let mut remaining = effective[pattern_index] - offset;
+    let mut on = pattern_index % 2 == 0;
+    let mut current = Vec::new();
+    let mut result = Vec::new();
+    for pair in points.windows(2) {
+        let start = pair[0];
+        let end = pair[1];
+        let length = distance(start, end);
+        if length <= f32::EPSILON {
+            continue;
+        }
+        let mut traversed = 0.0;
+        while traversed < length {
+            while remaining <= f32::EPSILON {
+                if !on && current.len() >= 2 {
+                    result.push(StrokePiece {
+                        points: std::mem::take(&mut current),
+                        closed: false,
+                    });
+                }
+                pattern_index = (pattern_index + 1) % effective.len();
+                on = pattern_index % 2 == 0;
+                remaining = effective[pattern_index];
+            }
+            let consumed = remaining.min(length - traversed);
+            let segment_start = interpolate(start, end, traversed / length);
+            let segment_end = interpolate(start, end, (traversed + consumed) / length);
+            if on {
+                if current.last().copied() != Some(segment_start) {
+                    current.push(segment_start);
+                }
+                current.push(segment_end);
+            } else if current.len() >= 2 {
+                result.push(StrokePiece {
+                    points: std::mem::take(&mut current),
+                    closed: false,
+                });
+            }
+            traversed += consumed;
+            remaining -= consumed;
+        }
+    }
+    if current.len() >= 2 {
+        result.push(StrokePiece {
+            points: current,
+            closed: false,
+        });
+    }
+    result
+}
+
+fn stroke_contains(
+    piece: &StrokePiece,
+    point: Point,
+    half_width: f32,
+    style: &StrokeStyle,
+) -> bool {
+    if piece
+        .points
+        .windows(2)
+        .any(|pair| point_in_segment_strip(point, pair[0], pair[1], half_width))
+    {
+        return true;
+    }
+    let vertices = if piece.closed && piece.points.len() > 2 {
+        &piece.points[..piece.points.len() - 1]
+    } else {
+        &piece.points[..]
+    };
+    if piece.closed {
+        for index in 0..vertices.len() {
+            let previous = vertices[(index + vertices.len() - 1) % vertices.len()];
+            let current = vertices[index];
+            let next = vertices[(index + 1) % vertices.len()];
+            if point_in_join(point, previous, current, next, half_width, style) {
+                return true;
+            }
+        }
+    } else {
+        for window in vertices.windows(3) {
+            if point_in_join(point, window[0], window[1], window[2], half_width, style) {
+                return true;
+            }
+        }
+        if vertices.len() >= 2
+            && (point_in_cap(point, vertices[0], vertices[1], half_width, style.cap)
+                || point_in_cap(
+                    point,
+                    vertices[vertices.len() - 1],
+                    vertices[vertices.len() - 2],
+                    half_width,
+                    style.cap,
+                ))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn point_in_segment_strip(point: Point, start: Point, end: Point, half_width: f32) -> bool {
+    let direction = subtract(end, start);
+    let squared_length = dot(direction, direction);
+    if squared_length <= f32::EPSILON {
+        return false;
+    }
+    let relative = subtract(point, start);
+    let projection = dot(relative, direction) / squared_length;
+    if !(0.0..=1.0).contains(&projection) {
+        return false;
+    }
+    cross(direction, relative).abs() / squared_length.sqrt() <= half_width
+}
+
+fn point_in_cap(
+    point: Point,
+    endpoint: Point,
+    adjacent: Point,
+    half_width: f32,
+    cap: LineCap,
+) -> bool {
+    match cap {
+        LineCap::Butt => false,
+        LineCap::Round => distance(point, endpoint) <= half_width,
+        LineCap::Square => {
+            let direction = normalize(subtract(endpoint, adjacent));
+            let relative = subtract(point, endpoint);
+            let along = dot(relative, direction);
+            let perpendicular = cross(direction, relative).abs();
+            (0.0..=half_width).contains(&along) && perpendicular <= half_width
+        }
+    }
+}
+
+fn point_in_join(
+    point: Point,
+    previous: Point,
+    current: Point,
+    next: Point,
+    half_width: f32,
+    style: &StrokeStyle,
+) -> bool {
+    let incoming = normalize(subtract(current, previous));
+    let outgoing = normalize(subtract(next, current));
+    let turn = cross(incoming, outgoing);
+    if turn.abs() <= 0.000_001 {
+        return false;
+    }
+    if style.join == LineJoin::Round {
+        return distance(point, current) <= half_width;
+    }
+    let side = -turn.signum();
+    let outer_incoming = add(current, scale(left_normal(incoming), side * half_width));
+    let outer_outgoing = add(current, scale(left_normal(outgoing), side * half_width));
+    let mut polygon = vec![current, outer_incoming];
+    if style.join == LineJoin::Miter {
+        let denominator = cross(incoming, outgoing);
+        let parameter = cross(subtract(outer_outgoing, outer_incoming), outgoing) / denominator;
+        let miter = add(outer_incoming, scale(incoming, parameter));
+        if distance(current, miter) <= half_width * style.miter_limit {
+            polygon.push(miter);
+        }
+    }
+    polygon.push(outer_outgoing);
+    polygon.push(current);
+    winding_number(point, &polygon) != 0
+}
+
+fn normalize(point: Point) -> Point {
+    let length = (point.x * point.x + point.y * point.y).sqrt();
+    if length <= f32::EPSILON {
+        Point { x: 0.0, y: 0.0 }
+    } else {
+        Point {
+            x: point.x / length,
+            y: point.y / length,
+        }
+    }
+}
+
+fn left_normal(point: Point) -> Point {
+    Point {
+        x: -point.y,
+        y: point.x,
+    }
+}
+
+fn add(first: Point, second: Point) -> Point {
+    Point {
+        x: first.x + second.x,
+        y: first.y + second.y,
+    }
+}
+
+fn subtract(first: Point, second: Point) -> Point {
+    Point {
+        x: first.x - second.x,
+        y: first.y - second.y,
+    }
+}
+
+fn scale(point: Point, factor: f32) -> Point {
+    Point {
+        x: point.x * factor,
+        y: point.y * factor,
+    }
+}
+
+fn dot(first: Point, second: Point) -> f32 {
+    first.x * second.x + first.y * second.y
+}
+
+fn cross(first: Point, second: Point) -> f32 {
+    first.x * second.y - first.y * second.x
+}
+
+fn distance(first: Point, second: Point) -> f32 {
+    let difference = subtract(first, second);
+    dot(difference, difference).sqrt()
+}
+
+fn interpolate(start: Point, end: Point, amount: f32) -> Point {
+    Point {
+        x: start.x + (end.x - start.x) * amount,
+        y: start.y + (end.y - start.y) * amount,
+    }
+}
+
+fn flatten_subpaths(
+    path: &[PathSegment],
+    tolerance: f32,
+) -> Result<Vec<Vec<Point>>, DocsightError> {
     let mut result = Vec::new();
     let mut current = Vec::new();
     let mut cursor = None;
@@ -540,10 +871,15 @@ fn flatten_subpaths(path: &[PathSegment]) -> Result<Vec<Vec<Point>>, DocsightErr
             }
             PathSegment::Cubic(control1, control2, end) => {
                 let start = cursor.ok_or_else(|| malformed_path("curve has no starting point"))?;
-                for step in 1..=24 {
-                    let t = step as f32 / 24.0;
-                    current.push(cubic_point(start, *control1, *control2, *end, t));
-                }
+                flatten_cubic(
+                    start,
+                    *control1,
+                    *control2,
+                    *end,
+                    tolerance,
+                    0,
+                    &mut current,
+                )?;
                 cursor = Some(*end);
             }
             PathSegment::Close => {
@@ -561,17 +897,69 @@ fn flatten_subpaths(path: &[PathSegment]) -> Result<Vec<Vec<Point>>, DocsightErr
     Ok(result)
 }
 
-fn cubic_point(start: Point, first: Point, second: Point, end: Point, t: f32) -> Point {
-    let inverse = 1.0 - t;
+fn flatten_cubic(
+    start: Point,
+    first: Point,
+    second: Point,
+    end: Point,
+    tolerance: f32,
+    depth: u8,
+    output: &mut Vec<Point>,
+) -> Result<(), DocsightError> {
+    if output.len() >= MAX_FLATTENED_POINTS {
+        return Err(DocsightError::ResourceLimit {
+            resource: "rasterized PDF curve points".to_owned(),
+            limit: MAX_FLATTENED_POINTS as u64,
+        });
+    }
+    if depth >= 16 || cubic_flatness(start, first, second, end) <= tolerance {
+        output.push(end);
+        return Ok(());
+    }
+    let start_first = midpoint(start, first);
+    let first_second = midpoint(first, second);
+    let second_end = midpoint(second, end);
+    let left_second = midpoint(start_first, first_second);
+    let right_first = midpoint(first_second, second_end);
+    let middle = midpoint(left_second, right_first);
+    flatten_cubic(
+        start,
+        start_first,
+        left_second,
+        middle,
+        tolerance,
+        depth + 1,
+        output,
+    )?;
+    flatten_cubic(
+        middle,
+        right_first,
+        second_end,
+        end,
+        tolerance,
+        depth + 1,
+        output,
+    )
+}
+
+fn cubic_flatness(start: Point, first: Point, second: Point, end: Point) -> f32 {
+    point_line_distance(first, start, end).max(point_line_distance(second, start, end))
+}
+
+fn point_line_distance(point: Point, start: Point, end: Point) -> f32 {
+    let direction = subtract(end, start);
+    let length = dot(direction, direction).sqrt();
+    if length <= f32::EPSILON {
+        distance(point, start)
+    } else {
+        cross(direction, subtract(point, start)).abs() / length
+    }
+}
+
+fn midpoint(first: Point, second: Point) -> Point {
     Point {
-        x: inverse.powi(3) * start.x
-            + 3.0 * inverse.powi(2) * t * first.x
-            + 3.0 * inverse * t.powi(2) * second.x
-            + t.powi(3) * end.x,
-        y: inverse.powi(3) * start.y
-            + 3.0 * inverse.powi(2) * t * first.y
-            + 3.0 * inverse * t.powi(2) * second.y
-            + t.powi(3) * end.y,
+        x: (first.x + second.x) / 2.0,
+        y: (first.y + second.y) / 2.0,
     }
 }
 
@@ -868,10 +1256,45 @@ mod tests {
                 green: 0,
                 blue: 0,
             },
+            1.0,
             &[],
         );
         assert!(canvas.pixels.chunks_exact(3).any(|pixel| {
             pixel[0] > 0 && pixel[0] < 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2]
         }));
+    }
+
+    #[test]
+    fn vector_fill_uses_fractional_pixel_coverage() -> Result<(), DocsightError> {
+        let mut canvas = Canvas {
+            width: 20,
+            height: 20,
+            pixels: vec![255; 20 * 20 * 3],
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        };
+        canvas.fill_path(
+            &[
+                PathSegment::Move(Point { x: 1.0, y: 1.0 }),
+                PathSegment::Line(Point { x: 12.0, y: 1.0 }),
+                PathSegment::Line(Point { x: 1.0, y: 12.0 }),
+                PathSegment::Close,
+            ],
+            Paint {
+                color: Color {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                },
+                alpha: 1.0,
+            },
+            false,
+            &[],
+        )?;
+        assert!(canvas.pixels.chunks_exact(3).any(|pixel| {
+            pixel[0] > 0 && pixel[0] < 255 && pixel[0] == pixel[1] && pixel[1] == pixel[2]
+        }));
+        Ok(())
     }
 }

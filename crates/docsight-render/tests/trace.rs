@@ -2,8 +2,8 @@ use docsight_core::{DocumentSource, Rect};
 use docsight_render::{
     RenderRequest, RenderTarget,
     trace::{
-        ProofBundle, TraceArtifact, create_proof_bundle, record_trace, verify_proof_bundle,
-        verify_trace,
+        ProofBundle, TraceArtifact, TraceDecisionStatus, TraceDisplayOperation, TraceResourceKind,
+        TraceTableSizing, create_proof_bundle, record_trace, verify_proof_bundle, verify_trace,
     },
 };
 use std::io::{Cursor, Write};
@@ -36,8 +36,14 @@ fn docx_trace_replays_from_its_embedded_source_deterministically()
 
     assert_eq!(bytes, repeated);
     assert!(!trace.manifest.glyph_runs.is_empty());
-    assert!(trace.manifest.decision_coverage.display_list_operations);
-    assert!(trace.manifest.decision_coverage.pagination);
+    assert_eq!(
+        trace.manifest.decision_coverage.display_list_operations,
+        TraceDecisionStatus::Verified
+    );
+    assert_eq!(
+        trace.manifest.decision_coverage.pagination,
+        TraceDecisionStatus::Verified
+    );
 
     let read = TraceArtifact::from_bytes(&bytes)?;
     let verification = verify_trace(&read)?;
@@ -70,8 +76,7 @@ fn proof_bundle_verifies_embedded_evidence_and_optional_crop()
 }
 
 #[test]
-fn pdf_trace_replays_and_marks_unavailable_decision_categories()
--> Result<(), Box<dyn std::error::Error>> {
+fn pdf_trace_replays_complete_applicable_decisions() -> Result<(), Box<dyn std::error::Error>> {
     let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
     let request = RenderRequest {
         target: RenderTarget::Page { page: 1 },
@@ -80,16 +85,87 @@ fn pdf_trace_replays_and_marks_unavailable_decision_categories()
     let trace = record_trace(&source, &request)?;
 
     assert!(!trace.manifest.glyph_runs.is_empty());
-    assert!(!trace.manifest.decision_coverage.display_list_operations);
-    assert!(!trace.manifest.decision_coverage.pagination);
+    assert_eq!(trace.manifest.schema, "docsight.trace/v2");
+    assert_eq!(
+        trace.manifest.decision_coverage.display_list_operations,
+        TraceDecisionStatus::Verified
+    );
+    assert_eq!(
+        trace.manifest.decision_coverage.pagination,
+        TraceDecisionStatus::NotApplicable
+    );
+    assert_eq!(
+        trace.manifest.decision_coverage.line_breaks,
+        TraceDecisionStatus::NotApplicable
+    );
+    assert_eq!(
+        trace.manifest.decision_coverage.table_sizing,
+        TraceDecisionStatus::NotApplicable
+    );
+    assert!(trace.manifest.table_sizing.is_empty());
+    assert!(trace.manifest.pagination.is_empty());
     assert!(
         trace
             .manifest
             .warnings
             .iter()
-            .any(|warning| warning.code == "TRACE_DECISION_PARTIAL")
+            .all(|warning| warning.code != "TRACE_DECISION_PARTIAL")
+    );
+    assert!(
+        trace
+            .manifest
+            .display_list
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, TraceDisplayOperation::Fill { .. }))
+    );
+    assert!(
+        trace
+            .manifest
+            .display_list
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, TraceDisplayOperation::Text { .. }))
+    );
+    assert!(
+        trace
+            .manifest
+            .resources
+            .iter()
+            .any(|resource| { resource.kind == TraceResourceKind::Font && resource.name == "F1" })
+    );
+    assert!(
+        trace
+            .manifest
+            .display_list
+            .operations
+            .iter()
+            .all(|operation| !matches!(operation, TraceDisplayOperation::Border { .. }))
     );
     assert!(verify_trace(&trace)?.valid);
+    Ok(())
+}
+
+#[test]
+fn trace_rejects_decision_records_marked_not_applicable() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
+    let request = RenderRequest {
+        target: RenderTarget::Page { page: 1 },
+        dpi: 72,
+    };
+    let mut trace = record_trace(&source, &request)?;
+    trace.manifest.table_sizing.push(TraceTableSizing {
+        object_id: "tbl_invalid".to_owned(),
+        page: 1,
+        bbox: None,
+        rows: 1,
+        columns: 1,
+        column_widths_pt: None,
+        detector: None,
+    });
+
+    assert!(trace.to_bytes().is_err());
     Ok(())
 }
 

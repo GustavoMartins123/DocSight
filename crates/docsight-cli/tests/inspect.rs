@@ -30,7 +30,7 @@ fn inspect_pdf_json_is_deterministic() -> Result<(), Box<dyn std::error::Error>>
             .as_array()
             .ok_or("warnings missing")?
             .iter()
-            .any(|warning| warning["code"] == "INITIAL_PDF_RASTERIZER")
+            .any(|warning| warning["code"] == "APPROXIMATED_PDF_FONT")
     );
     assert_eq!(value["result"]["pages"], 1);
     assert_eq!(value["result"]["engine"], "docsight-pdf-native");

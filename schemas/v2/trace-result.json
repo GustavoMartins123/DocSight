@@ -3,15 +3,35 @@
   "$id": "https://docsight.dev/schemas/v2/trace-result.json",
   "title": "TraceOutput",
   "type": "object",
-  "required": ["output_path", "output_sha256", "output_bytes", "target", "display_list_sha256", "raster_sha256", "decision_coverage"],
+  "required": [
+    "output_path",
+    "output_sha256",
+    "output_bytes",
+    "trace_schema",
+    "target",
+    "display_list_sha256",
+    "raster_sha256",
+    "decision_coverage",
+    "resource_count",
+    "glyph_run_count",
+    "table_sizing_decision_count",
+    "pagination_decision_count",
+    "display_operation_count"
+  ],
   "properties": {
     "output_path": { "type": "string", "minLength": 1 },
     "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "output_bytes": { "type": "integer", "minimum": 1 },
+    "trace_schema": { "const": "docsight.trace/v2" },
     "target": { "$ref": "trace-manifest.json#/$defs/target" },
     "display_list_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "raster_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "decision_coverage": { "$ref": "trace-manifest.json#/properties/decision_coverage" }
+    "decision_coverage": { "$ref": "trace-manifest.json#/properties/decision_coverage" },
+    "resource_count": { "type": "integer", "minimum": 0 },
+    "glyph_run_count": { "type": "integer", "minimum": 0 },
+    "table_sizing_decision_count": { "type": "integer", "minimum": 0 },
+    "pagination_decision_count": { "type": "integer", "minimum": 0 },
+    "display_operation_count": { "type": "integer", "minimum": 0 }
   },
   "additionalProperties": false
 }

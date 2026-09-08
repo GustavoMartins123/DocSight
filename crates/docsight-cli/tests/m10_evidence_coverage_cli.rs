@@ -122,7 +122,7 @@ fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::
             .as_array()
             .ok_or("reasons")?
             .iter()
-            .any(|reason| reason == "INITIAL_PDF_RASTERIZER")
+            .any(|reason| reason == "APPROXIMATED_PDF_FONT")
     );
 
     Ok(())

@@ -4,13 +4,16 @@ mod raster;
 mod reconstruction;
 mod syntax;
 
-use content::{DisplayCommand, TextRun, fonts_from_resources, parse_content};
+use content::{
+    ClipRegion, DisplayCommand, ExtGraphicsState, FontInfo, LineCap, LineJoin, Paint, PathSegment,
+    Point, TextRun, ext_graphics_states_from_resources, fonts_from_resources, parse_content,
+};
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
     DocumentSource, ObjectId, Page, Rect, SourceSpan,
 };
 use raster::{MAX_DPI, MIN_DPI};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Take};
 use syntax::{ObjectRef, StreamValue, Value, Xref, malformed, parse_object, parse_xref};
@@ -75,6 +78,123 @@ pub struct RasterizedPage {
     pub height_px: u32,
     pub png: Vec<u8>,
     pub pixels: Vec<u8>,
+    pub warnings: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PdfTracePoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PdfTracePathSegment {
+    Move {
+        point: PdfTracePoint,
+    },
+    Line {
+        point: PdfTracePoint,
+    },
+    Cubic {
+        control_1: PdfTracePoint,
+        control_2: PdfTracePoint,
+        end: PdfTracePoint,
+    },
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfTraceFillRule {
+    Nonzero,
+    EvenOdd,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PdfTraceClip {
+    pub polygons: Vec<Vec<PdfTracePoint>>,
+    pub fill_rule: PdfTraceFillRule,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfTraceLineCap {
+    Butt,
+    Round,
+    Square,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfTraceLineJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfTraceResourceKind {
+    Font,
+    GraphicsState,
+    XObject,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PdfTraceResource {
+    pub name: String,
+    pub kind: PdfTraceResourceKind,
+    pub target: String,
+    pub content_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PdfTraceDisplayOperation {
+    Text {
+        text: String,
+        bbox: Rect,
+        font_size_pt: f32,
+        font_name: String,
+        bold: bool,
+        color_argb: u32,
+        clips: Vec<PdfTraceClip>,
+    },
+    Fill {
+        path: Vec<PdfTracePathSegment>,
+        color_argb: u32,
+        fill_rule: PdfTraceFillRule,
+        clips: Vec<PdfTraceClip>,
+    },
+    Stroke {
+        path: Vec<PdfTracePathSegment>,
+        color_argb: u32,
+        width_pt: f32,
+        line_cap: PdfTraceLineCap,
+        line_join: PdfTraceLineJoin,
+        miter_limit: f32,
+        dash_pattern_pt: Vec<f32>,
+        dash_phase_pt: f32,
+        clips: Vec<PdfTraceClip>,
+    },
+    Figure {
+        bbox: Rect,
+        resource_name: String,
+        clips: Vec<PdfTraceClip>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PdfTracePage {
+    pub number: u32,
+    pub width_pt: f32,
+    pub height_pt: f32,
+    pub spans: Vec<PdfTextSpan>,
+    pub resources: Vec<PdfTraceResource>,
+    pub operations: Vec<PdfTraceDisplayOperation>,
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -162,10 +282,22 @@ impl<'a> PdfDocument<'a> {
     }
 
     pub fn page(&self, number: u32) -> Result<PdfPage, DocsightError> {
+        let trace = self.trace_page(number)?;
+        Ok(PdfPage {
+            number: trace.number,
+            width_pt: trace.width_pt,
+            height_pt: trace.height_pt,
+            spans: trace.spans,
+            warnings: trace.warnings,
+        })
+    }
+
+    pub fn trace_page(&self, number: u32) -> Result<PdfTracePage, DocsightError> {
         let parsed = self.parse_page(number)?;
         let spans = parsed
             .text_runs
-            .into_iter()
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(index, run)| self.make_span(number, index, run, parsed.approximated_font))
             .collect::<Result<Vec<_>, DocsightError>>()?;
@@ -173,18 +305,21 @@ impl<'a> PdfDocument<'a> {
         if parsed.approximated_font {
             warnings.push(font_approximation_warning(number));
         }
-        if parsed.approximated_graphics {
-            warnings.push(graphics_approximation_warning(number));
-        }
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
         let page = self.page_record(number)?;
-        Ok(PdfPage {
+        Ok(PdfTracePage {
             number,
             width_pt: page.media_box.width(),
             height_pt: page.media_box.height(),
             spans,
+            resources: parsed.trace_resources,
+            operations: parsed
+                .commands
+                .iter()
+                .map(trace_display_operation)
+                .collect(),
             warnings,
         })
     }
@@ -212,9 +347,6 @@ impl<'a> PdfDocument<'a> {
             let parsed = self.parse_page(page_num)?;
             if parsed.approximated_font {
                 all_warnings.push(font_approximation_warning(page_num));
-            }
-            if parsed.approximated_graphics {
-                all_warnings.push(graphics_approximation_warning(page_num));
             }
             if parsed.omitted_xobjects {
                 all_warnings.push(xobject_placeholder_warning(page_num));
@@ -281,12 +413,9 @@ impl<'a> PdfDocument<'a> {
             None => public_page,
         };
         let parsed = self.parse_page(number)?;
-        let mut warnings = vec![renderer_warning(number)];
+        let mut warnings = Vec::new();
         if parsed.approximated_font {
             warnings.push(font_approximation_warning(number));
-        }
-        if parsed.approximated_graphics {
-            warnings.push(graphics_approximation_warning(number));
         }
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
@@ -330,6 +459,9 @@ impl<'a> PdfDocument<'a> {
             Some(value) => self.store.resolve_dict(value)?.into_keys().collect(),
             None => BTreeSet::new(),
         };
+        let ext_graphics_states =
+            ext_graphics_states_from_resources(&resources, |value| self.store.resolve(value))?;
+        let trace_resources = trace_resources(&fonts, &xobjects, &ext_graphics_states);
         let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(
             &content,
@@ -337,13 +469,14 @@ impl<'a> PdfDocument<'a> {
             page.media_box.y1,
             &fonts,
             &xobjects,
+            &ext_graphics_states,
         )?;
         Ok(ParsedPage {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
-            approximated_graphics: parsed.approximated_graphics,
             omitted_xobjects: parsed.omitted_xobjects,
+            trace_resources,
         })
     }
 
@@ -420,8 +553,152 @@ struct ParsedPage {
     commands: Vec<DisplayCommand>,
     text_runs: Vec<TextRun>,
     approximated_font: bool,
-    approximated_graphics: bool,
     omitted_xobjects: bool,
+    trace_resources: Vec<PdfTraceResource>,
+}
+
+fn trace_resources(
+    fonts: &BTreeMap<String, FontInfo>,
+    xobjects: &BTreeSet<String>,
+    graphics_states: &BTreeMap<String, ExtGraphicsState>,
+) -> Vec<PdfTraceResource> {
+    let mut resources = Vec::new();
+    resources.extend(fonts.iter().map(|(name, font)| {
+        PdfTraceResource {
+            name: name.clone(),
+            kind: PdfTraceResourceKind::Font,
+            target: font.base_font.clone(),
+            content_sha256: font
+                .outline
+                .as_ref()
+                .map(|program| program.sha256().to_owned()),
+        }
+    }));
+    resources.extend(graphics_states.keys().map(|name| PdfTraceResource {
+        name: name.clone(),
+        kind: PdfTraceResourceKind::GraphicsState,
+        target: "ExtGState".to_owned(),
+        content_sha256: None,
+    }));
+    resources.extend(xobjects.iter().map(|name| PdfTraceResource {
+        name: name.clone(),
+        kind: PdfTraceResourceKind::XObject,
+        target: "XObject".to_owned(),
+        content_sha256: None,
+    }));
+    resources
+}
+
+fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation {
+    match command {
+        DisplayCommand::Text(run) => PdfTraceDisplayOperation::Text {
+            text: run.text.clone(),
+            bbox: run.bbox,
+            font_size_pt: run.font_size,
+            font_name: run.font_name.clone(),
+            bold: run.bold,
+            color_argb: run.argb,
+            clips: trace_clips(&run.clips),
+        },
+        DisplayCommand::Fill {
+            path,
+            paint,
+            even_odd,
+            clips,
+        } => PdfTraceDisplayOperation::Fill {
+            path: path.iter().map(trace_path_segment).collect(),
+            color_argb: paint_argb(*paint),
+            fill_rule: trace_fill_rule(*even_odd),
+            clips: trace_clips(clips),
+        },
+        DisplayCommand::Stroke {
+            path,
+            paint,
+            style,
+            clips,
+        } => PdfTraceDisplayOperation::Stroke {
+            path: path.iter().map(trace_path_segment).collect(),
+            color_argb: paint_argb(*paint),
+            width_pt: style.width,
+            line_cap: match style.cap {
+                LineCap::Butt => PdfTraceLineCap::Butt,
+                LineCap::Round => PdfTraceLineCap::Round,
+                LineCap::Square => PdfTraceLineCap::Square,
+            },
+            line_join: match style.join {
+                LineJoin::Miter => PdfTraceLineJoin::Miter,
+                LineJoin::Round => PdfTraceLineJoin::Round,
+                LineJoin::Bevel => PdfTraceLineJoin::Bevel,
+            },
+            miter_limit: style.miter_limit,
+            dash_pattern_pt: style.dash.clone(),
+            dash_phase_pt: style.dash_phase,
+            clips: trace_clips(clips),
+        },
+        DisplayCommand::Figure {
+            bbox,
+            resource_name,
+            clips,
+        } => PdfTraceDisplayOperation::Figure {
+            bbox: *bbox,
+            resource_name: resource_name.clone(),
+            clips: trace_clips(clips),
+        },
+    }
+}
+
+fn trace_path_segment(segment: &PathSegment) -> PdfTracePathSegment {
+    match segment {
+        PathSegment::Move(point) => PdfTracePathSegment::Move {
+            point: trace_point(*point),
+        },
+        PathSegment::Line(point) => PdfTracePathSegment::Line {
+            point: trace_point(*point),
+        },
+        PathSegment::Cubic(control_1, control_2, end) => PdfTracePathSegment::Cubic {
+            control_1: trace_point(*control_1),
+            control_2: trace_point(*control_2),
+            end: trace_point(*end),
+        },
+        PathSegment::Close => PdfTracePathSegment::Close,
+    }
+}
+
+fn trace_clips(clips: &[ClipRegion]) -> Vec<PdfTraceClip> {
+    clips
+        .iter()
+        .map(|clip| PdfTraceClip {
+            polygons: clip
+                .polygons
+                .iter()
+                .map(|polygon| polygon.iter().copied().map(trace_point).collect())
+                .collect(),
+            fill_rule: trace_fill_rule(clip.even_odd),
+        })
+        .collect()
+}
+
+fn trace_point(point: Point) -> PdfTracePoint {
+    PdfTracePoint {
+        x: point.x,
+        y: point.y,
+    }
+}
+
+fn trace_fill_rule(even_odd: bool) -> PdfTraceFillRule {
+    if even_odd {
+        PdfTraceFillRule::EvenOdd
+    } else {
+        PdfTraceFillRule::Nonzero
+    }
+}
+
+fn paint_argb(paint: Paint) -> u32 {
+    let alpha = (paint.alpha * 255.0).round() as u32;
+    alpha << 24
+        | u32::from(paint.color.red) << 16
+        | u32::from(paint.color.green) << 8
+        | u32::from(paint.color.blue)
 }
 
 struct ObjectStore<'a> {
@@ -650,30 +927,6 @@ fn font_approximation_warning(page: u32) -> Diagnostic {
         message: format!("page {page} contains text without an embedded TrueType outline"),
         effect: "the renderer uses the declared deterministic fallback glyph set for that font"
             .to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-
-fn renderer_warning(page: u32) -> Diagnostic {
-    Diagnostic {
-        code: "INITIAL_PDF_RASTERIZER".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} was rasterized by DOCSIGHT's deterministic native renderer"),
-        effect: "vector fills and strokes use deterministic pixel coverage without full PDF antialiasing; embedded font outlines use coverage rasterization".to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-
-fn graphics_approximation_warning(page: u32) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_GRAPHICS_STYLE_APPROXIMATED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} uses PDF graphics state features with approximate raster semantics"
-        ),
-        effect: "line caps, joins, dash patterns, flatness, intents, transparency, or shading may differ or be omitted".to_owned(),
         object: None,
         page: Some(page),
     }

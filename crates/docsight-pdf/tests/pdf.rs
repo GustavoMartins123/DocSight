@@ -2,7 +2,9 @@
 mod pdf_fixture;
 
 use docsight_core::{DocsightError, DocumentSource, Rect};
-use docsight_pdf::PdfDocument;
+use docsight_pdf::{
+    PdfDocument, PdfTraceDisplayOperation, PdfTraceLineCap, PdfTraceLineJoin, PdfTraceResourceKind,
+};
 use pdf_fixture::{build_pdf, sample_pdf};
 
 #[test]
@@ -367,6 +369,92 @@ fn preserves_clipping_paths_in_native_rasterization() -> Result<(), DocsightErro
     let outside = (50usize * raster.width_px as usize + 150) * 3;
     assert_eq!(&raster.pixels[inside..inside + 3], &[0, 0, 0]);
     assert_eq!(&raster.pixels[outside..outside + 3], &[255, 255, 255]);
+    Ok(())
+}
+
+#[test]
+fn applies_ext_graphics_state_alpha_without_approximation() -> Result<(), DocsightError> {
+    let content = "q /GS0 gs 1 0 0 rg 10 10 80 80 re f Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /GS0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /ExtGState /ca 0.5 /CA 0.5 >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+    let page = document.page(1)?;
+    assert!(page.warnings.is_empty());
+    assert_eq!(page.spans.len(), 0);
+    let raster = document.rasterize(1, 72, None)?;
+    assert!(raster.warnings.is_empty());
+    let pixel = (50usize * raster.width_px as usize + 50) * 3;
+    assert_eq!(&raster.pixels[pixel..pixel + 3], &[255, 128, 128]);
+    let trace = document.trace_page(1)?;
+    assert!(trace.resources.iter().any(|resource| {
+        resource.name == "GS0" && resource.kind == PdfTraceResourceKind::GraphicsState
+    }));
+    assert!(trace.operations.iter().any(|operation| matches!(
+        operation,
+        PdfTraceDisplayOperation::Fill {
+            color_argb: 0x80ff_0000,
+            ..
+        }
+    )));
+    Ok(())
+}
+
+#[test]
+fn renders_dash_cap_join_and_miter_styles_without_warning() -> Result<(), DocsightError> {
+    let content = "q /GS0 gs 10 50 m 90 50 l S Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /GS0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /ExtGState /LW 4 /LC 0 /LJ 2 /ML 5 /D [[4 4] 0] >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+    let raster = document.rasterize(1, 72, None)?;
+    assert!(raster.warnings.is_empty());
+    let painted = (50usize * raster.width_px as usize + 12) * 3;
+    let gap = (50usize * raster.width_px as usize + 15) * 3;
+    assert_eq!(&raster.pixels[painted..painted + 3], &[0, 0, 0]);
+    assert_eq!(&raster.pixels[gap..gap + 3], &[255, 255, 255]);
+    let trace = document.trace_page(1)?;
+    assert!(trace.operations.iter().any(|operation| matches!(
+        operation,
+        PdfTraceDisplayOperation::Stroke {
+            width_pt: 4.0,
+            line_cap: PdfTraceLineCap::Butt,
+            line_join: PdfTraceLineJoin::Bevel,
+            miter_limit: 5.0,
+            dash_pattern_pt,
+            dash_phase_pt: 0.0,
+            ..
+        } if dash_pattern_pt == &[4.0, 4.0]
+    )));
+    Ok(())
+}
+
+#[test]
+fn rejects_non_normal_blend_modes() -> Result<(), DocsightError> {
+    let content = "/GS0 gs 10 10 80 80 re f";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /GS0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /ExtGState /BM /Multiply >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let error = PdfDocument::open(&source)?.rasterize(1, 72, None);
+    assert!(matches!(
+        error,
+        Err(DocsightError::UnsupportedFeature { feature }) if feature == "PDF blend mode Multiply"
+    ));
     Ok(())
 }
 

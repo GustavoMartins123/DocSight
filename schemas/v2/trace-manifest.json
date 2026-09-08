@@ -18,7 +18,7 @@
     "warnings"
   ],
   "properties": {
-    "schema": { "const": "docsight.trace/v1" },
+    "schema": { "const": "docsight.trace/v2" },
     "source": {
       "type": "object",
       "required": ["document_id", "document_sha256", "format", "bytes"],
@@ -49,12 +49,12 @@
       "type": "object",
       "required": ["resolved_resources", "glyph_metrics", "line_breaks", "table_sizing", "pagination", "display_list_operations"],
       "properties": {
-        "resolved_resources": { "type": "boolean" },
-        "glyph_metrics": { "type": "boolean" },
-        "line_breaks": { "type": "boolean" },
-        "table_sizing": { "type": "boolean" },
-        "pagination": { "type": "boolean" },
-        "display_list_operations": { "type": "boolean" }
+        "resolved_resources": { "$ref": "#/$defs/decision_status" },
+        "glyph_metrics": { "$ref": "#/$defs/decision_status" },
+        "line_breaks": { "$ref": "#/$defs/decision_status" },
+        "table_sizing": { "$ref": "#/$defs/decision_status" },
+        "pagination": { "$ref": "#/$defs/decision_status" },
+        "display_list_operations": { "$ref": "#/$defs/decision_status" }
       },
       "additionalProperties": false
     },
@@ -65,7 +65,7 @@
         "required": ["id", "kind", "name", "target", "content_sha256"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["font", "image", "relationship", "embedded_object"] },
+          "kind": { "enum": ["font", "image", "relationship", "embedded_object", "graphics_state", "x_object"] },
           "name": { "type": "string" },
           "target": { "type": "string" },
           "content_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
@@ -120,7 +120,40 @@
     "raster": { "$ref": "#/$defs/raster" },
     "warnings": { "type": "array", "items": { "$ref": "diagnostic.json" } }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision_coverage": {
+            "properties": { "table_sizing": { "const": "not_applicable" } },
+            "required": ["table_sizing"]
+          }
+        },
+        "required": ["decision_coverage"]
+      },
+      "then": {
+        "properties": { "table_sizing": { "maxItems": 0 } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision_coverage": {
+            "properties": { "pagination": { "const": "not_applicable" } },
+            "required": ["pagination"]
+          }
+        },
+        "required": ["decision_coverage"]
+      },
+      "then": {
+        "properties": { "pagination": { "maxItems": 0 } }
+      }
+    }
+  ],
   "$defs": {
+    "decision_status": {
+      "enum": ["verified", "not_applicable", "unavailable"]
+    },
     "bbox": {
       "type": "object",
       "required": ["x0", "y0", "x1", "y1"],
@@ -187,7 +220,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "text_sha256", "bbox", "font_size_pt", "font_name", "bold", "color_argb"],
+          "required": ["kind", "text_sha256", "bbox", "font_size_pt", "font_name", "bold", "color_argb", "clips"],
           "properties": {
             "kind": { "const": "text" },
             "text_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -195,7 +228,8 @@
             "font_size_pt": { "type": "number", "exclusiveMinimum": 0 },
             "font_name": { "type": "string", "minLength": 1 },
             "bold": { "type": "boolean" },
-            "color_argb": { "type": "integer", "minimum": 0 }
+            "color_argb": { "type": "integer", "minimum": 0 },
+            "clips": { "$ref": "#/$defs/clips" }
           },
           "additionalProperties": false
         },
@@ -208,8 +242,123 @@
             "color_argb": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "path", "color_argb", "fill_rule", "clips"],
+          "properties": {
+            "kind": { "const": "fill" },
+            "path": { "$ref": "#/$defs/path" },
+            "color_argb": { "type": "integer", "minimum": 0 },
+            "fill_rule": { "$ref": "#/$defs/fill_rule" },
+            "clips": { "$ref": "#/$defs/clips" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "path", "color_argb", "width_pt", "line_cap", "line_join", "miter_limit", "dash_pattern_pt", "dash_phase_pt", "clips"],
+          "properties": {
+            "kind": { "const": "stroke" },
+            "path": { "$ref": "#/$defs/path" },
+            "color_argb": { "type": "integer", "minimum": 0 },
+            "width_pt": { "type": "number", "minimum": 0 },
+            "line_cap": { "enum": ["butt", "round", "square"] },
+            "line_join": { "enum": ["miter", "round", "bevel"] },
+            "miter_limit": { "type": "number", "minimum": 1 },
+            "dash_pattern_pt": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+            "dash_phase_pt": { "type": "number", "minimum": 0 },
+            "clips": { "$ref": "#/$defs/clips" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "bbox", "resource_name", "clips"],
+          "properties": {
+            "kind": { "const": "figure" },
+            "bbox": { "$ref": "#/$defs/bbox" },
+            "resource_name": { "type": "string", "minLength": 1 },
+            "clips": { "$ref": "#/$defs/clips" }
+          },
+          "additionalProperties": false
         }
       ]
+    },
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "path": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/path_segment" }
+    },
+    "path_segment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "point"],
+          "properties": {
+            "kind": { "const": "move" },
+            "point": { "$ref": "#/$defs/point" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "point"],
+          "properties": {
+            "kind": { "const": "line" },
+            "point": { "$ref": "#/$defs/point" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "control_1", "control_2", "end"],
+          "properties": {
+            "kind": { "const": "cubic" },
+            "control_1": { "$ref": "#/$defs/point" },
+            "control_2": { "$ref": "#/$defs/point" },
+            "end": { "$ref": "#/$defs/point" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "close" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "fill_rule": {
+      "enum": ["nonzero", "even_odd"]
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["polygons", "fill_rule"],
+        "properties": {
+          "polygons": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/point" }
+            }
+          },
+          "fill_rule": { "$ref": "#/$defs/fill_rule" }
+        },
+        "additionalProperties": false
+      }
     },
     "raster": {
       "type": "object",

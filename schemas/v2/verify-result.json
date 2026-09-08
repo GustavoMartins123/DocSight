@@ -10,7 +10,7 @@
       "type": "object",
       "required": ["schema", "valid", "bundle_sha256", "document_sha256", "evidence_count", "trace_verified", "crop_verified"],
       "properties": {
-        "schema": { "const": "docsight.proof-bundle/v1" },
+        "schema": { "const": "docsight.proof-bundle/v2" },
         "valid": { "const": true },
         "bundle_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "document_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },

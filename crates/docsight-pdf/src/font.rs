@@ -1,4 +1,5 @@
 use docsight_core::DocsightError;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const MAX_FONT_BYTES: usize = 16 * 1024 * 1024;
@@ -21,6 +22,7 @@ pub(crate) struct GlyphOutline {
 #[derive(Clone, Debug)]
 pub(crate) struct FontProgram {
     data: Vec<u8>,
+    sha256: String,
     units_per_em: u16,
     glyph_count: u16,
     hmetrics: u16,
@@ -106,8 +108,13 @@ impl FontProgram {
             Some(_) => parse_cmap(&data, &tables)?,
             None => BTreeMap::new(),
         };
+        let sha256 = Sha256::digest(&data)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         Ok(Self {
             data,
+            sha256,
             units_per_em,
             glyph_count,
             hmetrics,
@@ -116,6 +123,10 @@ impl FontProgram {
             hmtx_offset: hmtx,
             cmap,
         })
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
     }
 
     pub(crate) fn glyph_for_char(&self, character: char) -> Result<u16, DocsightError> {

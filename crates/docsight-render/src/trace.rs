@@ -5,7 +5,10 @@ use docsight_core::{
 };
 use docsight_layout::{LaidOutPage, layout_docx};
 use docsight_ooxml::parse_docx;
-use docsight_pdf::{PdfDocument, PdfPage};
+use docsight_pdf::{
+    PdfDocument, PdfTraceClip, PdfTraceDisplayOperation, PdfTraceFillRule, PdfTraceLineCap,
+    PdfTraceLineJoin, PdfTracePage, PdfTracePathSegment, PdfTraceResourceKind,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -14,8 +17,8 @@ use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-const TRACE_SCHEMA: &str = "docsight.trace/v1";
-const PROOF_BUNDLE_SCHEMA: &str = "docsight.proof-bundle/v1";
+const TRACE_SCHEMA: &str = "docsight.trace/v2";
+const PROOF_BUNDLE_SCHEMA: &str = "docsight.proof-bundle/v2";
 const MAX_ARTIFACT_MANIFEST_BYTES: u64 = 1_048_576;
 const MAX_ARTIFACT_CROP_BYTES: u64 = 75_000_000;
 const MAX_ARCHIVE_OVERHEAD_BYTES: u64 = 4_096;
@@ -101,10 +104,21 @@ pub struct ReproductionFingerprint {
 #[serde(deny_unknown_fields)]
 pub struct TraceResource {
     pub id: String,
-    pub kind: ResourceKind,
+    pub kind: TraceResourceKind,
     pub name: String,
     pub target: String,
     pub content_sha256: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceResourceKind {
+    Font,
+    Image,
+    Relationship,
+    EmbeddedObject,
+    GraphicsState,
+    XObject,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -128,10 +142,33 @@ pub enum TraceDisplayOperation {
         font_name: String,
         bold: bool,
         color_argb: u32,
+        clips: Vec<PdfTraceClip>,
     },
     Border {
         bbox: Rect,
         color_argb: u32,
+    },
+    Fill {
+        path: Vec<PdfTracePathSegment>,
+        color_argb: u32,
+        fill_rule: PdfTraceFillRule,
+        clips: Vec<PdfTraceClip>,
+    },
+    Stroke {
+        path: Vec<PdfTracePathSegment>,
+        color_argb: u32,
+        width_pt: f32,
+        line_cap: PdfTraceLineCap,
+        line_join: PdfTraceLineJoin,
+        miter_limit: f32,
+        dash_pattern_pt: Vec<f32>,
+        dash_phase_pt: f32,
+        clips: Vec<PdfTraceClip>,
+    },
+    Figure {
+        bbox: Rect,
+        resource_name: String,
+        clips: Vec<PdfTraceClip>,
     },
 }
 
@@ -169,33 +206,41 @@ pub struct TracePaginationDecision {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraceDecisionCoverage {
-    pub resolved_resources: bool,
-    pub glyph_metrics: bool,
-    pub line_breaks: bool,
-    pub table_sizing: bool,
-    pub pagination: bool,
-    pub display_list_operations: bool,
+    pub resolved_resources: TraceDecisionStatus,
+    pub glyph_metrics: TraceDecisionStatus,
+    pub line_breaks: TraceDecisionStatus,
+    pub table_sizing: TraceDecisionStatus,
+    pub pagination: TraceDecisionStatus,
+    pub display_list_operations: TraceDecisionStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceDecisionStatus {
+    Verified,
+    NotApplicable,
+    Unavailable,
 }
 
 impl TraceDecisionCoverage {
     fn unavailable_names(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
-        if !self.resolved_resources {
+        if self.resolved_resources == TraceDecisionStatus::Unavailable {
             names.push("resolved_resources");
         }
-        if !self.glyph_metrics {
+        if self.glyph_metrics == TraceDecisionStatus::Unavailable {
             names.push("glyph_metrics");
         }
-        if !self.line_breaks {
+        if self.line_breaks == TraceDecisionStatus::Unavailable {
             names.push("line_breaks");
         }
-        if !self.table_sizing {
+        if self.table_sizing == TraceDecisionStatus::Unavailable {
             names.push("table_sizing");
         }
-        if !self.pagination {
+        if self.pagination == TraceDecisionStatus::Unavailable {
             names.push("pagination");
         }
-        if !self.display_list_operations {
+        if self.display_list_operations == TraceDecisionStatus::Unavailable {
             names.push("display_list_operations");
         }
         names
@@ -336,7 +381,6 @@ pub fn record_trace(
         });
     }
     let raster_bytes = checked_len(rendered.png().len(), "raster artifact bytes")?;
-    let document = material.document();
     let manifest = TraceManifest {
         schema: TRACE_SCHEMA.to_owned(),
         source: TraceSource {
@@ -348,10 +392,10 @@ pub fn record_trace(
         fingerprint: reproduction_fingerprint(source),
         target,
         decision_coverage,
-        resources: trace_resources(document),
+        resources: trace_resources(&material, source),
         glyph_runs,
-        table_sizing: trace_tables(document, rendered.metadata.page),
-        pagination: trace_pagination(document, rendered.metadata.page),
+        table_sizing: material.trace_table_sizing(rendered.metadata.page),
+        pagination: material.trace_pagination(rendered.metadata.page),
         display_list,
         raster: TraceRaster {
             page: rendered.metadata.page,
@@ -643,7 +687,7 @@ enum TraceMaterial {
     },
     Pdf {
         document: Document,
-        page: PdfPage,
+        page: PdfTracePage,
     },
 }
 
@@ -700,6 +744,7 @@ impl TraceMaterial {
                             font_name: "docsight-proportional-reference".to_owned(),
                             bold: run.bold,
                             color_argb: run.color_argb,
+                            clips: Vec::new(),
                         });
                     }
                 }
@@ -707,12 +752,12 @@ impl TraceMaterial {
                     glyph_runs,
                     operations,
                     TraceDecisionCoverage {
-                        resolved_resources: true,
-                        glyph_metrics: true,
-                        line_breaks: true,
-                        table_sizing: true,
-                        pagination: true,
-                        display_list_operations: true,
+                        resolved_resources: TraceDecisionStatus::Verified,
+                        glyph_metrics: TraceDecisionStatus::Verified,
+                        line_breaks: TraceDecisionStatus::Verified,
+                        table_sizing: TraceDecisionStatus::Verified,
+                        pagination: TraceDecisionStatus::Verified,
+                        display_list_operations: TraceDecisionStatus::Verified,
                     },
                 )
             }
@@ -729,31 +774,98 @@ impl TraceMaterial {
                         color_argb: span.argb,
                     })
                     .collect::<Vec<_>>();
-                let operations = glyph_runs
-                    .iter()
-                    .map(|run| TraceDisplayOperation::Text {
-                        text_sha256: run.text_sha256.clone(),
-                        bbox: run.bbox,
-                        font_size_pt: run.font_size_pt,
-                        font_name: run.font_name.clone(),
-                        bold: run.bold,
-                        color_argb: run.color_argb,
-                    })
-                    .collect();
+                let operations = page.operations.iter().map(trace_pdf_operation).collect();
                 (
                     glyph_runs,
                     operations,
                     TraceDecisionCoverage {
-                        resolved_resources: true,
-                        glyph_metrics: true,
-                        line_breaks: false,
-                        table_sizing: false,
-                        pagination: false,
-                        display_list_operations: false,
+                        resolved_resources: TraceDecisionStatus::Verified,
+                        glyph_metrics: TraceDecisionStatus::Verified,
+                        line_breaks: TraceDecisionStatus::NotApplicable,
+                        table_sizing: TraceDecisionStatus::NotApplicable,
+                        pagination: TraceDecisionStatus::NotApplicable,
+                        display_list_operations: TraceDecisionStatus::Verified,
                     },
                 )
             }
         }
+    }
+
+    fn trace_table_sizing(&self, page: u32) -> Vec<TraceTableSizing> {
+        match self {
+            Self::Docx { document, .. } => trace_tables(document, page),
+            Self::Pdf { .. } => Vec::new(),
+        }
+    }
+
+    fn trace_pagination(&self, page: u32) -> Vec<TracePaginationDecision> {
+        match self {
+            Self::Docx { document, .. } => trace_pagination(document, page),
+            Self::Pdf { .. } => Vec::new(),
+        }
+    }
+}
+
+fn trace_pdf_operation(operation: &PdfTraceDisplayOperation) -> TraceDisplayOperation {
+    match operation {
+        PdfTraceDisplayOperation::Text {
+            text,
+            bbox,
+            font_size_pt,
+            font_name,
+            bold,
+            color_argb,
+            clips,
+        } => TraceDisplayOperation::Text {
+            text_sha256: sha256_hex(text.as_bytes()),
+            bbox: *bbox,
+            font_size_pt: *font_size_pt,
+            font_name: font_name.clone(),
+            bold: *bold,
+            color_argb: *color_argb,
+            clips: clips.clone(),
+        },
+        PdfTraceDisplayOperation::Fill {
+            path,
+            color_argb,
+            fill_rule,
+            clips,
+        } => TraceDisplayOperation::Fill {
+            path: path.clone(),
+            color_argb: *color_argb,
+            fill_rule: *fill_rule,
+            clips: clips.clone(),
+        },
+        PdfTraceDisplayOperation::Stroke {
+            path,
+            color_argb,
+            width_pt,
+            line_cap,
+            line_join,
+            miter_limit,
+            dash_pattern_pt,
+            dash_phase_pt,
+            clips,
+        } => TraceDisplayOperation::Stroke {
+            path: path.clone(),
+            color_argb: *color_argb,
+            width_pt: *width_pt,
+            line_cap: *line_cap,
+            line_join: *line_join,
+            miter_limit: *miter_limit,
+            dash_pattern_pt: dash_pattern_pt.clone(),
+            dash_phase_pt: *dash_phase_pt,
+            clips: clips.clone(),
+        },
+        PdfTraceDisplayOperation::Figure {
+            bbox,
+            resource_name,
+            clips,
+        } => TraceDisplayOperation::Figure {
+            bbox: *bbox,
+            resource_name: resource_name.clone(),
+            clips: clips.clone(),
+        },
     }
 }
 
@@ -769,7 +881,7 @@ fn trace_material(source: &DocumentSource, page: u32) -> Result<TraceMaterial, D
         DocumentFormat::Pdf => {
             let pdf = PdfDocument::open(source)?;
             let document = pdf.to_document()?;
-            let page = pdf.page(page)?;
+            let page = pdf.trace_page(page)?;
             Ok(TraceMaterial::Pdf { document, page })
         }
     }
@@ -782,18 +894,65 @@ fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
     }
 }
 
-fn trace_resources(document: &Document) -> Vec<TraceResource> {
-    document
-        .resources
-        .iter()
-        .map(|resource| TraceResource {
-            id: resource.id.to_string(),
-            kind: resource.kind,
-            name: resource.name.clone(),
-            target: resource.target.clone(),
-            content_sha256: resource.content_sha256.clone(),
-        })
-        .collect()
+fn trace_resources(material: &TraceMaterial, source: &DocumentSource) -> Vec<TraceResource> {
+    match material {
+        TraceMaterial::Docx { document, .. } => document
+            .resources
+            .iter()
+            .map(|resource| TraceResource {
+                id: resource.id.to_string(),
+                kind: resource.kind.into(),
+                name: resource.name.clone(),
+                target: resource.target.clone(),
+                content_sha256: resource.content_sha256.clone(),
+            })
+            .collect(),
+        TraceMaterial::Pdf { page, .. } => page
+            .resources
+            .iter()
+            .map(|resource| {
+                let kind = match resource.kind {
+                    PdfTraceResourceKind::Font => TraceResourceKind::Font,
+                    PdfTraceResourceKind::GraphicsState => TraceResourceKind::GraphicsState,
+                    PdfTraceResourceKind::XObject => TraceResourceKind::XObject,
+                };
+                let path = format!(
+                    "pdf::resource::{}::{}",
+                    trace_resource_kind_name(kind),
+                    resource.name
+                );
+                TraceResource {
+                    id: ObjectId::new("res", source.sha256(), &path).to_string(),
+                    kind,
+                    name: resource.name.clone(),
+                    target: resource.target.clone(),
+                    content_sha256: resource.content_sha256.clone(),
+                }
+            })
+            .collect(),
+    }
+}
+
+fn trace_resource_kind_name(kind: TraceResourceKind) -> &'static str {
+    match kind {
+        TraceResourceKind::Font => "font",
+        TraceResourceKind::Image => "image",
+        TraceResourceKind::Relationship => "relationship",
+        TraceResourceKind::EmbeddedObject => "embedded_object",
+        TraceResourceKind::GraphicsState => "graphics_state",
+        TraceResourceKind::XObject => "x_object",
+    }
+}
+
+impl From<ResourceKind> for TraceResourceKind {
+    fn from(value: ResourceKind) -> Self {
+        match value {
+            ResourceKind::Font => Self::Font,
+            ResourceKind::Image => Self::Image,
+            ResourceKind::Relationship => Self::Relationship,
+            ResourceKind::EmbeddedObject => Self::EmbeddedObject,
+        }
+    }
 }
 
 fn trace_tables(document: &Document, page: u32) -> Vec<TraceTableSizing> {
@@ -925,6 +1084,20 @@ fn validate_trace_manifest(manifest: &TraceManifest) -> Result<(), DocsightError
     if manifest.raster.media_type != "image/png" {
         return Err(DocsightError::MalformedDocument {
             message: "trace raster media type is not image/png".to_owned(),
+        });
+    }
+    if manifest.decision_coverage.table_sizing == TraceDecisionStatus::NotApplicable
+        && !manifest.table_sizing.is_empty()
+    {
+        return Err(DocsightError::MalformedDocument {
+            message: "trace contains table-sizing decisions marked not applicable".to_owned(),
+        });
+    }
+    if manifest.decision_coverage.pagination == TraceDecisionStatus::NotApplicable
+        && !manifest.pagination.is_empty()
+    {
+        return Err(DocsightError::MalformedDocument {
+            message: "trace contains pagination decisions marked not applicable".to_owned(),
         });
     }
     let mut display_list = manifest.display_list.clone();

@@ -9,6 +9,7 @@ const MAX_GRAPHICS_DEPTH: usize = 64;
 const MAX_PATH_SEGMENTS: usize = 100_000;
 const MAX_OPERANDS: usize = 100_000;
 const MAX_STRING_DEPTH: usize = 64;
+const MAX_DASH_ENTRIES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Point {
@@ -21,6 +22,47 @@ pub(crate) struct Color {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Paint {
+    pub color: Color,
+    pub alpha: f32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LineCap {
+    Butt,
+    Round,
+    Square,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LineJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StrokeStyle {
+    pub width: f32,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    pub miter_limit: f32,
+    pub dash: Vec<f32>,
+    pub dash_phase: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExtGraphicsState {
+    pub fill_alpha: Option<f32>,
+    pub stroke_alpha: Option<f32>,
+    pub line_width: Option<f32>,
+    pub line_cap: Option<LineCap>,
+    pub line_join: Option<LineJoin>,
+    pub miter_limit: Option<f32>,
+    pub dash: Option<(Vec<f32>, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,14 +104,14 @@ pub(crate) enum DisplayCommand {
     },
     Fill {
         path: Vec<PathSegment>,
-        color: Color,
+        paint: Paint,
         even_odd: bool,
         clips: Vec<ClipRegion>,
     },
     Stroke {
         path: Vec<PathSegment>,
-        color: Color,
-        width: f32,
+        paint: Paint,
+        style: StrokeStyle,
         clips: Vec<ClipRegion>,
     },
 }
@@ -80,7 +122,7 @@ pub(crate) struct FontInfo {
     pub base_font: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
-    outline: Option<Arc<FontProgram>>,
+    pub outline: Option<Arc<FontProgram>>,
     cid_identity: bool,
 }
 
@@ -107,7 +149,6 @@ pub(crate) struct ParsedContent {
     pub commands: Vec<DisplayCommand>,
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
-    pub approximated_graphics: bool,
     pub omitted_xobjects: bool,
 }
 
@@ -117,6 +158,7 @@ pub(crate) fn parse_content(
     page_height: f32,
     fonts: &BTreeMap<String, FontInfo>,
     xobjects: &BTreeSet<String>,
+    ext_graphics_states: &BTreeMap<String, ExtGraphicsState>,
 ) -> Result<ParsedContent, DocsightError> {
     let mut lexer = ContentLexer::new(bytes);
     let mut operands = Vec::new();
@@ -129,7 +171,6 @@ pub(crate) fn parse_content(
     let mut marked_content_depth = 0usize;
     let mut operations = 0usize;
     let mut approximated_font = false;
-    let mut approximated_graphics = false;
     let mut omitted_xobjects = false;
     let mut inline_image = false;
     while let Some(token) = lexer.next_token()? {
@@ -160,7 +201,6 @@ pub(crate) fn parse_content(
                     "BI" => {
                         require_empty(&operands, &operator)?;
                         inline_image = true;
-                        approximated_graphics = true;
                     }
                     "ID" => {
                         if !inline_image {
@@ -210,33 +250,36 @@ pub(crate) fn parse_content(
                         if values[0] < 0.0 {
                             return Err(malformed("line width must be non-negative"));
                         }
-                        if values[0] == 0.0 {
-                            approximated_graphics = true;
-                        }
                         state.line_width = values[0];
                     }
                     "rg" => {
                         let values = numbers(&operands, 3, &operator)?;
+                        state.fill_color_space = ColorSpace::Rgb;
                         state.fill_color = rgb(values[0], values[1], values[2])?;
                     }
                     "RG" => {
                         let values = numbers(&operands, 3, &operator)?;
+                        state.stroke_color_space = ColorSpace::Rgb;
                         state.stroke_color = rgb(values[0], values[1], values[2])?;
                     }
                     "g" => {
                         let values = numbers(&operands, 1, &operator)?;
+                        state.fill_color_space = ColorSpace::Gray;
                         state.fill_color = rgb(values[0], values[0], values[0])?;
                     }
                     "G" => {
                         let values = numbers(&operands, 1, &operator)?;
+                        state.stroke_color_space = ColorSpace::Gray;
                         state.stroke_color = rgb(values[0], values[0], values[0])?;
                     }
                     "k" => {
                         let values = numbers(&operands, 4, &operator)?;
+                        state.fill_color_space = ColorSpace::Cmyk;
                         state.fill_color = cmyk(values[0], values[1], values[2], values[3])?;
                     }
                     "K" => {
                         let values = numbers(&operands, 4, &operator)?;
+                        state.stroke_color_space = ColorSpace::Cmyk;
                         state.stroke_color = cmyk(values[0], values[1], values[2], values[3])?;
                     }
                     "cs" | "CS" => {
@@ -245,43 +288,36 @@ pub(crate) fn parse_content(
                                 "{operator} requires one color-space name"
                             )));
                         }
-                        name(&operands[0], &operator)?;
-                        approximated_graphics = true;
+                        let color_space = ColorSpace::parse(name(&operands[0], &operator)?)?;
+                        if operator == "cs" {
+                            state.fill_color_space = color_space;
+                        } else {
+                            state.stroke_color_space = color_space;
+                        }
                     }
                     "sc" | "SC" | "scn" | "SCN" => {
                         if operands
                             .iter()
                             .any(|value| matches!(value, ContentValue::Name(_)))
                         {
-                            approximated_graphics = true;
+                            return Err(DocsightError::UnsupportedFeature {
+                                feature: "PDF pattern color spaces".to_owned(),
+                            });
                         }
                         let values = operands
                             .iter()
-                            .filter(|value| matches!(value, ContentValue::Number(_)))
                             .map(|value| number(value, &operator))
                             .collect::<Result<Vec<_>, _>>()?;
-                        if values.is_empty() || values.len() > 4 {
-                            if matches!(operator.as_str(), "scn" | "SCN")
-                                && operands
-                                    .iter()
-                                    .any(|value| matches!(value, ContentValue::Name(_)))
-                            {
-                                approximated_graphics = true;
-                            } else {
-                                return Err(malformed(format!(
-                                    "{operator} requires one to four color components"
-                                )));
-                            }
+                        let color_space = if matches!(operator.as_str(), "sc" | "scn") {
+                            state.fill_color_space
                         } else {
-                            let color = color_components(&values, &operator)?;
-                            if matches!(operator.as_str(), "sc" | "scn") {
-                                state.fill_color = color;
-                            } else {
-                                state.stroke_color = color;
-                            }
-                        }
-                        if operator == "scn" || operator == "SCN" {
-                            approximated_graphics = true;
+                            state.stroke_color_space
+                        };
+                        let color = color_space.color(&values, &operator)?;
+                        if matches!(operator.as_str(), "sc" | "scn") {
+                            state.fill_color = color;
+                        } else {
+                            state.stroke_color = color;
                         }
                     }
                     "m" => {
@@ -379,8 +415,8 @@ pub(crate) fn parse_content(
                         commit_pending_clip(&mut state)?;
                         commands.push(DisplayCommand::Stroke {
                             path: std::mem::take(&mut path),
-                            color: state.stroke_color,
-                            width,
+                            paint: state.stroke_paint(),
+                            style: state.stroke_style(width, state.ctm.stroke_scale()?),
                             clips: state.clips.clone(),
                         });
                     }
@@ -392,7 +428,7 @@ pub(crate) fn parse_content(
                         commit_pending_clip(&mut state)?;
                         commands.push(DisplayCommand::Fill {
                             path: std::mem::take(&mut path),
-                            color: state.fill_color,
+                            paint: state.fill_paint(),
                             even_odd: operator == "f*",
                             clips: state.clips.clone(),
                         });
@@ -413,14 +449,14 @@ pub(crate) fn parse_content(
                         let width = state.ctm.stroke_width(state.line_width)?;
                         commands.push(DisplayCommand::Fill {
                             path,
-                            color: state.fill_color,
+                            paint: state.fill_paint(),
                             even_odd,
                             clips: state.clips.clone(),
                         });
                         commands.push(DisplayCommand::Stroke {
                             path: stroke_path,
-                            color: state.stroke_color,
-                            width,
+                            paint: state.stroke_paint(),
+                            style: state.stroke_style(width, state.ctm.stroke_scale()?),
                             clips: state.clips.clone(),
                         });
                         path = Vec::new();
@@ -526,7 +562,9 @@ pub(crate) fn parse_content(
                             return Err(malformed("text rendering mode must be between 0 and 7"));
                         }
                         if value != 0.0 {
-                            approximated_graphics = true;
+                            return Err(DocsightError::UnsupportedFeature {
+                                feature: format!("PDF text rendering mode {}", value as u8),
+                            });
                         }
                     }
                     "Tj" => {
@@ -636,14 +674,18 @@ pub(crate) fn parse_content(
                                 "{operator} line style must be 0, 1, or 2"
                             )));
                         }
-                        approximated_graphics = true;
+                        if operator == "J" {
+                            state.line_cap = line_cap(value)?;
+                        } else {
+                            state.line_join = line_join(value)?;
+                        }
                     }
                     "M" => {
                         let value = numbers(&operands, 1, &operator)?[0];
-                        if value < 0.0 {
-                            return Err(malformed("miter limit must be non-negative"));
+                        if value < 1.0 {
+                            return Err(malformed("miter limit must be at least one"));
                         }
-                        approximated_graphics = true;
+                        state.miter_limit = value;
                     }
                     "d" => {
                         if operands.len() != 2 {
@@ -653,32 +695,36 @@ pub(crate) fn parse_content(
                             ContentValue::Array(values) => values,
                             _ => return Err(malformed("d requires an array dash pattern")),
                         };
-                        if dash.iter().any(|value| {
-                            number(value, &operator)
-                                .map(|value| value < 0.0)
-                                .unwrap_or(true)
-                        }) {
-                            return Err(malformed("d dash array requires numeric values"));
+                        if dash.len() > MAX_DASH_ENTRIES {
+                            return Err(DocsightError::ResourceLimit {
+                                resource: "PDF dash entries".to_owned(),
+                                limit: MAX_DASH_ENTRIES as u64,
+                            });
                         }
+                        let dash = dash
+                            .iter()
+                            .map(|value| number(value, &operator))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        validate_dash_pattern(&dash)?;
                         let phase = number(&operands[1], &operator)?;
                         if phase < 0.0 {
                             return Err(malformed("d dash phase must be non-negative"));
                         }
-                        approximated_graphics = true;
+                        state.dash = dash;
+                        state.dash_phase = phase;
                     }
                     "ri" | "i" => {
                         if operator == "ri" {
                             if operands.len() != 1 {
                                 return Err(malformed("ri requires one intent name"));
                             }
-                            name(&operands[0], &operator)?;
+                            validate_rendering_intent(name(&operands[0], &operator)?)?;
                         } else {
                             let value = numbers(&operands, 1, &operator)?[0];
-                            if value < 0.0 {
-                                return Err(malformed("flatness must be non-negative"));
+                            if !(0.0..=100.0).contains(&value) {
+                                return Err(malformed("flatness must be between zero and 100"));
                             }
                         }
-                        approximated_graphics = true;
                     }
                     "Do" => {
                         if operands.len() != 1 {
@@ -694,22 +740,27 @@ pub(crate) fn parse_content(
                             resource_name,
                             clips: state.clips.clone(),
                         });
-                        approximated_graphics = true;
                         omitted_xobjects = true;
                     }
                     "gs" => {
                         if operands.len() != 1 {
                             return Err(malformed("gs requires one graphics state name"));
                         }
-                        name(&operands[0], &operator)?;
-                        approximated_graphics = true;
+                        let resource_name = name(&operands[0], &operator)?;
+                        let ext_state =
+                            ext_graphics_states.get(resource_name).ok_or_else(|| {
+                                malformed("gs references an unknown ExtGState resource")
+                            })?;
+                        state.apply_ext_graphics_state(ext_state)?;
                     }
                     "sh" => {
                         if operands.len() != 1 {
                             return Err(malformed("sh requires one shading name"));
                         }
-                        name(&operands[0], &operator)?;
-                        approximated_graphics = true;
+                        let resource_name = name(&operands[0], &operator)?;
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: format!("PDF shading resource {resource_name}"),
+                        });
                     }
                     "W" | "W*" => {
                         require_empty(&operands, &operator)?;
@@ -753,7 +804,6 @@ pub(crate) fn parse_content(
         commands,
         text_runs,
         approximated_font,
-        approximated_graphics,
         omitted_xobjects,
     })
 }
@@ -830,7 +880,8 @@ fn append_text(
         page_height - min_y,
     )
     .map_err(|_| malformed("text operator produced invalid geometry"))?;
-    let argb = 0xff00_0000
+    let alpha = (state.fill_alpha * 255.0).round() as u32;
+    let argb = alpha << 24
         | u32::from(state.fill_color.red) << 16
         | u32::from(state.fill_color.green) << 8
         | u32::from(state.fill_color.blue);
@@ -981,14 +1032,71 @@ fn cmyk(cyan: f32, magenta: f32, yellow: f32, black: f32) -> Result<Color, Docsi
     })
 }
 
-fn color_components(values: &[f32], operator: &str) -> Result<Color, DocsightError> {
-    match values {
-        [gray] => rgb(*gray, *gray, *gray),
-        [red, green, blue] => rgb(*red, *green, *blue),
-        [cyan, magenta, yellow, black] => cmyk(*cyan, *magenta, *yellow, *black),
-        _ => Err(malformed(format!(
-            "{operator} has an unsupported component count"
-        ))),
+#[derive(Clone, Copy)]
+enum ColorSpace {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+impl ColorSpace {
+    fn parse(name: &str) -> Result<Self, DocsightError> {
+        match name {
+            "DeviceGray" | "G" => Ok(Self::Gray),
+            "DeviceRGB" | "RGB" => Ok(Self::Rgb),
+            "DeviceCMYK" | "CMYK" => Ok(Self::Cmyk),
+            _ => Err(DocsightError::UnsupportedFeature {
+                feature: format!("PDF color space {name}"),
+            }),
+        }
+    }
+
+    fn color(self, values: &[f32], operator: &str) -> Result<Color, DocsightError> {
+        match (self, values) {
+            (Self::Gray, [gray]) => rgb(*gray, *gray, *gray),
+            (Self::Rgb, [red, green, blue]) => rgb(*red, *green, *blue),
+            (Self::Cmyk, [cyan, magenta, yellow, black]) => cmyk(*cyan, *magenta, *yellow, *black),
+            _ => Err(malformed(format!(
+                "{operator} component count does not match the active color space"
+            ))),
+        }
+    }
+}
+
+fn line_cap(value: f32) -> Result<LineCap, DocsightError> {
+    match value as u8 {
+        0 => Ok(LineCap::Butt),
+        1 => Ok(LineCap::Round),
+        2 => Ok(LineCap::Square),
+        _ => Err(malformed("line cap must be 0, 1, or 2")),
+    }
+}
+
+fn line_join(value: f32) -> Result<LineJoin, DocsightError> {
+    match value as u8 {
+        0 => Ok(LineJoin::Miter),
+        1 => Ok(LineJoin::Round),
+        2 => Ok(LineJoin::Bevel),
+        _ => Err(malformed("line join must be 0, 1, or 2")),
+    }
+}
+
+fn validate_dash_pattern(dash: &[f32]) -> Result<(), DocsightError> {
+    if dash.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        return Err(malformed(
+            "dash array values must be finite and non-negative",
+        ));
+    }
+    if !dash.is_empty() && dash.iter().all(|value| *value == 0.0) {
+        return Err(malformed("dash array cannot contain only zero lengths"));
+    }
+    Ok(())
+}
+
+fn validate_rendering_intent(intent: &str) -> Result<(), DocsightError> {
+    match intent {
+        "AbsoluteColorimetric" | "RelativeColorimetric" | "Saturation" | "Perceptual" => Ok(()),
+        _ => Err(malformed("ri references an invalid rendering intent")),
     }
 }
 
@@ -1109,7 +1217,16 @@ struct GraphicsState {
     ctm: Matrix,
     fill_color: Color,
     stroke_color: Color,
+    fill_color_space: ColorSpace,
+    stroke_color_space: ColorSpace,
+    fill_alpha: f32,
+    stroke_alpha: f32,
     line_width: f32,
+    line_cap: LineCap,
+    line_join: LineJoin,
+    miter_limit: f32,
+    dash: Vec<f32>,
+    dash_phase: f32,
     text: TextState,
     clips: Vec<ClipRegion>,
     pending_clip: Option<ClipRegion>,
@@ -1129,11 +1246,73 @@ impl Default for GraphicsState {
                 green: 0,
                 blue: 0,
             },
+            fill_color_space: ColorSpace::Gray,
+            stroke_color_space: ColorSpace::Gray,
+            fill_alpha: 1.0,
+            stroke_alpha: 1.0,
             line_width: 1.0,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            miter_limit: 10.0,
+            dash: Vec::new(),
+            dash_phase: 0.0,
             text: TextState::default(),
             clips: Vec::new(),
             pending_clip: None,
         }
+    }
+}
+
+impl GraphicsState {
+    fn fill_paint(&self) -> Paint {
+        Paint {
+            color: self.fill_color,
+            alpha: self.fill_alpha,
+        }
+    }
+
+    fn stroke_paint(&self) -> Paint {
+        Paint {
+            color: self.stroke_color,
+            alpha: self.stroke_alpha,
+        }
+    }
+
+    fn stroke_style(&self, width: f32, scale: f32) -> StrokeStyle {
+        StrokeStyle {
+            width,
+            cap: self.line_cap,
+            join: self.line_join,
+            miter_limit: self.miter_limit,
+            dash: self.dash.iter().map(|value| value * scale).collect(),
+            dash_phase: self.dash_phase * scale,
+        }
+    }
+
+    fn apply_ext_graphics_state(&mut self, state: &ExtGraphicsState) -> Result<(), DocsightError> {
+        if let Some(alpha) = state.fill_alpha {
+            self.fill_alpha = alpha;
+        }
+        if let Some(alpha) = state.stroke_alpha {
+            self.stroke_alpha = alpha;
+        }
+        if let Some(width) = state.line_width {
+            self.line_width = width;
+        }
+        if let Some(cap) = state.line_cap {
+            self.line_cap = cap;
+        }
+        if let Some(join) = state.line_join {
+            self.line_join = join;
+        }
+        if let Some(limit) = state.miter_limit {
+            self.miter_limit = limit;
+        }
+        if let Some((dash, phase)) = &state.dash {
+            self.dash.clone_from(dash);
+            self.dash_phase = *phase;
+        }
+        Ok(())
     }
 }
 
@@ -1233,20 +1412,7 @@ fn flatten_clip_path(path: &[PathSegment]) -> Result<Vec<Vec<Point>>, DocsightEr
             PathSegment::Cubic(first, second, end) => {
                 let start =
                     cursor.ok_or_else(|| malformed("clipping curve has no starting point"))?;
-                for step in 1..=24 {
-                    let t = step as f32 / 24.0;
-                    let inverse = 1.0 - t;
-                    current.push(Point {
-                        x: inverse.powi(3) * start.x
-                            + 3.0 * inverse.powi(2) * t * first.x
-                            + 3.0 * inverse * t.powi(2) * second.x
-                            + t.powi(3) * end.x,
-                        y: inverse.powi(3) * start.y
-                            + 3.0 * inverse.powi(2) * t * first.y
-                            + 3.0 * inverse * t.powi(2) * second.y
-                            + t.powi(3) * end.y,
-                    });
-                }
+                flatten_clip_cubic(start, *first, *second, *end, 0, &mut current)?;
                 cursor = Some(*end);
             }
             PathSegment::Close => {
@@ -1259,6 +1425,56 @@ fn flatten_clip_path(path: &[PathSegment]) -> Result<Vec<Vec<Point>>, DocsightEr
         result.push(current);
     }
     Ok(result)
+}
+
+fn flatten_clip_cubic(
+    start: Point,
+    first: Point,
+    second: Point,
+    end: Point,
+    depth: u8,
+    output: &mut Vec<Point>,
+) -> Result<(), DocsightError> {
+    if output.len() >= MAX_PATH_SEGMENTS {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF clipping path segments".to_owned(),
+            limit: MAX_PATH_SEGMENTS as u64,
+        });
+    }
+    if depth >= 12 || clip_cubic_flatness(start, first, second, end) <= 0.01 {
+        output.push(end);
+        return Ok(());
+    }
+    let start_first = point_midpoint(start, first);
+    let first_second = point_midpoint(first, second);
+    let second_end = point_midpoint(second, end);
+    let left_second = point_midpoint(start_first, first_second);
+    let right_first = point_midpoint(first_second, second_end);
+    let middle = point_midpoint(left_second, right_first);
+    flatten_clip_cubic(start, start_first, left_second, middle, depth + 1, output)?;
+    flatten_clip_cubic(middle, right_first, second_end, end, depth + 1, output)
+}
+
+fn clip_cubic_flatness(start: Point, first: Point, second: Point, end: Point) -> f32 {
+    clip_point_line_distance(first, start, end).max(clip_point_line_distance(second, start, end))
+}
+
+fn clip_point_line_distance(point: Point, start: Point, end: Point) -> f32 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length <= f32::EPSILON {
+        ((point.x - start.x).powi(2) + (point.y - start.y).powi(2)).sqrt()
+    } else {
+        (dx * (point.y - start.y) - dy * (point.x - start.x)).abs() / length
+    }
+}
+
+fn point_midpoint(first: Point, second: Point) -> Point {
+    Point {
+        x: (first.x + second.x) / 2.0,
+        y: (first.y + second.y) / 2.0,
+    }
 }
 
 fn close_polygon(polygon: &mut Vec<Point>) {
@@ -1311,6 +1527,14 @@ impl Matrix {
     }
 
     fn stroke_width(self, width: f32) -> Result<f32, DocsightError> {
+        let transformed = width * self.stroke_scale()?;
+        if !transformed.is_finite() || transformed < 0.0 {
+            return Err(malformed("stroke transform produced an invalid width"));
+        }
+        Ok(transformed)
+    }
+
+    fn stroke_scale(self) -> Result<f32, DocsightError> {
         let horizontal = (self.a * self.a + self.b * self.b).sqrt();
         let vertical = (self.c * self.c + self.d * self.d).sqrt();
         if !horizontal.is_finite() || !vertical.is_finite() {
@@ -1321,11 +1545,7 @@ impl Matrix {
                 feature: "non-uniformly transformed PDF strokes".to_owned(),
             });
         }
-        let transformed = width * horizontal;
-        if !transformed.is_finite() || transformed < 0.0 {
-            return Err(malformed("stroke transform produced an invalid width"));
-        }
-        Ok(transformed)
+        Ok(horizontal)
     }
 }
 
@@ -1812,6 +2032,177 @@ pub(crate) fn fonts_from_resources(
         );
     }
     Ok(fonts)
+}
+
+pub(crate) fn ext_graphics_states_from_resources(
+    resources: &BTreeMap<String, Value>,
+    resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
+) -> Result<BTreeMap<String, ExtGraphicsState>, DocsightError> {
+    let Some(resource_value) = resources.get("ExtGState") else {
+        return Ok(BTreeMap::new());
+    };
+    let resource_dict = match resolve(resource_value)? {
+        Value::Dict(dict) => dict,
+        _ => return Err(malformed("ExtGState resource must resolve to a dictionary")),
+    };
+    let mut result = BTreeMap::new();
+    for (name, value) in resource_dict {
+        let dict = match resolve(&value)? {
+            Value::Dict(dict) => dict,
+            _ => return Err(malformed("ExtGState entry must resolve to a dictionary")),
+        };
+        let mut state = ExtGraphicsState::default();
+        for (key, value) in dict {
+            match key.as_str() {
+                "Type" => match resolve(&value)? {
+                    Value::Name(value) if value == "ExtGState" => {}
+                    _ => return Err(malformed("ExtGState Type must be ExtGState")),
+                },
+                "ca" => state.fill_alpha = Some(ext_alpha(&resolve(&value)?)?),
+                "CA" => state.stroke_alpha = Some(ext_alpha(&resolve(&value)?)?),
+                "LW" => {
+                    let width = ext_number(&resolve(&value)?)?;
+                    if width < 0.0 {
+                        return Err(malformed("ExtGState LW must be non-negative"));
+                    }
+                    state.line_width = Some(width);
+                }
+                "LC" => {
+                    let value = ext_integer(&resolve(&value)?)?;
+                    state.line_cap = Some(line_cap(value as f32)?);
+                }
+                "LJ" => {
+                    let value = ext_integer(&resolve(&value)?)?;
+                    state.line_join = Some(line_join(value as f32)?);
+                }
+                "ML" => {
+                    let limit = ext_number(&resolve(&value)?)?;
+                    if limit < 1.0 {
+                        return Err(malformed("ExtGState ML must be at least one"));
+                    }
+                    state.miter_limit = Some(limit);
+                }
+                "D" => state.dash = Some(ext_dash(&resolve(&value)?, &resolve)?),
+                "RI" => match resolve(&value)? {
+                    Value::Name(intent) => validate_rendering_intent(&intent)?,
+                    _ => return Err(malformed("ExtGState RI must be a name")),
+                },
+                "FL" => {
+                    let flatness = ext_number(&resolve(&value)?)?;
+                    if !(0.0..=100.0).contains(&flatness) {
+                        return Err(malformed("ExtGState FL must be between zero and 100"));
+                    }
+                }
+                "BM" => validate_normal_blend_mode(&resolve(&value)?)?,
+                "SMask" => match resolve(&value)? {
+                    Value::Name(value) if value == "None" => {}
+                    _ => {
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: "PDF soft masks".to_owned(),
+                        });
+                    }
+                },
+                "AIS" => match resolve(&value)? {
+                    Value::Bool(false) => {}
+                    Value::Bool(true) => {
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: "PDF alpha-is-shape transparency".to_owned(),
+                        });
+                    }
+                    _ => return Err(malformed("ExtGState AIS must be boolean")),
+                },
+                "OP" | "op" => match resolve(&value)? {
+                    Value::Bool(false) => {}
+                    Value::Bool(true) => {
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: "PDF overprint rendering".to_owned(),
+                        });
+                    }
+                    _ => return Err(malformed("ExtGState overprint value must be boolean")),
+                },
+                "OPM" => match ext_integer(&resolve(&value)?)? {
+                    0 | 1 => {}
+                    _ => return Err(malformed("ExtGState OPM must be zero or one")),
+                },
+                _ => {
+                    return Err(DocsightError::UnsupportedFeature {
+                        feature: format!("PDF ExtGState entry {key}"),
+                    });
+                }
+            }
+        }
+        result.insert(name, state);
+    }
+    Ok(result)
+}
+
+fn ext_number(value: &Value) -> Result<f32, DocsightError> {
+    match value {
+        Value::Int(value) => Ok(*value as f32),
+        Value::Real(value) if value.is_finite() => Ok(*value),
+        _ => Err(malformed("ExtGState value must be numeric")),
+    }
+}
+
+fn ext_integer(value: &Value) -> Result<i64, DocsightError> {
+    match value {
+        Value::Int(value) => Ok(*value),
+        _ => Err(malformed("ExtGState value must be an integer")),
+    }
+}
+
+fn ext_alpha(value: &Value) -> Result<f32, DocsightError> {
+    let alpha = ext_number(value)?;
+    if !(0.0..=1.0).contains(&alpha) {
+        return Err(malformed("ExtGState alpha must be between zero and one"));
+    }
+    Ok(alpha)
+}
+
+fn ext_dash(
+    value: &Value,
+    resolve: &impl Fn(&Value) -> Result<Value, DocsightError>,
+) -> Result<(Vec<f32>, f32), DocsightError> {
+    let Value::Array(values) = value else {
+        return Err(malformed("ExtGState D must be an array"));
+    };
+    if values.len() != 2 {
+        return Err(malformed("ExtGState D must contain a dash array and phase"));
+    }
+    let dash_values = match resolve(&values[0])? {
+        Value::Array(values) => values,
+        _ => return Err(malformed("ExtGState D pattern must be an array")),
+    };
+    if dash_values.len() > MAX_DASH_ENTRIES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF dash entries".to_owned(),
+            limit: MAX_DASH_ENTRIES as u64,
+        });
+    }
+    let dash = dash_values
+        .iter()
+        .map(|value| resolve(value).and_then(|value| ext_number(&value)))
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_dash_pattern(&dash)?;
+    let phase = ext_number(&resolve(&values[1])?)?;
+    if phase < 0.0 {
+        return Err(malformed("ExtGState D phase must be non-negative"));
+    }
+    Ok((dash, phase))
+}
+
+fn validate_normal_blend_mode(value: &Value) -> Result<(), DocsightError> {
+    match value {
+        Value::Name(value) if value == "Normal" || value == "Compatible" => Ok(()),
+        Value::Array(values)
+            if values.iter().all(
+                |value| matches!(value, Value::Name(name) if name == "Normal" || name == "Compatible"),
+            ) => Ok(()),
+        Value::Name(value) => Err(DocsightError::UnsupportedFeature {
+            feature: format!("PDF blend mode {value}"),
+        }),
+        _ => Err(malformed("ExtGState BM must be a name or name array")),
+    }
 }
 
 impl CidWidths {
