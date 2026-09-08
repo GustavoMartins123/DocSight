@@ -17,6 +17,7 @@ docsight-layout = { path = "../docsight-layout" }
 docsight-ooxml = { path = "../docsight-ooxml" }
 docsight-pdf = { path = "../docsight-pdf" }
 docsight-render = { path = "../docsight-render" }
+docsight-search = { path = "../docsight-search" }
 docsight-tables = { path = "../docsight-tables" }
 docsight-diff = { path = "../docsight-diff" }
 docsight-worker = { path = "../docsight-worker" }

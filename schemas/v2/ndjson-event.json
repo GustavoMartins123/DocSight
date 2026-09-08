@@ -37,7 +37,14 @@
         "evidence",
         "coverage.global",
         "coverage.page",
-        "hit"
+        "hit",
+        "query.summary",
+        "query.match",
+        "overview.summary",
+        "overview.landmark",
+        "focus.summary",
+        "focus.object",
+        "focus.visual_reference"
       ]
     }
   }

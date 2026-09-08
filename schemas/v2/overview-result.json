@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/overview-result.json",
+  "title": "OverviewResult",
+  "type": "object",
+  "required": ["format", "page_count", "counts", "total_landmarks", "landmarks"],
+  "properties": {
+    "format": { "type": "string", "enum": ["docx", "pdf"] },
+    "page_count": { "type": "integer", "minimum": 0 },
+    "counts": {
+      "type": "object",
+      "required": ["blocks", "headings", "tables", "figures"],
+      "properties": {
+        "blocks": { "type": "integer", "minimum": 0 },
+        "headings": { "type": "integer", "minimum": 0 },
+        "tables": { "type": "integer", "minimum": 0 },
+        "figures": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "total_landmarks": { "type": "integer", "minimum": 0 },
+    "landmarks": {
+      "type": "array",
+      "items": { "$ref": "semantic-object.json" }
+    }
+  },
+  "additionalProperties": false
+}

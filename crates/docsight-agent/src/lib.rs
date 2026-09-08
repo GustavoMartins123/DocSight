@@ -261,7 +261,7 @@ pub fn truncate_json_text_fields(val: &mut serde_json::Value, max_len: usize) ->
 fn is_text_field(field: &str) -> bool {
     matches!(
         field,
-        "text" | "text_fragment" | "alt_text" | "caption" | "label" | "details"
+        "text" | "text_fragment" | "text_snippet" | "alt_text" | "caption" | "label" | "details"
     )
 }
 

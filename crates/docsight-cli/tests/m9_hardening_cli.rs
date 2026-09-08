@@ -486,6 +486,14 @@ fn sandbox_runs_every_subcommand_through_isolation() -> Result<(), Box<dyn std::
         vec!["tables", doc_str],
         vec!["outline", doc_str, "--json"],
         vec!["text", doc_str, "--json"],
+        vec!["query", doc_str, "heading[level<=2]", "--json"],
+        vec!["overview", doc_str, "--json"],
+        vec![
+            "focus",
+            doc_str,
+            "h_515ad605791c12fc496c1c18d79f6526",
+            "--json",
+        ],
     ] {
         let output = docsight()
             .args({

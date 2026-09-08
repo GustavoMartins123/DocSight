@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/spatial-query-result.json",
+  "title": "SpatialQueryResult",
+  "type": "object",
+  "required": [
+    "query",
+    "total_matches",
+    "geometry_unavailable_objects",
+    "matches"
+  ],
+  "properties": {
+    "query": { "type": "string" },
+    "total_matches": { "type": "integer", "minimum": 0 },
+    "geometry_unavailable_objects": { "type": "integer", "minimum": 0 },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["object"],
+        "properties": {
+          "object": { "$ref": "semantic-object.json" },
+          "relation": {
+            "type": "object",
+            "required": ["kind", "anchor", "distance_pt", "matching_anchor_count"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["above", "below", "inside", "overlaps", "nearest", "distance_to"]
+              },
+              "anchor": {
+                "type": "string",
+                "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+              },
+              "distance_pt": { "type": "number", "minimum": 0 },
+              "matching_anchor_count": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -13,6 +13,10 @@ use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{HitQuery, RenderRequest, RenderTarget, render_document};
+use docsight_search::{
+    PageRange, SemanticViewport, SpatialQueryResult, execute_spatial_query, focus_object,
+    focus_pages, overview as document_overview,
+};
 use serde::Serialize;
 use sha2::Digest;
 use std::io::{self, Write};
@@ -222,6 +226,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Query {
+        path: PathBuf,
+        expression: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Overview {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Focus {
+        path: PathBuf,
+        target: Option<String>,
+        #[arg(long, value_parser = parse_page_range)]
+        pages: Option<PageRange>,
+        #[arg(long)]
+        related: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -403,6 +428,28 @@ struct CapabilitiesEnvelope {
     schema: &'static str,
     engine: &'static str,
     result: AgentCapabilitiesResult,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct QueryNdjsonSummary {
+    query: String,
+    total_matches: usize,
+    geometry_unavailable_objects: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct OverviewNdjsonSummary {
+    format: DocumentFormat,
+    page_count: usize,
+    counts: docsight_search::OverviewCounts,
+    total_landmarks: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct FocusNdjsonSummary {
+    target: docsight_search::ViewportTarget,
+    scope_pages: Vec<u32>,
+    total_objects: usize,
 }
 
 fn main() -> ExitCode {
@@ -702,6 +749,44 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
+        Command::Query {
+            path,
+            expression,
+            json,
+        } => query(QueryArgs {
+            path,
+            expression,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Overview { path, json } => overview(OverviewArgs {
+            path,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Focus {
+            path,
+            target,
+            pages,
+            related,
+            json,
+        } => focus(FocusArgs {
+            path,
+            target: target.as_deref(),
+            pages: *pages,
+            related: *related,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
     }
 }
 
@@ -730,6 +815,16 @@ const AGENT_LIMITS: &[&str] = &[
     "--continue",
     "--select",
 ];
+const DEFAULT_QUERY_ITEMS: usize = 100;
+const DEFAULT_VIEWPORT_ITEMS: usize = 64;
+
+fn bounded_machine_limits(limits: &QueryLimits, default_max_items: usize) -> QueryLimits {
+    let mut effective = limits.clone();
+    if effective.max_items.is_none() {
+        effective.max_items = Some(default_max_items);
+    }
+    effective
+}
 
 fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
     let result = AgentCapabilitiesResult {
@@ -850,6 +945,27 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             CommandCapability {
                 name: "hit",
                 summary: "resolve a point or region to document objects",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "query",
+                summary: "run constrained structural and spatial DQL selectors in page points",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "overview",
+                summary: "return bounded headings, tables and figures for document navigation",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "focus",
+                summary: "return a bounded semantic neighborhood around an object or page range",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
                 bounded: true,
@@ -2097,6 +2213,382 @@ fn parse_bbox(raw: &str) -> Result<Rect, String> {
         ));
     }
     Rect::new(values[0], values[1], values[2], values[3]).map_err(|error| error.to_string())
+}
+
+fn parse_page_range(raw: &str) -> Result<PageRange, String> {
+    let (start, end) = match raw.split_once("..") {
+        Some((start, end)) => (start, end),
+        None => (raw, raw),
+    };
+    let start = start
+        .parse::<u32>()
+        .map_err(|_| "page range start must be a positive integer".to_owned())?;
+    let end = end
+        .parse::<u32>()
+        .map_err(|_| "page range end must be a positive integer".to_owned())?;
+    PageRange::new(start, end).map_err(|error| error.to_string())
+}
+
+fn continuation_scope(command: &str, parameter: &str) -> String {
+    let digest = digest_bytes(parameter.as_bytes());
+    format!("{command}_{}", &digest[..16])
+}
+
+struct QueryArgs<'a> {
+    path: &'a Path,
+    expression: &'a str,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let execution = execute_spatial_query(&document, args.expression)?;
+    let mut warnings = document.warnings;
+    warnings.extend(execution.warnings);
+    let result = execution.result;
+    let scope = continuation_scope("query", args.expression);
+    let limits = bounded_machine_limits(args.limits, DEFAULT_QUERY_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            scope,
+            source.sha256().to_owned(),
+            1 + result.matches.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(QueryNdjsonSummary {
+            query: result.query.clone(),
+            total_matches: result.total_matches,
+            geometry_unavailable_objects: result.geometry_unavailable_objects,
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("query.summary", &summary)? {
+            for warning in &warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        {
+            for (index, item) in result.matches.iter().enumerate() {
+                if index + 1 < offset {
+                    continue;
+                }
+                let item = serde_json::to_value(item).map_err(output_serialization_error)?;
+                if !writer.write_item("query.match", &item)? {
+                    break;
+                }
+            }
+        }
+        for warning in &warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let total_matches = result.total_matches;
+        let geometry_unavailable_objects = result.geometry_unavailable_objects;
+        let query = result.query.clone();
+        let envelope = apply_bounded_collection(
+            &result.matches,
+            &limits,
+            &scope,
+            &source,
+            warnings,
+            |matches| {
+                serde_json::to_value(SpatialQueryResult {
+                    query: query.clone(),
+                    total_matches,
+                    geometry_unavailable_objects,
+                    matches,
+                })
+                .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Query: {}", result.query).map_err(stdout_error)?;
+    writeln!(writer, "Matches: {}", result.total_matches).map_err(stdout_error)?;
+    for item in &result.matches {
+        let page = item
+            .object
+            .page
+            .map(|page| page.to_string())
+            .unwrap_or_else(|| "unplaced".to_owned());
+        let relation = item
+            .relation
+            .as_ref()
+            .map(|relation| {
+                format!(
+                    " {:?} {} ({:.3} pt)",
+                    relation.kind, relation.anchor, relation.distance_pt
+                )
+            })
+            .unwrap_or_default();
+        writeln!(
+            writer,
+            "[{}] {:?} page {}{}",
+            item.object.id, item.object.kind, page, relation
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&warnings, args.quiet, args.json_errors)
+}
+
+struct OverviewArgs<'a> {
+    path: &'a Path,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let result = document_overview(&document)?;
+    let limits = bounded_machine_limits(args.limits, DEFAULT_VIEWPORT_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            "overview".to_owned(),
+            source.sha256().to_owned(),
+            1 + result.landmarks.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(OverviewNdjsonSummary {
+            format: result.format,
+            page_count: result.page_count,
+            counts: result.counts.clone(),
+            total_landmarks: result.total_landmarks,
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("overview.summary", &summary)? {
+            for warning in &document.warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        {
+            for (index, landmark) in result.landmarks.iter().enumerate() {
+                if index + 1 < offset {
+                    continue;
+                }
+                let item = serde_json::to_value(landmark).map_err(output_serialization_error)?;
+                if !writer.write_item("overview.landmark", &item)? {
+                    break;
+                }
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let format = result.format;
+        let page_count = result.page_count;
+        let counts = result.counts.clone();
+        let total_landmarks = result.total_landmarks;
+        let envelope = apply_bounded_collection(
+            &result.landmarks,
+            &limits,
+            "overview",
+            &source,
+            document.warnings,
+            |landmarks| {
+                serde_json::to_value(docsight_search::OverviewResult {
+                    format,
+                    page_count,
+                    counts: counts.clone(),
+                    total_landmarks,
+                    landmarks,
+                })
+                .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "{} pages", result.page_count).map_err(stdout_error)?;
+    writeln!(writer, "{} landmarks", result.total_landmarks).map_err(stdout_error)?;
+    for landmark in &result.landmarks {
+        let page = landmark
+            .page
+            .map(|page| page.to_string())
+            .unwrap_or_else(|| "unplaced".to_owned());
+        writeln!(
+            writer,
+            "[{}] {:?} page {}",
+            landmark.id, landmark.kind, page
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, args.quiet, args.json_errors)
+}
+
+struct FocusArgs<'a> {
+    path: &'a Path,
+    target: Option<&'a str>,
+    pages: Option<PageRange>,
+    related: bool,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let (result, scope) = match (args.target, args.pages) {
+        (Some(target), None) => (
+            focus_object(&document, target, args.related)?,
+            continuation_scope("focus", target),
+        ),
+        (None, Some(pages)) if !args.related => (
+            focus_pages(&document, pages)?,
+            continuation_scope("focus", &format!("{}..{}", pages.start, pages.end)),
+        ),
+        (None, Some(_)) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "--related requires an object target, not --pages".to_owned(),
+            });
+        }
+        (Some(_), Some(_)) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "focus accepts either an object target or --pages, not both".to_owned(),
+            });
+        }
+        (None, None) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "focus requires an object target or --pages <start..end>".to_owned(),
+            });
+        }
+    };
+    let limits = bounded_machine_limits(args.limits, DEFAULT_VIEWPORT_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            scope,
+            source.sha256().to_owned(),
+            1 + result.objects.len() + result.visual_references.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(FocusNdjsonSummary {
+            target: result.target.clone(),
+            scope_pages: result.scope_pages.clone(),
+            total_objects: result.total_objects,
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("focus.summary", &summary)? {
+            for warning in &document.warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        {
+            for (index, item) in result.objects.iter().enumerate() {
+                if index + 1 < offset {
+                    continue;
+                }
+                let item = serde_json::to_value(item).map_err(output_serialization_error)?;
+                if !writer.write_item("focus.object", &item)? {
+                    break;
+                }
+            }
+            let visual_start = 1 + result.objects.len();
+            for (index, item) in result.visual_references.iter().enumerate() {
+                if visual_start + index < offset {
+                    continue;
+                }
+                let item = serde_json::to_value(item).map_err(output_serialization_error)?;
+                if !writer.write_item("focus.visual_reference", &item)? {
+                    break;
+                }
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let target = result.target.clone();
+        let scope_pages = result.scope_pages.clone();
+        let total_objects = result.total_objects;
+        let visual_references = result.visual_references.clone();
+        let envelope = apply_bounded_collection(
+            &result.objects,
+            &limits,
+            &scope,
+            &source,
+            document.warnings,
+            |objects| {
+                serde_json::to_value(SemanticViewport {
+                    target: target.clone(),
+                    scope_pages: scope_pages.clone(),
+                    total_objects,
+                    objects,
+                    visual_references: visual_references.clone(),
+                })
+                .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Focus: {:?}", result.target).map_err(stdout_error)?;
+    writeln!(writer, "Pages: {:?}", result.scope_pages).map_err(stdout_error)?;
+    for item in &result.objects {
+        let roles = item
+            .relationships
+            .iter()
+            .map(|relationship| format!("{:?}", relationship.role))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            writer,
+            "[{}] {:?}: {}",
+            item.object.id, item.object.kind, roles
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, args.quiet, args.json_errors)
 }
 
 struct DiffCommandArgs<'a> {

@@ -204,6 +204,7 @@ dependencies = [
  "docsight-ooxml",
  "docsight-pdf",
  "docsight-render",
+ "docsight-search",
  "docsight-tables",
  "docsight-worker",
  "serde",
@@ -281,6 +282,15 @@ dependencies = [
  "docsight-pdf",
  "serde",
  "sha2",
+]
+
+[[package]]
+name = "docsight-search"
+version = "0.1.0"
+dependencies = [
+ "docsight-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
