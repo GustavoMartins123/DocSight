@@ -17,8 +17,11 @@ const GLOBAL_GEOMETRY_APPROXIMATION_CODES: &[&str] = &[
     "APPROXIMATED_PDF_FONT",
 ];
 
-const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] =
-    &["DOCX_FONT_SUBSTITUTED", "APPROXIMATED_PDF_FONT"];
+const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
+    "DOCX_FONT_SUBSTITUTED",
+    "APPROXIMATED_PDF_FONT",
+    "INITIAL_PDF_RASTERIZER",
+];
 
 const UNKNOWN_STRUCTURE_PENALTY: f32 = 1.000;
 
@@ -56,10 +59,13 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
                 .is_none_or(|object| block_ids.contains(object))
         })
         .collect();
-    let reasons: BTreeSet<String> = relevant_warnings
+    let mut reasons: BTreeSet<String> = relevant_warnings
         .iter()
         .map(|warning| warning.code.clone())
         .collect();
+    if doc.format == DocumentFormat::Pdf {
+        reasons.insert("INITIAL_PDF_RASTERIZER".to_owned());
+    }
 
     let text_loss_objects: BTreeSet<&ObjectId> = doc
         .warnings
@@ -532,6 +538,7 @@ fn page_coverage(
         &[
             "DOCX_FONT_SUBSTITUTED",
             "APPROXIMATED_PDF_FONT",
+            "INITIAL_PDF_RASTERIZER",
             "DOCX_FIGURE_RASTER_PLACEHOLDER",
         ],
     );

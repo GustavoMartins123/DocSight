@@ -24,7 +24,14 @@ fn inspect_pdf_json_is_deterministic() -> Result<(), Box<dyn std::error::Error>>
     let value: serde_json::Value = serde_json::from_slice(&first.stdout)?;
     assert_eq!(value["schema"], "docsight.agent/v2");
     assert_eq!(value["result"]["format"], "pdf");
-    assert_eq!(value["result"]["capabilities"]["render"], true);
+    assert_eq!(value["result"]["capabilities"]["render"], false);
+    assert!(
+        value["warnings"]
+            .as_array()
+            .ok_or("warnings missing")?
+            .iter()
+            .any(|warning| warning["code"] == "INITIAL_PDF_RASTERIZER")
+    );
     assert_eq!(value["result"]["pages"], 1);
     assert_eq!(value["result"]["engine"], "docsight-pdf-native");
     Ok(())

@@ -797,13 +797,28 @@ fn inspect_pdf_source(
         }
         Err(error) => return Err(error),
     };
+    let mut warnings = document.warnings.clone();
+    if !warnings
+        .iter()
+        .any(|warning| warning.code == "INITIAL_PDF_RASTERIZER")
+    {
+        warnings.push(Diagnostic {
+            code: "INITIAL_PDF_RASTERIZER".to_owned(),
+            severity: DiagnosticSeverity::Warning,
+            message: "PDF rendering uses DOCSIGHT's initial native rasterizer".to_owned(),
+            effect: "visual output is available with limited antialiasing and glyph fidelity"
+                .to_owned(),
+            object: None,
+            page: None,
+        });
+    }
     let result = InspectResult {
         format: DocumentFormat::Pdf,
         size_bytes: source.size_bytes(),
         capabilities: InspectCapabilities {
             structure: true,
             text: true,
-            render: true,
+            render: false,
         },
         paragraphs: Some(document.paragraphs().count()),
         headings: Some(document.headings().count()),
@@ -814,7 +829,7 @@ fn inspect_pdf_source(
         pages,
         engine: Some(ENGINE_NAME),
     };
-    Ok((result, document.warnings))
+    Ok((result, warnings))
 }
 
 fn outline(

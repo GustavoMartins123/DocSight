@@ -116,6 +116,14 @@ fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::
         (structure - 0.85).abs() < 0.01,
         "structure is the inference confidence"
     );
+    assert_eq!(result["fidelity"]["visual"], 0.0);
+    assert!(
+        result["fidelity"]["reasons"]
+            .as_array()
+            .ok_or("reasons")?
+            .iter()
+            .any(|reason| reason == "INITIAL_PDF_RASTERIZER")
+    );
 
     Ok(())
 }
