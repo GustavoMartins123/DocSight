@@ -126,7 +126,27 @@
         "changed_regions": {
           "type": "array",
           "items": { "$ref": "#/$defs/rect" }
-        }
+        },
+        "artifact": { "$ref": "#/$defs/visual_diff_artifact" }
+      }
+    },
+    "visual_diff_artifact": {
+      "type": "object",
+      "required": [
+        "relative_path",
+        "media_type",
+        "bytes",
+        "sha256",
+        "width_px",
+        "height_px"
+      ],
+      "properties": {
+        "relative_path": { "type": "string", "pattern": "^diff_p[0-9]{4,}\\.png$" },
+        "media_type": { "type": "string", "const": "image/png" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "width_px": { "type": "integer", "minimum": 1 },
+        "height_px": { "type": "integer", "minimum": 1 }
       }
     },
     "visual_diff": {
@@ -135,9 +155,12 @@
         "authoritative",
         "evidence_status",
         "reason_codes",
+        "dpi",
+        "threshold",
         "pages_before",
         "pages_after",
         "layout_changed_pages",
+        "layout_regression_score",
         "largest_drift_pt",
         "largest_drift_page",
         "page_diffs"
@@ -150,9 +173,12 @@
           "uniqueItems": true,
           "items": { "type": "string" }
         },
+        "dpi": { "type": "integer", "minimum": 1 },
+        "threshold": { "type": "integer", "minimum": 0, "maximum": 255 },
         "pages_before": { "type": "integer", "minimum": 0 },
         "pages_after": { "type": "integer", "minimum": 0 },
         "layout_changed_pages": { "type": "integer", "minimum": 0 },
+        "layout_regression_score": { "type": "number", "minimum": 0, "maximum": 1 },
         "largest_drift_pt": { "type": ["number", "null"] },
         "largest_drift_page": { "type": ["integer", "null"], "minimum": 1 },
         "page_diffs": {

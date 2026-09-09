@@ -619,7 +619,7 @@
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "521779683a63da4c1f3fd710f3305af50fddda0b0f8b2fbf4a3ed7d1eeef1b00"
+      "sha256": "9d372583154c0a81687bd217151de7c6256c46de1cc118f2cc6d6d97fdcca748"
     },
     {
       "file": "context-result.json",
@@ -639,7 +639,7 @@
     {
       "file": "diff-result.json",
       "id": "https://docsight.dev/schemas/v2/diff-result.json",
-      "sha256": "21f81a40f9bb04167e500433ae11d114fe09db8433c3e261a5ff50666721e740"
+      "sha256": "6cffed48fbb3cd81d0def8119ef035370604ce047ed2f3c27b573c5c9cbcbc38"
     },
     {
       "file": "error-envelope.json",
@@ -664,7 +664,7 @@
     {
       "file": "ndjson-event.json",
       "id": "https://docsight.dev/schemas/v2/ndjson-event.json",
-      "sha256": "bf6877e63adba3a502c83e6c594ff4ac1c845c5e597fa85732660e759d6abdb5"
+      "sha256": "0aff3708f37e70165739d3c55ca404e0ae6004d3af3fbc64096daccf92081dc6"
     },
     {
       "file": "overview-result.json",

@@ -192,8 +192,20 @@ pub struct PageVisualDiff {
     pub total_pixels: u32,
     pub change_fraction: f32,
     pub changed_regions: Vec<Rect>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<VisualDiffArtifact>,
     #[serde(skip_serializing)]
     pub diff_png: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VisualDiffArtifact {
+    pub relative_path: String,
+    pub media_type: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub width_px: u32,
+    pub height_px: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -209,9 +221,12 @@ pub struct VisualDiff {
     pub authoritative: bool,
     pub evidence_status: VisualDiffEvidenceStatus,
     pub reason_codes: Vec<String>,
+    pub dpi: u16,
+    pub threshold: u8,
     pub pages_before: u32,
     pub pages_after: u32,
     pub layout_changed_pages: u32,
+    pub layout_regression_score: f32,
     pub largest_drift_pt: Option<f32>,
     pub largest_drift_page: Option<u32>,
     pub page_diffs: Vec<PageVisualDiff>,
@@ -1795,6 +1810,8 @@ pub fn diff_visual(
     let (largest_drift_pt, largest_drift_page) = calculate_largest_drift(doc_before, doc_after);
 
     let mut layout_changed_pages = 0_u32;
+    let mut changed_area_pixels = 0_u64;
+    let mut compared_area_pixels = 0_u64;
     let mut page_diffs = Vec::new();
 
     if let Some(dir) = out_dir {
@@ -1885,18 +1902,46 @@ pub fn diff_visual(
         } else {
             0.0
         };
-        let diff_png = if changed_pixels > 0 || out_dir.is_some() {
+        changed_area_pixels = changed_area_pixels
+            .checked_add(u64::from(changed_pixels))
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: "visual diff changed area".to_owned(),
+                limit: u64::MAX,
+            })?;
+        compared_area_pixels = compared_area_pixels
+            .checked_add(u64::from(total_pixels))
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: "visual diff compared area".to_owned(),
+                limit: u64::MAX,
+            })?;
+        let (diff_png, artifact) = if changed_pixels > 0 || out_dir.is_some() {
             let png_bytes = encode_png(width, height, &diff_canvas)?;
-            if let Some(dir) = out_dir {
-                let file_path = dir.join(format!("diff_p{p:04}.png"));
+            let artifact = if let Some(dir) = out_dir {
+                let relative_path = format!("diff_p{p:04}.png");
+                let file_path = dir.join(&relative_path);
                 std::fs::write(&file_path, &png_bytes).map_err(|error| DocsightError::Io {
                     path: file_path,
                     source: error,
                 })?;
-            }
-            Some(png_bytes)
+                Some(VisualDiffArtifact {
+                    relative_path,
+                    media_type: "image/png".to_owned(),
+                    bytes: u64::try_from(png_bytes.len()).map_err(|_| {
+                        DocsightError::ResourceLimit {
+                            resource: "visual diff artifact bytes".to_owned(),
+                            limit: u64::MAX,
+                        }
+                    })?,
+                    sha256: sha256_hex(&png_bytes),
+                    width_px: width,
+                    height_px: height,
+                })
+            } else {
+                None
+            };
+            (Some(png_bytes), artifact)
         } else {
-            None
+            (None, None)
         };
         let page_reason_codes = visual_reason_codes(doc_before, doc_after, Some(p));
         let page_authoritative = page_reason_codes.is_empty();
@@ -1913,21 +1958,38 @@ pub fn diff_visual(
             total_pixels,
             change_fraction,
             changed_regions,
+            artifact,
             diff_png,
         });
     }
+
+    let layout_regression_score = if compared_area_pixels > 0 {
+        (changed_area_pixels as f64 / compared_area_pixels as f64) as f32
+    } else {
+        0.0
+    };
 
     Ok(VisualDiff {
         authoritative,
         evidence_status,
         reason_codes,
+        dpi,
+        threshold,
         pages_before,
         pages_after,
         layout_changed_pages,
+        layout_regression_score,
         largest_drift_pt,
         largest_drift_page,
         page_diffs,
     })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn visual_reason_codes(before: &Document, after: &Document, page: Option<u32>) -> Vec<String> {

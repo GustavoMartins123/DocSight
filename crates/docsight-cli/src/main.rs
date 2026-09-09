@@ -9,7 +9,7 @@ use docsight_core::{
     DocumentSource, ObjectId, Rect, compute_coverage, compute_evidence, table_to_csv,
     table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
-use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, diff_documents};
+use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
@@ -576,9 +576,20 @@ struct LinksResult {
 struct CommandCapability {
     name: &'static str,
     summary: &'static str,
+    invocation: &'static str,
     formats: &'static [&'static str],
     ndjson: bool,
+    ndjson_events: &'static [&'static str],
     bounded: bool,
+    result_schema: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AgentSandboxCapability {
+    flag: &'static str,
+    agent_default: bool,
+    recommended_for_untrusted_input: bool,
+    failure_mode: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -586,6 +597,8 @@ struct AgentCapabilitiesResult {
     profile: &'static str,
     protocol: &'static str,
     error_schema: &'static str,
+    invocation_prefix: &'static str,
+    sandbox: AgentSandboxCapability,
     document_formats: &'static [&'static str],
     output_modes: &'static [&'static str],
     agent_defaults: &'static str,
@@ -1263,6 +1276,13 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
         profile: "agent-first-v1",
         protocol: docsight_agent::AGENT_SCHEMA,
         error_schema: "https://docsight.dev/schemas/v2/error-envelope.json",
+        invocation_prefix: "docsight --agent",
+        sandbox: AgentSandboxCapability {
+            flag: "--sandbox",
+            agent_default: false,
+            recommended_for_untrusted_input: true,
+            failure_mode: "fail_closed",
+        },
         document_formats: ALL_DOCUMENT_FORMATS,
         output_modes: OUTPUT_MODES,
         agent_defaults: "JSON on stdout, no diagnostics on stderr, structured errors on stderr",
@@ -1272,177 +1292,258 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             CommandCapability {
                 name: "capabilities",
                 summary: "discover the machine contract and command surface",
+                invocation: "capabilities",
                 formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
+                ndjson_events: &["capabilities"],
                 bounded: false,
+                result_schema: Some("https://docsight.dev/schemas/v2/capabilities-result.json"),
             },
             CommandCapability {
                 name: "inspect",
                 summary: "summarize format, counts, capabilities and fidelity",
+                invocation: "inspect <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["inspect"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/inspect-result.json"),
             },
             CommandCapability {
                 name: "outline",
                 summary: "return headings in reading order",
+                invocation: "outline <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["heading"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "text",
                 summary: "return text blocks and deterministic continuation",
+                invocation: "text <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["block"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "tables",
                 summary: "list structural or inferred tables with confidence",
+                invocation: "tables <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["table"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "table",
                 summary: "export one table or return its machine record",
+                invocation: "table <path> <object> [--format json|markdown|csv|html|tsv]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["table"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "page",
                 summary: "return page geometry, spans and overlays",
+                invocation: "page <path> <page>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["span", "overlay"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "images",
                 summary: "list figure resources and placements",
+                invocation: "images <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["image"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "links",
                 summary: "list link metadata without fetching targets",
+                invocation: "links <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["link"],
                 bounded: true,
+                result_schema: None,
             },
             CommandCapability {
                 name: "render",
                 summary: "write a PNG artifact with provenance metadata and optional deterministic trace",
+                invocation: "render <path> --page <page> --out <png> [--dpi <dpi>] [--trace <dstrace>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["render"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/render-result.json"),
             },
             CommandCapability {
                 name: "crop",
                 summary: "write a page or object crop with provenance metadata",
+                invocation: "crop <path> (--object <id> | --page <page> --bbox <x0,y0,x1,y1>) --out <png> [--dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["crop"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/render-result.json"),
             },
             CommandCapability {
                 name: "diff",
                 summary: "compare changes with evidence-backed cross-version lineage",
+                invocation: "diff <before> <after> [--visual] [--dpi <dpi>] [--threshold <0..255>] [--out-dir <directory>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &[
+                    "diff.summary",
+                    "diff.visual",
+                    "diff.visual.page",
+                    "diff.lineage",
+                    "diff.semantic",
+                ],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/diff-result.json"),
             },
             CommandCapability {
                 name: "fingerprint",
                 summary: "return reproducibility inputs and result fingerprint",
+                invocation: "fingerprint <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["fingerprint"],
                 bounded: false,
+                result_schema: None,
             },
             CommandCapability {
                 name: "evidence",
                 summary: "return provenance and fidelity for one object",
+                invocation: "evidence <path> <object> [--render-dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["evidence"],
                 bounded: false,
+                result_schema: Some("https://docsight.dev/schemas/v2/evidence-record.json"),
             },
             CommandCapability {
                 name: "bundle",
                 summary: "write a self-contained verifiable proof bundle for an object or region",
+                invocation: "bundle <path> (--object <id> | --page <page> --bbox <x0,y0,x1,y1>) --out <dse> [--include-crop] [--dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["bundle"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/bundle-result.json"),
             },
             CommandCapability {
                 name: "replay",
                 summary: "verify a deterministic trace using its embedded document bytes",
+                invocation: "replay <dstrace> --verify",
                 formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
+                ndjson_events: &["replay"],
                 bounded: false,
+                result_schema: Some("https://docsight.dev/schemas/v2/replay-result.json"),
             },
             CommandCapability {
                 name: "verify",
                 summary: "verify a self-contained proof bundle offline",
+                invocation: "verify <dse>",
                 formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
+                ndjson_events: &["verify"],
                 bounded: false,
+                result_schema: Some("https://docsight.dev/schemas/v2/verify-result.json"),
             },
             CommandCapability {
                 name: "coverage",
                 summary: "return per-dimension fidelity and reason codes",
+                invocation: "coverage <path> [--page <page>] [--regions]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["coverage.global", "coverage.page"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/coverage-report.json"),
             },
             CommandCapability {
                 name: "hit",
                 summary: "resolve a point or region to document objects",
+                invocation: "hit <path> --page <page> (--point <x,y> | --bbox <x0,y0,x1,y1>)",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["hit"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/hit-result.json"),
             },
             CommandCapability {
                 name: "query",
                 summary: "run constrained structural and spatial DQL selectors in page points",
+                invocation: "query <path> <expression>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["query.summary", "query.match"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/spatial-query-result.json"),
             },
             CommandCapability {
                 name: "overview",
                 summary: "return bounded headings, tables and figures for document navigation",
+                invocation: "overview <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["overview.summary", "overview.landmark"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/overview-result.json"),
             },
             CommandCapability {
                 name: "focus",
                 summary: "return a bounded semantic neighborhood around an object or page range",
+                invocation: "focus <path> (<object> | --pages <start..end>) [--related]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["focus.summary", "focus.object", "focus.visual_reference"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/semantic-viewport.json"),
             },
             CommandCapability {
                 name: "peek",
                 summary: "return a compact structural projection for a page, range, object or section",
+                invocation: "peek <path> (--page <page> | --pages <start..end> | --object <id> | --section <index>) [--related]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["peek.summary", "peek.object"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/peek-result.json"),
             },
             CommandCapability {
                 name: "context",
                 summary: "aggregate selected content, neighborhood, geometry, fidelity and provenance",
+                invocation: "context <path> (<object> | --find <text>) [--kind <kind>] [--include <classes>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["context", "context.candidate"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/context-result.json"),
             },
             CommandCapability {
                 name: "resolve",
                 summary: "rank deterministic descriptor matches with explainable component scores",
+                invocation: "resolve <path> --text <text> [--kind <kind>] [--pages <start..end>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
+                ndjson_events: &["resolve.summary", "resolve.candidate"],
                 bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/resolve-result.json"),
             },
         ],
     };
@@ -1463,6 +1564,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             "profile": result.profile,
             "protocol": result.protocol,
             "error_schema": result.error_schema,
+            "invocation_prefix": result.invocation_prefix,
+            "sandbox": result.sandbox,
             "document_formats": result.document_formats,
             "output_modes": result.output_modes,
             "agent_defaults": result.agent_defaults,
@@ -4070,6 +4173,41 @@ struct DiffNdjsonSummary<'a> {
     after_document: &'a DiffDocumentIdentity,
 }
 
+#[derive(Serialize)]
+struct DiffNdjsonVisualSummary<'a> {
+    authoritative: bool,
+    evidence_status: docsight_diff::VisualDiffEvidenceStatus,
+    reason_codes: &'a [String],
+    dpi: u16,
+    threshold: u8,
+    pages_before: u32,
+    pages_after: u32,
+    layout_changed_pages: u32,
+    layout_regression_score: f32,
+    largest_drift_pt: Option<f32>,
+    largest_drift_page: Option<u32>,
+    page_diff_count: usize,
+}
+
+impl<'a> From<&'a VisualDiff> for DiffNdjsonVisualSummary<'a> {
+    fn from(visual: &'a VisualDiff) -> Self {
+        Self {
+            authoritative: visual.authoritative,
+            evidence_status: visual.evidence_status,
+            reason_codes: &visual.reason_codes,
+            dpi: visual.dpi,
+            threshold: visual.threshold,
+            pages_before: visual.pages_before,
+            pages_after: visual.pages_after,
+            layout_changed_pages: visual.layout_changed_pages,
+            layout_regression_score: visual.layout_regression_score,
+            largest_drift_pt: visual.largest_drift_pt,
+            largest_drift_page: visual.largest_drift_page,
+            page_diff_count: visual.page_diffs.len(),
+        }
+    }
+}
+
 fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
     let source_before = DocumentSource::open(args.before)?;
     let source_after = DocumentSource::open(args.after)?;
@@ -4077,17 +4215,39 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
 
     if args.ndjson {
         let stdout = io::stdout();
+        let visual_items = match &diff_result.visual {
+            Some(visual) => visual.page_diffs.len().checked_add(1).ok_or_else(|| {
+                DocsightError::ResourceLimit {
+                    resource: "visual diff NDJSON event count".to_owned(),
+                    limit: u64::MAX,
+                }
+            })?,
+            None => 0,
+        };
         let expected_items = 1_usize
-            .checked_add(diff_result.semantic.lineage.len())
+            .checked_add(visual_items)
+            .and_then(|count| count.checked_add(diff_result.semantic.lineage.len()))
             .and_then(|count| count.checked_add(diff_result.semantic.records.len()))
             .ok_or_else(|| DocsightError::ResourceLimit {
                 resource: "diff NDJSON event count".to_owned(),
                 limit: u64::MAX,
             })?;
+        let scope = continuation_scope(
+            "diff",
+            &format!(
+                "before={};after={};visual={};dpi={};threshold={};artifacts={}",
+                source_before.sha256(),
+                source_after.sha256(),
+                args.options.visual,
+                args.options.dpi,
+                args.options.threshold,
+                args.options.out_dir.is_some()
+            ),
+        );
         let mut writer = NdjsonWriter::new(
             stdout.lock(),
             args.limits.clone(),
-            "diff".into(),
+            scope,
             source_after.sha256().to_owned(),
             expected_items,
         )?;
@@ -4099,6 +4259,17 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
         })
         .map_err(output_serialization_error)?;
         writer.write_item("diff.summary", &summary_val)?;
+        if let Some(visual) = &diff_result.visual {
+            let visual_summary = serde_json::to_value(DiffNdjsonVisualSummary::from(visual))
+                .map_err(output_serialization_error)?;
+            writer.write_item("diff.visual", &visual_summary)?;
+            for page in &visual.page_diffs {
+                let page_value = serde_json::to_value(page).map_err(output_serialization_error)?;
+                if !writer.write_item("diff.visual.page", &page_value)? {
+                    break;
+                }
+            }
+        }
         for record in &diff_result.semantic.lineage {
             let record_val = serde_json::to_value(record).map_err(output_serialization_error)?;
             if !writer.write_item("diff.lineage", &record_val)? {

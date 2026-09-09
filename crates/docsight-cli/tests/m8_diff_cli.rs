@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -182,6 +183,13 @@ fn diff_visual_docx_is_deterministic_and_evidence_limited() -> Result<(), Box<dy
     let visual = &value["result"]["visual"];
     assert_eq!(visual["authoritative"], false);
     assert_eq!(visual["evidence_status"], "evidence_limited");
+    assert_eq!(visual["dpi"], 36);
+    assert_eq!(visual["threshold"], 8);
+    assert!(
+        visual["layout_regression_score"]
+            .as_f64()
+            .is_some_and(|score| score > 0.0 && score <= 1.0)
+    );
     assert!(
         visual["reason_codes"]
             .as_array()
@@ -208,6 +216,22 @@ fn diff_visual_docx_is_deterministic_and_evidence_limited() -> Result<(), Box<dy
         let second_bytes = std::fs::read(second_dir.join(&name))?;
         assert!(!first_bytes.is_empty());
         assert_eq!(first_bytes, second_bytes);
+        let artifact = &pages[page - 1]["artifact"];
+        assert_eq!(artifact["relative_path"], name);
+        assert_eq!(artifact["media_type"], "image/png");
+        assert_eq!(artifact["bytes"], first_bytes.len());
+        assert!(artifact["width_px"].as_u64().is_some_and(|value| value > 0));
+        assert!(
+            artifact["height_px"]
+                .as_u64()
+                .is_some_and(|value| value > 0)
+        );
+        let digest = Sha256::digest(&first_bytes);
+        let expected_sha256 = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(artifact["sha256"], expected_sha256);
     }
 
     Ok(())
@@ -276,6 +300,126 @@ fn diff_ndjson_streaming_events() -> Result<(), Box<dyn std::error::Error>> {
     let last: serde_json::Value = serde_json::from_str(lines[lines.len() - 1])?;
     assert_eq!(last["type"], "done");
 
+    Ok(())
+}
+
+#[test]
+fn diff_visual_ndjson_streams_complete_verifiable_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = fixture("sample_headings.docx");
+    let after = fixture("sample_tables.docx");
+    let directory = tempfile::tempdir()?;
+    let output = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "diff",
+            before.to_str().ok_or("before path")?,
+            after.to_str().ok_or("after path")?,
+            "--visual",
+            "--dpi",
+            "36",
+            "--threshold",
+            "4",
+            "--out-dir",
+            directory.path().to_str().ok_or("output path")?,
+        ])
+        .output()?;
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let records = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    assert_eq!(records[0]["type"], "meta");
+    assert_eq!(records[1]["type"], "diff.summary");
+    assert_eq!(records[2]["type"], "diff.visual");
+    assert_eq!(records[2]["dpi"], 36);
+    assert_eq!(records[2]["threshold"], 4);
+    assert_eq!(records[2]["page_diff_count"], 3);
+    assert_eq!(records[2]["authoritative"], false);
+
+    let visual_pages = records
+        .iter()
+        .filter(|record| record["type"] == "diff.visual.page")
+        .collect::<Vec<_>>();
+    assert_eq!(visual_pages.len(), 3);
+    for (index, record) in visual_pages.iter().enumerate() {
+        let page = index + 1;
+        let relative_path = format!("diff_p{page:04}.png");
+        let bytes = std::fs::read(directory.path().join(&relative_path))?;
+        assert_eq!(record["page"], page);
+        assert_eq!(record["artifact"]["relative_path"], relative_path);
+        assert_eq!(record["artifact"]["bytes"], bytes.len());
+        assert_eq!(
+            record["artifact"]["sha256"].as_str().map(str::len),
+            Some(64)
+        );
+    }
+    assert_eq!(records.last().ok_or("done record")?["type"], "done");
+    Ok(())
+}
+
+#[test]
+fn diff_continuation_is_bound_to_both_documents_and_visual_profile()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = fixture("sample_headings.docx");
+    let alternate_before = fixture("sample_features.docx");
+    let after = fixture("sample_tables.docx");
+    let first = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "--max-items",
+            "2",
+            "diff",
+            before.to_str().ok_or("before path")?,
+            after.to_str().ok_or("after path")?,
+        ])
+        .output()?;
+    assert!(first.status.success());
+    let records = first
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let token = records
+        .last()
+        .and_then(|record| record["limits"]["continuation_token"].as_str())
+        .ok_or("continuation token")?;
+
+    let wrong_before = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "diff",
+            alternate_before.to_str().ok_or("alternate before path")?,
+            after.to_str().ok_or("after path")?,
+            "--continue",
+            token,
+        ])
+        .output()?;
+    assert_eq!(wrong_before.status.code(), Some(2));
+    assert!(wrong_before.stdout.is_empty());
+
+    let wrong_profile = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "diff",
+            before.to_str().ok_or("before path")?,
+            after.to_str().ok_or("after path")?,
+            "--visual",
+            "--continue",
+            token,
+        ])
+        .output()?;
+    assert_eq!(wrong_profile.status.code(), Some(2));
+    assert!(wrong_profile.stdout.is_empty());
     Ok(())
 }
 
@@ -508,6 +652,9 @@ fn diff_schema_declares_cross_version_lineage_contract() -> Result<(), Box<dyn s
         "authoritative",
         "evidence_status",
         "reason_codes",
+        "dpi",
+        "threshold",
+        "layout_regression_score",
         "page_diffs",
     ] {
         assert!(visual_required.iter().any(|value| value == field));
@@ -524,12 +671,11 @@ fn diff_schema_declares_cross_version_lineage_contract() -> Result<(), Box<dyn s
     let ndjson: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         root.join("schemas/v2/ndjson-event.json"),
     )?)?;
-    assert!(
-        ndjson["properties"]["type"]["enum"]
-            .as_array()
-            .ok_or("NDJSON event types")?
-            .iter()
-            .any(|event| event == "diff.lineage")
-    );
+    let ndjson_events = ndjson["properties"]["type"]["enum"]
+        .as_array()
+        .ok_or("NDJSON event types")?;
+    for event in ["diff.visual", "diff.visual.page", "diff.lineage"] {
+        assert!(ndjson_events.iter().any(|value| value == event));
+    }
     Ok(())
 }

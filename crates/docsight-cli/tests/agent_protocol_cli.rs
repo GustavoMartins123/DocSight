@@ -363,11 +363,42 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(value["schema"], "docsight.agent/v2");
     assert_eq!(value["result"]["profile"], "agent-first-v1");
+    assert_eq!(value["result"]["invocation_prefix"], "docsight --agent");
+    assert_eq!(value["result"]["sandbox"]["flag"], "--sandbox");
+    assert_eq!(value["result"]["sandbox"]["agent_default"], false);
+    assert_eq!(
+        value["result"]["sandbox"]["recommended_for_untrusted_input"],
+        true
+    );
+    assert_eq!(value["result"]["sandbox"]["failure_mode"], "fail_closed");
     let commands = value["result"]["commands"]
         .as_array()
         .ok_or("missing commands")?;
     assert!(commands.iter().any(|command| command["name"] == "evidence"));
     assert!(commands.iter().any(|command| command["name"] == "hit"));
+    assert!(commands.iter().all(|command| {
+        command["invocation"]
+            .as_str()
+            .is_some_and(|invocation| !invocation.is_empty())
+            && command["ndjson_events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty())
+    }));
+    let diff = commands
+        .iter()
+        .find(|command| command["name"] == "diff")
+        .ok_or("diff capability")?;
+    assert_eq!(
+        diff["result_schema"],
+        "https://docsight.dev/schemas/v2/diff-result.json"
+    );
+    assert!(
+        diff["ndjson_events"]
+            .as_array()
+            .ok_or("diff NDJSON events")?
+            .iter()
+            .any(|event| event == "diff.visual.page")
+    );
 
     let ndjson = docsight()
         .args(["--agent", "--ndjson", "capabilities"])
@@ -382,6 +413,16 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
     assert_eq!(records[0]["type"], "meta");
     assert_eq!(records[1]["type"], "capabilities");
     assert_eq!(records[2]["type"], "done");
+
+    let schema_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v2/capabilities-result.json");
+    let schema: serde_json::Value = serde_json::from_slice(&std::fs::read(schema_path)?)?;
+    let required = schema["properties"]["commands"]["items"]["required"]
+        .as_array()
+        .ok_or("capability command required fields")?;
+    for field in ["invocation", "ndjson_events", "result_schema"] {
+        assert!(required.iter().any(|value| value == field));
+    }
     Ok(())
 }
 

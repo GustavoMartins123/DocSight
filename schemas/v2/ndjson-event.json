@@ -32,6 +32,8 @@
         "image",
         "link",
         "diff.summary",
+        "diff.visual",
+        "diff.visual.page",
         "diff.lineage",
         "diff.semantic",
         "fingerprint",

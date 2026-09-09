@@ -7,6 +7,8 @@
     "profile",
     "protocol",
     "error_schema",
+    "invocation_prefix",
+    "sandbox",
     "document_formats",
     "output_modes",
     "agent_defaults",
@@ -18,6 +20,23 @@
     "profile": { "type": "string", "const": "agent-first-v1" },
     "protocol": { "type": "string", "const": "docsight.agent/v2" },
     "error_schema": { "type": "string", "format": "uri" },
+    "invocation_prefix": { "type": "string", "const": "docsight --agent" },
+    "sandbox": {
+      "type": "object",
+      "required": [
+        "flag",
+        "agent_default",
+        "recommended_for_untrusted_input",
+        "failure_mode"
+      ],
+      "properties": {
+        "flag": { "type": "string", "const": "--sandbox" },
+        "agent_default": { "type": "boolean", "const": false },
+        "recommended_for_untrusted_input": { "type": "boolean", "const": true },
+        "failure_mode": { "type": "string", "const": "fail_closed" }
+      },
+      "additionalProperties": false
+    },
     "document_formats": {
       "type": "array",
       "items": { "type": "string", "enum": ["docx", "pdf"] },
@@ -38,16 +57,36 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name", "summary", "formats", "ndjson", "bounded"],
+        "required": [
+          "name",
+          "summary",
+          "invocation",
+          "formats",
+          "ndjson",
+          "ndjson_events",
+          "bounded",
+          "result_schema"
+        ],
         "properties": {
           "name": { "type": "string" },
           "summary": { "type": "string" },
+          "invocation": { "type": "string", "minLength": 1 },
           "formats": {
             "type": "array",
             "items": { "type": "string" }
           },
           "ndjson": { "type": "boolean" },
-          "bounded": { "type": "boolean" }
+          "ndjson_events": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "bounded": { "type": "boolean" },
+          "result_schema": {
+            "type": ["string", "null"],
+            "format": "uri"
+          }
         },
         "additionalProperties": false
       }
