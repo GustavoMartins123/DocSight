@@ -1,0 +1,58 @@
+name: fuzz
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-09
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - run: cargo +nightly-2026-09-09 fuzz build
+
+  campaign:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_opc_container
+          - fuzz_ooxml_relationships
+          - fuzz_styles_cascade
+          - fuzz_numbering
+          - fuzz_table_grid
+          - fuzz_layout_paragraph
+          - fuzz_pdf_syntax
+          - fuzz_pdf_xref
+          - fuzz_pdf_content_stream
+          - fuzz_pdf_span_cluster
+          - fuzz_spatial_dql_parser
+          - fuzz_hit_test
+          - fuzz_evidence_bundle_manifest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-09
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - run: cargo +nightly-2026-09-09 fuzz run ${{ matrix.target }} -- -max_total_time=300 -max_len=1048576 -rss_limit_mb=1024 -timeout=10
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-artifacts
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

@@ -27,12 +27,39 @@
         "flag",
         "agent_default",
         "recommended_for_untrusted_input",
+        "supported_platforms",
+        "enforced_controls",
+        "unsupported_platform_behavior",
         "failure_mode"
       ],
       "properties": {
         "flag": { "type": "string", "const": "--sandbox" },
         "agent_default": { "type": "boolean", "const": false },
         "recommended_for_untrusted_input": { "type": "boolean", "const": true },
+        "supported_platforms": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["linux", "windows", "macos"] },
+          "minItems": 1,
+          "uniqueItems": true,
+          "const": ["linux"]
+        },
+        "enforced_controls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "memory",
+              "cpu",
+              "network",
+              "filesystem",
+              "isolated_temp_directory",
+              "bounded_output"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "unsupported_platform_behavior": { "type": "string", "const": "reject" },
         "failure_mode": { "type": "string", "const": "fail_closed" }
       },
       "additionalProperties": false

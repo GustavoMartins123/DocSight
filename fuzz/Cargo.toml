@@ -1,0 +1,116 @@
+[package]
+name = "docsight-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[lints.cargo]
+non_kebab_case_bins = "allow"
+
+[dependencies]
+docsight-core = { path = "../crates/docsight-core" }
+docsight-layout = { path = "../crates/docsight-layout" }
+docsight-ooxml = { path = "../crates/docsight-ooxml" }
+docsight-pdf = { path = "../crates/docsight-pdf" }
+docsight-render = { path = "../crates/docsight-render" }
+docsight-search = { path = "../crates/docsight-search" }
+docsight-tables = { path = "../crates/docsight-tables" }
+libfuzzer-sys = "0.4"
+zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[[bin]]
+name = "fuzz_opc_container"
+path = "fuzz_targets/fuzz_opc_container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ooxml_relationships"
+path = "fuzz_targets/fuzz_ooxml_relationships.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_styles_cascade"
+path = "fuzz_targets/fuzz_styles_cascade.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_numbering"
+path = "fuzz_targets/fuzz_numbering.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_table_grid"
+path = "fuzz_targets/fuzz_table_grid.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_layout_paragraph"
+path = "fuzz_targets/fuzz_layout_paragraph.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pdf_syntax"
+path = "fuzz_targets/fuzz_pdf_syntax.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pdf_xref"
+path = "fuzz_targets/fuzz_pdf_xref.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pdf_content_stream"
+path = "fuzz_targets/fuzz_pdf_content_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pdf_span_cluster"
+path = "fuzz_targets/fuzz_pdf_span_cluster.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_spatial_dql_parser"
+path = "fuzz_targets/fuzz_spatial_dql_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_hit_test"
+path = "fuzz_targets/fuzz_hit_test.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_evidence_bundle_manifest"
+path = "fuzz_targets/fuzz_evidence_bundle_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

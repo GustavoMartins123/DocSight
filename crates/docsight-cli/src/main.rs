@@ -589,6 +589,9 @@ struct AgentSandboxCapability {
     flag: &'static str,
     agent_default: bool,
     recommended_for_untrusted_input: bool,
+    supported_platforms: &'static [&'static str],
+    enforced_controls: &'static [&'static str],
+    unsupported_platform_behavior: &'static str,
     failure_mode: &'static str,
 }
 
@@ -1281,6 +1284,16 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             flag: "--sandbox",
             agent_default: false,
             recommended_for_untrusted_input: true,
+            supported_platforms: &["linux"],
+            enforced_controls: &[
+                "memory",
+                "cpu",
+                "network",
+                "filesystem",
+                "isolated_temp_directory",
+                "bounded_output",
+            ],
+            unsupported_platform_behavior: "reject",
             failure_mode: "fail_closed",
         },
         document_formats: ALL_DOCUMENT_FORMATS,

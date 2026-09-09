@@ -370,6 +370,25 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
         value["result"]["sandbox"]["recommended_for_untrusted_input"],
         true
     );
+    assert_eq!(
+        value["result"]["sandbox"]["supported_platforms"],
+        serde_json::json!(["linux"])
+    );
+    assert_eq!(
+        value["result"]["sandbox"]["enforced_controls"],
+        serde_json::json!([
+            "memory",
+            "cpu",
+            "network",
+            "filesystem",
+            "isolated_temp_directory",
+            "bounded_output"
+        ])
+    );
+    assert_eq!(
+        value["result"]["sandbox"]["unsupported_platform_behavior"],
+        "reject"
+    );
     assert_eq!(value["result"]["sandbox"]["failure_mode"], "fail_closed");
     let commands = value["result"]["commands"]
         .as_array()

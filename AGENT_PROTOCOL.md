@@ -8,7 +8,7 @@ Discover the current command surface before selecting an operation:
 docsight --agent capabilities
 ```
 
-The result declares the `docsight --agent` invocation prefix and a structured sandbox policy. Each command capability includes its canonical `invocation` grammar, supported document formats, bounded-output support, emitted `ndjson_events`, and its `result_schema` when a dedicated public schema exists. An agent does not need to parse human help text to plan a supported call. For untrusted input, insert the declared sandbox flag after the invocation prefix; unavailable enforcement fails closed rather than silently running without isolation.
+The result declares the `docsight --agent` invocation prefix and a structured sandbox policy. The policy lists the platforms on which isolation is implemented, the enforced controls, and the explicit behavior on unsupported platforms. Each command capability includes its canonical `invocation` grammar, supported document formats, bounded-output support, emitted `ndjson_events`, and its `result_schema` when a dedicated public schema exists. An agent does not need to parse human help text to plan a supported call. For untrusted input, insert the declared sandbox flag after the invocation prefix only when the current platform appears in `supported_platforms`; otherwise stop because unavailable enforcement fails closed rather than silently running without isolation.
 
 Inspect a document before requesting detailed objects:
 
