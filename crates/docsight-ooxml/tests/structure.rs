@@ -46,6 +46,149 @@ fn package_with_extra_part(name: &str) -> Result<Vec<u8>, Box<dyn std::error::Er
     Ok(writer.finish()?.into_inner())
 }
 
+fn stored_package(document: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    Ok(writer.finish()?.into_inner())
+}
+
+fn package_with_entry_count(entries: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let document = format!(r#"<w:document xmlns:w="{W_NS}"><w:body/></w:document>"#);
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    for index in 2..entries {
+        writer.start_file(format!("custom/item-{index}.bin"), options)?;
+    }
+    Ok(writer.finish()?.into_inner())
+}
+
+fn resource_name(error: &DocsightError) -> Option<&str> {
+    match error {
+        DocsightError::ResourceLimit { resource, .. } => Some(resource),
+        _ => None,
+    }
+}
+
+fn parse_error(
+    source: &DocumentSource,
+    message: &'static str,
+) -> Result<DocsightError, Box<dyn std::error::Error>> {
+    match parse_docx(source) {
+        Ok(_) => Err(message.into()),
+        Err(error) => Ok(error),
+    }
+}
+
+#[test]
+fn rejects_dtd_and_entity_declarations() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<!DOCTYPE w:document [<!ENTITY external SYSTEM "file:///never-read">]><w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>&external;</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(stored_package(&document)?)?;
+    let error = parse_error(&source, "DTD must be rejected")?;
+    assert!(matches!(error, DocsightError::MalformedDocument { .. }));
+    assert!(error.to_string().contains("DTD or entity declarations"));
+    Ok(())
+}
+
+#[test]
+fn rejects_excessive_xml_depth() -> Result<(), Box<dyn std::error::Error>> {
+    let mut document = format!(r#"<w:document xmlns:w="{W_NS}"><w:body>"#);
+    document.push_str(&"<w:sdt>".repeat(63));
+    document.push_str(&"</w:sdt>".repeat(63));
+    document.push_str("</w:body></w:document>");
+    let source = DocumentSource::from_bytes(stored_package(&document)?)?;
+    let error = parse_error(&source, "deep XML must be rejected")?;
+    assert_eq!(resource_name(&error), Some("XML element depth"));
+    Ok(())
+}
+
+#[test]
+fn rejects_excessive_xml_node_count() -> Result<(), Box<dyn std::error::Error>> {
+    let mut document = format!(r#"<w:document xmlns:w="{W_NS}"><w:body>"#);
+    document.push_str(&"<w:r/>".repeat(65_535));
+    document.push_str("</w:body></w:document>");
+    let source = DocumentSource::from_bytes(stored_package(&document)?)?;
+    let error = parse_error(&source, "wide XML must be rejected")?;
+    assert_eq!(resource_name(&error), Some("XML node count"));
+    Ok(())
+}
+
+#[test]
+fn accepts_xml_resource_boundaries() -> Result<(), Box<dyn std::error::Error>> {
+    let mut depth_document = format!(r#"<w:document xmlns:w="{W_NS}"><w:body>"#);
+    depth_document.push_str(&"<w:sdt>".repeat(62));
+    depth_document.push_str(&"</w:sdt>".repeat(62));
+    depth_document.push_str("</w:body></w:document>");
+    let depth_source = DocumentSource::from_bytes(stored_package(&depth_document)?)?;
+    parse_docx(&depth_source)?;
+
+    let text = "x".repeat(1024 * 1024);
+    let token_document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let token_source = DocumentSource::from_bytes(stored_package(&token_document)?)?;
+    parse_docx(&token_source)?;
+
+    let mut node_document = format!(r#"<w:document xmlns:w="{W_NS}"><w:body>"#);
+    node_document.push_str(&"<!--x-->".repeat(65_533));
+    node_document.push_str("</w:body></w:document>");
+    let node_source = DocumentSource::from_bytes(stored_package(&node_document)?)?;
+    parse_docx(&node_source)?;
+    Ok(())
+}
+
+#[test]
+fn rejects_excessive_xml_token_size() -> Result<(), Box<dyn std::error::Error>> {
+    let text = "x".repeat(1024 * 1024 + 1);
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(stored_package(&document)?)?;
+    let error = parse_error(&source, "large XML token must be rejected")?;
+    assert_eq!(resource_name(&error), Some("XML token bytes"));
+    Ok(())
+}
+
+#[test]
+fn preserves_macro_and_ole_parts_as_inert_resources() -> Result<(), Box<dyn std::error::Error>> {
+    for (path, code) in [
+        ("word/vbaProject.bin", "DOCX_ACTIVE_CONTENT_INERT"),
+        (
+            "word/embeddings/oleObject1.bin",
+            "DOCX_EMBEDDED_OBJECT_INERT",
+        ),
+    ] {
+        let source = DocumentSource::from_bytes(package_with_extra_part(path)?)?;
+        let document = parse_docx(&source)?;
+        let resource = document
+            .resources
+            .iter()
+            .find(|resource| resource.target == path)
+            .ok_or("inert resource missing")?;
+        assert_eq!(resource.kind, docsight_core::ResourceKind::EmbeddedObject);
+        assert_eq!(resource.content_sha256.as_deref().map(str::len), Some(64));
+        let warning = document
+            .warnings
+            .iter()
+            .find(|warning| warning.code == code)
+            .ok_or("inert-content warning missing")?;
+        assert_eq!(warning.object.as_ref(), Some(&resource.id));
+        assert!(warning.effect.contains("not executed"));
+    }
+    Ok(())
+}
+
 #[test]
 fn parses_headings_lists_and_merged_tables() -> Result<(), Box<dyn std::error::Error>> {
     let document = format!(
@@ -153,6 +296,17 @@ fn rejects_excessive_compression_ratio() -> Result<(), Box<dyn std::error::Error
     let source = DocumentSource::from_bytes(writer.finish()?.into_inner())?;
     let error = parse_docx(&source);
     assert!(matches!(error, Err(DocsightError::ResourceLimit { .. })));
+    Ok(())
+}
+
+#[test]
+fn enforces_package_entry_limit_at_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    let accepted = DocumentSource::from_bytes(package_with_entry_count(2_048)?)?;
+    parse_docx(&accepted)?;
+
+    let rejected = DocumentSource::from_bytes(package_with_entry_count(2_049)?)?;
+    let error = parse_error(&rejected, "package entry limit must be enforced")?;
+    assert_eq!(resource_name(&error), Some("package entry count"));
     Ok(())
 }
 

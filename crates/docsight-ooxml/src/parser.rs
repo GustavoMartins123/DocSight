@@ -5,13 +5,16 @@ use docsight_core::{
     Hyperlink, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId, ParagraphBlock, Resource,
     ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell, TrackedChanges, UnknownBlock,
 };
-use roxmltree::{Document as XmlDocument, Node};
+use roxmltree::{Document as XmlDocument, Node, ParsingOptions};
 use std::collections::{BTreeMap, BTreeSet};
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const MAX_STYLE_DEPTH: usize = 64;
 const MAX_TABLE_DEPTH: usize = 32;
+const MAX_XML_DEPTH: usize = 64;
+const MAX_XML_NODES: u32 = 65_536;
+const MAX_XML_TOKEN_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
 struct StyleDefinition {
@@ -72,7 +75,7 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     let footer_texts = extract_part_texts(&parts.footers)?;
     let styles = parse_styles(parts.styles.as_deref())?;
     let numbering = parse_numbering(parts.numbering.as_deref())?;
-    let xml = XmlDocument::parse(&parts.document).map_err(xml_error)?;
+    let xml = parse_xml(&parts.document)?;
     let body = xml
         .descendants()
         .find(|node| node.has_tag_name((W_NS, "body")))
@@ -84,6 +87,12 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     let mut warnings = Vec::new();
     let mut resources = Vec::new();
     let mut links = Vec::new();
+    preserve_inert_parts(
+        source,
+        &parts.inert_part_digests,
+        &mut resources,
+        &mut warnings,
+    );
     let mut paragraph_index = 0_u32;
     let mut table_index = 0_u32;
     let mut section_index = 0_u32;
@@ -259,6 +268,40 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     })
 }
 
+fn preserve_inert_parts(
+    source: &DocumentSource,
+    inert_part_digests: &BTreeMap<String, String>,
+    resources: &mut Vec<Resource>,
+    warnings: &mut Vec<Diagnostic>,
+) {
+    for (path, digest) in inert_part_digests {
+        let id = source.object_id("res", path);
+        let lower = path.to_ascii_lowercase();
+        let code = if lower.starts_with("word/embeddings/") {
+            "DOCX_EMBEDDED_OBJECT_INERT"
+        } else {
+            "DOCX_ACTIVE_CONTENT_INERT"
+        };
+        resources.push(Resource {
+            id: id.clone(),
+            kind: ResourceKind::EmbeddedObject,
+            name: path.clone(),
+            target: path.clone(),
+            mime_type: None,
+            content_sha256: Some(digest.clone()),
+        });
+        warnings.push(Diagnostic {
+            code: code.to_owned(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!("embedded part {path} was preserved as inert content"),
+            effect: "the content was not executed or semantically interpreted; only its digest is available"
+                .to_owned(),
+            object: Some(id),
+            page: None,
+        });
+    }
+}
+
 fn parse_section(
     node: Node<'_, '_>,
     index: u32,
@@ -395,7 +438,7 @@ fn parse_relationships(
     let Some(xml) = xml_opt else {
         return Ok(map);
     };
-    let doc = XmlDocument::parse(xml).map_err(xml_error)?;
+    let doc = parse_xml(xml)?;
     for rel in doc
         .descendants()
         .filter(|n| n.tag_name().name() == "Relationship")
@@ -455,7 +498,7 @@ fn parse_relationships(
 fn extract_part_texts(parts: &[(String, String)]) -> Result<Vec<(String, String)>, DocsightError> {
     let mut results = Vec::new();
     for (part_name, xml_str) in parts {
-        let doc = XmlDocument::parse(xml_str).map_err(xml_error)?;
+        let doc = parse_xml(xml_str)?;
         let text = doc
             .descendants()
             .filter(|n| n.has_tag_name((W_NS, "p")))
@@ -716,7 +759,7 @@ fn parse_notes(
     let Some(xml) = xml_opt else {
         return Ok(blocks);
     };
-    let doc = XmlDocument::parse(xml).map_err(xml_error)?;
+    let doc = parse_xml(xml)?;
     for note in doc
         .descendants()
         .filter(|n| n.has_tag_name((W_NS, tag_name)))
@@ -776,7 +819,7 @@ fn parse_comments(
     let Some(xml) = xml_opt else {
         return Ok(comments);
     };
-    let doc = XmlDocument::parse(xml).map_err(xml_error)?;
+    let doc = parse_xml(xml)?;
     for comment in doc
         .descendants()
         .filter(|n| n.has_tag_name((W_NS, "comment")))
@@ -1422,7 +1465,7 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
     let Some(xml) = xml else {
         return Ok(BTreeMap::new());
     };
-    let document = XmlDocument::parse(xml).map_err(xml_error)?;
+    let document = parse_xml(xml)?;
     let mut styles = BTreeMap::new();
     for node in document
         .descendants()
@@ -1621,7 +1664,7 @@ fn parse_numbering(xml: Option<&str>) -> Result<NumberingDefinitions, DocsightEr
     let Some(xml) = xml else {
         return Ok(NumberingDefinitions::default());
     };
-    let document = XmlDocument::parse(xml).map_err(xml_error)?;
+    let document = parse_xml(xml)?;
     let mut abstract_numbers = BTreeMap::new();
     for node in document
         .descendants()
@@ -1802,9 +1845,198 @@ fn outline_level(properties: Node<'_, '_>) -> Result<Option<u8>, DocsightError> 
     Ok(Some(level))
 }
 
+fn parse_xml(xml: &str) -> Result<XmlDocument<'_>, DocsightError> {
+    preflight_xml(xml)?;
+    let options = ParsingOptions {
+        allow_dtd: false,
+        nodes_limit: MAX_XML_NODES,
+        entity_resolver: None,
+    };
+    let document = XmlDocument::parse_with_options(xml, options).map_err(xml_error)?;
+    for node in document.descendants() {
+        let depth = node
+            .ancestors()
+            .filter(Node::is_element)
+            .take(MAX_XML_DEPTH + 1)
+            .count();
+        if depth > MAX_XML_DEPTH {
+            return Err(DocsightError::ResourceLimit {
+                resource: "XML element depth".to_owned(),
+                limit: MAX_XML_DEPTH as u64,
+            });
+        }
+        if node
+            .text()
+            .is_some_and(|text| text.len() > MAX_XML_TOKEN_BYTES)
+        {
+            return Err(xml_token_limit());
+        }
+        if node.is_element() {
+            if node.tag_name().name().len() > MAX_XML_TOKEN_BYTES {
+                return Err(xml_token_limit());
+            }
+            for attribute in node.attributes() {
+                if attribute.name().len() > MAX_XML_TOKEN_BYTES
+                    || attribute.value().len() > MAX_XML_TOKEN_BYTES
+                {
+                    return Err(xml_token_limit());
+                }
+            }
+        }
+    }
+    Ok(document)
+}
+
+fn preflight_xml(xml: &str) -> Result<(), DocsightError> {
+    let bytes = xml.as_bytes();
+    let mut cursor = 0_usize;
+    let mut depth = 0_usize;
+    let mut nodes = 1_u32;
+    while cursor < bytes.len() {
+        let Some(relative_start) = bytes[cursor..].iter().position(|byte| *byte == b'<') else {
+            validate_xml_token_length(bytes.len().saturating_sub(cursor))?;
+            break;
+        };
+        let start = cursor
+            .checked_add(relative_start)
+            .ok_or_else(xml_token_limit)?;
+        validate_xml_token_length(start.saturating_sub(cursor))?;
+        let marker =
+            bytes
+                .get(start + 1)
+                .copied()
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: "invalid OOXML: unterminated XML markup".to_owned(),
+                })?;
+        if marker == b'!' {
+            let (end, counted) = if bytes[start..].starts_with(b"<!--") {
+                (find_xml_sequence(bytes, start + 4, b"-->")?, true)
+            } else if bytes[start..].starts_with(b"<![CDATA[") {
+                (find_xml_sequence(bytes, start + 9, b"]]>")?, true)
+            } else {
+                return Err(DocsightError::MalformedDocument {
+                    message: "invalid OOXML: DTD or entity declarations are forbidden".to_owned(),
+                });
+            };
+            validate_xml_token_length(end.saturating_sub(start))?;
+            if counted {
+                increment_xml_nodes(&mut nodes)?;
+            }
+            cursor = end;
+            continue;
+        }
+        if marker == b'?' {
+            let end = find_xml_sequence(bytes, start + 2, b"?>")?;
+            validate_xml_token_length(end.saturating_sub(start))?;
+            increment_xml_nodes(&mut nodes)?;
+            cursor = end;
+            continue;
+        }
+        let end = find_xml_tag_end(bytes, start + 1)?;
+        validate_xml_token_length(end.saturating_sub(start))?;
+        if marker == b'/' {
+            depth = depth
+                .checked_sub(1)
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: "invalid OOXML: closing tag has no open element".to_owned(),
+                })?;
+        } else {
+            increment_xml_nodes(&mut nodes)?;
+            if !xml_tag_is_self_closing(&bytes[start + 1..end]) {
+                depth = depth.checked_add(1).ok_or_else(xml_depth_limit)?;
+                if depth > MAX_XML_DEPTH {
+                    return Err(xml_depth_limit());
+                }
+            }
+        }
+        cursor = end.checked_add(1).ok_or_else(xml_token_limit)?;
+    }
+    Ok(())
+}
+
+fn find_xml_tag_end(bytes: &[u8], mut cursor: usize) -> Result<usize, DocsightError> {
+    let mut quote = None;
+    while let Some(byte) = bytes.get(cursor).copied() {
+        match (quote, byte) {
+            (Some(active), current) if active == current => quote = None,
+            (None, b'\'' | b'"') => quote = Some(byte),
+            (None, b'>') => return Ok(cursor),
+            _ => {}
+        }
+        cursor = cursor.checked_add(1).ok_or_else(xml_token_limit)?;
+    }
+    Err(DocsightError::MalformedDocument {
+        message: "invalid OOXML: unterminated XML tag".to_owned(),
+    })
+}
+
+fn find_xml_sequence(
+    bytes: &[u8],
+    mut cursor: usize,
+    sequence: &[u8],
+) -> Result<usize, DocsightError> {
+    while cursor <= bytes.len().saturating_sub(sequence.len()) {
+        if bytes[cursor..].starts_with(sequence) {
+            return cursor
+                .checked_add(sequence.len())
+                .ok_or_else(xml_token_limit);
+        }
+        cursor = cursor.checked_add(1).ok_or_else(xml_token_limit)?;
+    }
+    Err(DocsightError::MalformedDocument {
+        message: "invalid OOXML: unterminated XML declaration".to_owned(),
+    })
+}
+
+fn xml_tag_is_self_closing(tag: &[u8]) -> bool {
+    tag.iter()
+        .rev()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| *byte == b'/')
+}
+
+fn validate_xml_token_length(length: usize) -> Result<(), DocsightError> {
+    if length > MAX_XML_TOKEN_BYTES {
+        return Err(xml_token_limit());
+    }
+    Ok(())
+}
+
+fn increment_xml_nodes(nodes: &mut u32) -> Result<(), DocsightError> {
+    *nodes = nodes.checked_add(1).ok_or_else(xml_node_limit)?;
+    if *nodes > MAX_XML_NODES {
+        return Err(xml_node_limit());
+    }
+    Ok(())
+}
+
+fn xml_depth_limit() -> DocsightError {
+    DocsightError::ResourceLimit {
+        resource: "XML element depth".to_owned(),
+        limit: MAX_XML_DEPTH as u64,
+    }
+}
+
+fn xml_node_limit() -> DocsightError {
+    DocsightError::ResourceLimit {
+        resource: "XML node count".to_owned(),
+        limit: u64::from(MAX_XML_NODES),
+    }
+}
+
 fn xml_error(error: roxmltree::Error) -> DocsightError {
-    DocsightError::MalformedDocument {
-        message: format!("invalid OOXML: {error}"),
+    match error {
+        roxmltree::Error::NodesLimitReached => xml_node_limit(),
+        other => DocsightError::MalformedDocument {
+            message: format!("invalid OOXML: {other}"),
+        },
+    }
+}
+
+fn xml_token_limit() -> DocsightError {
+    DocsightError::ResourceLimit {
+        resource: "XML token bytes".to_owned(),
+        limit: MAX_XML_TOKEN_BYTES as u64,
     }
 }
 

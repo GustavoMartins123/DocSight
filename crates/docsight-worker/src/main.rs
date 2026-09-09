@@ -25,7 +25,13 @@ struct WorkerCli {
     memory_hog_for_test: bool,
 
     #[arg(long, hide = true)]
+    cpu_hog_for_test: bool,
+
+    #[arg(long, hide = true)]
     network_probe_for_test: bool,
+
+    #[arg(long, hide = true)]
+    filesystem_probe_for_test: bool,
 
     #[command(subcommand)]
     command: WorkerCommand,
@@ -85,8 +91,16 @@ fn main() -> ExitCode {
             buffer.resize(buffer.len().saturating_add(16 * 1024 * 1024), 0xAB);
         }
     }
+    if cli.cpu_hog_for_test {
+        loop {
+            std::hint::spin_loop();
+        }
+    }
     if cli.network_probe_for_test {
         return network_probe_exit_code();
+    }
+    if cli.filesystem_probe_for_test {
+        return filesystem_probe_exit_code();
     }
     match execute_worker(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -111,6 +125,24 @@ fn network_probe_exit_code() -> ExitCode {
 
 #[cfg(not(target_os = "linux"))]
 fn network_probe_exit_code() -> ExitCode {
+    ExitCode::from(30)
+}
+
+#[cfg(target_os = "linux")]
+fn filesystem_probe_exit_code() -> ExitCode {
+    let Some(path) = std::env::var_os("DOCSIGHT_FILESYSTEM_PROBE_PATH") else {
+        return ExitCode::from(30);
+    };
+    match std::fs::read(path) {
+        Err(error) if matches!(error.raw_os_error(), Some(libc::EACCES) | Some(libc::EPERM)) => {
+            ExitCode::SUCCESS
+        }
+        _ => ExitCode::from(30),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn filesystem_probe_exit_code() -> ExitCode {
     ExitCode::from(30)
 }
 

@@ -348,6 +348,38 @@ fn paragraph_block(index: u32, text: &str, flags: LayoutFlags) -> Block {
     }
 }
 
+fn explicit_page_document(page_count: u32) -> Document {
+    let blocks = (1..=page_count)
+        .map(|index| {
+            paragraph_block(
+                index,
+                "x",
+                LayoutFlags {
+                    page_break_before: index > 1,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    dummy_document(blocks, None)
+}
+
+#[test]
+fn enforces_layout_page_limit_at_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    let accepted = layout_docx(explicit_page_document(10_000))?;
+    assert_eq!(accepted.pages.len(), 10_000);
+
+    let error = match layout_docx(explicit_page_document(10_001)) {
+        Err(error) => error,
+        Ok(_) => return Err(std::io::Error::other("layout page limit was not enforced").into()),
+    };
+    assert!(matches!(
+        error,
+        docsight_core::DocsightError::ResourceLimit { .. }
+    ));
+    Ok(())
+}
+
 #[test]
 fn explicit_page_break_before_moves_block_to_next_page() -> Result<(), Box<dyn std::error::Error>> {
     let flags = LayoutFlags {

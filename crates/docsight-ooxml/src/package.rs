@@ -9,6 +9,8 @@ const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_XML_PART_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BINARY_PART_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO: u64 = 200;
+const CENTRAL_DIRECTORY_HEADER_BYTES: usize = 46;
+const END_OF_CENTRAL_DIRECTORY_BYTES: usize = 22;
 
 pub struct DocxParts {
     pub document: String,
@@ -21,9 +23,11 @@ pub struct DocxParts {
     pub endnotes: Option<String>,
     pub comments: Option<String>,
     pub binary_part_digests: std::collections::BTreeMap<String, String>,
+    pub inert_part_digests: std::collections::BTreeMap<String, String>,
 }
 
 pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
+    preflight_archive(bytes)?;
     let cursor = Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor).map_err(zip_error)?;
     validate_archive(&mut archive)?;
@@ -67,10 +71,16 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     }
 
     let mut binary_names = Vec::new();
+    let mut inert_names = Vec::new();
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(zip_error)?;
-        if !file.is_dir() && file.name().starts_with("word/media/") {
-            binary_names.push(file.name().to_owned());
+        if !file.is_dir() {
+            if file.name().starts_with("word/media/") {
+                binary_names.push(file.name().to_owned());
+            }
+            if is_inert_part(file.name()) {
+                inert_names.push(file.name().to_owned());
+            }
         }
     }
     binary_names.sort();
@@ -78,6 +88,12 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     for name in binary_names {
         let digest = hash_binary_part(&mut archive, &name)?;
         binary_part_digests.insert(name, digest);
+    }
+    inert_names.sort();
+    let mut inert_part_digests = std::collections::BTreeMap::new();
+    for name in inert_names {
+        let digest = hash_binary_part(&mut archive, &name)?;
+        inert_part_digests.insert(name, digest);
     }
 
     Ok(DocxParts {
@@ -91,7 +107,172 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
         endnotes,
         comments,
         binary_part_digests,
+        inert_part_digests,
     })
+}
+
+fn preflight_archive(bytes: &[u8]) -> Result<(), DocsightError> {
+    let end_record = find_end_of_central_directory(bytes)?;
+    let disk = read_u16(bytes, end_record + 4)?;
+    let central_disk = read_u16(bytes, end_record + 6)?;
+    let disk_entries = read_u16(bytes, end_record + 8)?;
+    let total_entries = read_u16(bytes, end_record + 10)?;
+    if disk != 0 || central_disk != 0 || disk_entries != total_entries {
+        return Err(archive_metadata_error(
+            "multi-disk OPC packages are unsupported",
+        ));
+    }
+    if usize::from(total_entries) > MAX_PACKAGE_ENTRIES {
+        return Err(resource_limit(
+            "package entry count",
+            MAX_PACKAGE_ENTRIES as u64,
+        ));
+    }
+    let central_size = usize::try_from(read_u32(bytes, end_record + 12)?)
+        .map_err(|_| archive_metadata_error("central directory size overflow"))?;
+    let central_offset = usize::try_from(read_u32(bytes, end_record + 16)?)
+        .map_err(|_| archive_metadata_error("central directory offset overflow"))?;
+    let central_end = central_offset
+        .checked_add(central_size)
+        .ok_or_else(|| archive_metadata_error("central directory range overflow"))?;
+    if central_end != end_record {
+        return Err(archive_metadata_error(
+            "central directory range does not end at its terminal record",
+        ));
+    }
+
+    let mut cursor = central_offset;
+    let mut total_uncompressed = 0_u64;
+    for _ in 0..total_entries {
+        let fixed_end = cursor
+            .checked_add(CENTRAL_DIRECTORY_HEADER_BYTES)
+            .ok_or_else(|| archive_metadata_error("central directory entry range overflow"))?;
+        let fixed = bytes
+            .get(cursor..fixed_end)
+            .ok_or_else(|| archive_metadata_error("truncated central directory entry"))?;
+        if fixed.get(..4) != Some(b"PK\x01\x02") {
+            return Err(archive_metadata_error(
+                "invalid central directory entry signature",
+            ));
+        }
+        let compressed = u64::from(read_u32(bytes, cursor + 20)?);
+        let uncompressed = u64::from(read_u32(bytes, cursor + 24)?);
+        let name_length = usize::from(read_u16(bytes, cursor + 28)?);
+        let extra_length = usize::from(read_u16(bytes, cursor + 30)?);
+        let comment_length = usize::from(read_u16(bytes, cursor + 32)?);
+        let start_disk = read_u16(bytes, cursor + 34)?;
+        let local_offset = read_u32(bytes, cursor + 42)?;
+        if compressed == u64::from(u32::MAX)
+            || uncompressed == u64::from(u32::MAX)
+            || local_offset == u32::MAX
+        {
+            return Err(archive_metadata_error(
+                "ZIP64 OPC package metadata is unsupported",
+            ));
+        }
+        if start_disk != 0 {
+            return Err(archive_metadata_error(
+                "multi-disk OPC package entry is unsupported",
+            ));
+        }
+        if uncompressed > 0
+            && (compressed == 0 || uncompressed > compressed.saturating_mul(MAX_COMPRESSION_RATIO))
+        {
+            return Err(resource_limit(
+                "package compression ratio",
+                MAX_COMPRESSION_RATIO,
+            ));
+        }
+        total_uncompressed = total_uncompressed
+            .checked_add(uncompressed)
+            .ok_or_else(|| {
+                resource_limit("package uncompressed size", MAX_TOTAL_UNCOMPRESSED_BYTES)
+            })?;
+        if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES {
+            return Err(resource_limit(
+                "package uncompressed size",
+                MAX_TOTAL_UNCOMPRESSED_BYTES,
+            ));
+        }
+        cursor = fixed_end
+            .checked_add(name_length)
+            .and_then(|value| value.checked_add(extra_length))
+            .and_then(|value| value.checked_add(comment_length))
+            .ok_or_else(|| archive_metadata_error("central directory entry range overflow"))?;
+        if cursor > central_end {
+            return Err(archive_metadata_error(
+                "central directory entry exceeds its declared range",
+            ));
+        }
+    }
+    if cursor != central_end {
+        return Err(archive_metadata_error(
+            "central directory entry count does not match its declared range",
+        ));
+    }
+    Ok(())
+}
+
+fn find_end_of_central_directory(bytes: &[u8]) -> Result<usize, DocsightError> {
+    if bytes.len() < END_OF_CENTRAL_DIRECTORY_BYTES {
+        return Err(archive_metadata_error(
+            "end of central directory record is missing",
+        ));
+    }
+    let last_start = bytes.len() - END_OF_CENTRAL_DIRECTORY_BYTES;
+    let first_start = bytes
+        .len()
+        .saturating_sub(END_OF_CENTRAL_DIRECTORY_BYTES + usize::from(u16::MAX));
+    for offset in (first_start..=last_start).rev() {
+        if bytes.get(offset..offset + 4) != Some(b"PK\x05\x06") {
+            continue;
+        }
+        let comment_length = usize::from(read_u16(bytes, offset + 20)?);
+        let record_end = offset
+            .checked_add(END_OF_CENTRAL_DIRECTORY_BYTES)
+            .and_then(|value| value.checked_add(comment_length))
+            .ok_or_else(|| archive_metadata_error("end record range overflow"))?;
+        if record_end == bytes.len() {
+            return Ok(offset);
+        }
+    }
+    Err(archive_metadata_error(
+        "valid end of central directory record is missing",
+    ))
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, DocsightError> {
+    let end = offset
+        .checked_add(2)
+        .ok_or_else(|| archive_metadata_error("ZIP metadata offset overflow"))?;
+    let value = bytes
+        .get(offset..end)
+        .ok_or_else(|| archive_metadata_error("truncated ZIP metadata"))?;
+    Ok(u16::from_le_bytes([value[0], value[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, DocsightError> {
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| archive_metadata_error("ZIP metadata offset overflow"))?;
+    let value = bytes
+        .get(offset..end)
+        .ok_or_else(|| archive_metadata_error("truncated ZIP metadata"))?;
+    Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn archive_metadata_error(message: &str) -> DocsightError {
+    DocsightError::MalformedDocument {
+        message: format!("invalid OPC package: {message}"),
+    }
+}
+
+fn is_inert_part(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "word/vbaproject.bin"
+        || lower == "word/vbadata.xml"
+        || lower.starts_with("word/embeddings/")
+        || lower.starts_with("word/activex/")
 }
 
 fn hash_binary_part(
