@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: 1.96.0
           components: rustfmt, clippy
       - run: cargo test -p docsight-search
       - run: cargo test -p docsight-cli --test m15_conformance_cli --test m16_interaction_cli --test m17_budget_cli --test m18_interaction_economy_cli
