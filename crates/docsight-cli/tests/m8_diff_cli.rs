@@ -135,34 +135,80 @@ fn diff_docx_json_envelope_and_projections() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
-fn diff_visual_fails_closed_for_approximate_docx_rendering()
--> Result<(), Box<dyn std::error::Error>> {
+fn diff_visual_docx_is_deterministic_and_evidence_limited() -> Result<(), Box<dyn std::error::Error>>
+{
     let before = fixture("sample_headings.docx");
     let after = fixture("sample_tables.docx");
     let before_str = before.to_str().ok_or("invalid path")?;
     let after_str = after.to_str().ok_or("invalid path")?;
 
     let temp_dir = tempfile::tempdir()?;
-    let out_dir = temp_dir.path().join("diffs");
+    let first_dir = temp_dir.path().join("first");
+    let second_dir = temp_dir.path().join("second");
 
-    let output = docsight()
+    let first = docsight()
         .args([
             "diff",
             before_str,
             after_str,
             "--visual",
+            "--dpi",
+            "36",
             "--out-dir",
-            out_dir.to_str().ok_or("invalid out dir")?,
+            first_dir.to_str().ok_or("invalid out dir")?,
+            "--json",
         ])
         .output()?;
-    assert_eq!(output.status.code(), Some(20));
-    let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains("LAYOUT_PARTIAL"));
+    let second = docsight()
+        .args([
+            "diff",
+            before_str,
+            after_str,
+            "--visual",
+            "--dpi",
+            "36",
+            "--out-dir",
+            second_dir.to_str().ok_or("invalid out dir")?,
+            "--json",
+        ])
+        .output()?;
+    assert!(first.status.success());
+    assert!(second.status.success());
+    assert!(first.stderr.is_empty());
+    assert!(second.stderr.is_empty());
+    assert_eq!(first.stdout, second.stdout);
 
-    let p1 = out_dir.join("diff_p0001.png");
-    let p2 = out_dir.join("diff_p0002.png");
-    assert!(!p1.exists());
-    assert!(!p2.exists());
+    let value: serde_json::Value = serde_json::from_slice(&first.stdout)?;
+    let visual = &value["result"]["visual"];
+    assert_eq!(visual["authoritative"], false);
+    assert_eq!(visual["evidence_status"], "evidence_limited");
+    assert!(
+        visual["reason_codes"]
+            .as_array()
+            .ok_or("reason codes")?
+            .iter()
+            .any(|code| code == "DOCX_FONT_SUBSTITUTED")
+    );
+    let pages = visual["page_diffs"].as_array().ok_or("page diffs")?;
+    assert_eq!(pages.len(), 3);
+    assert!(pages.iter().all(|page| page["authoritative"] == false));
+    assert_eq!(pages[2]["change_fraction"], 1.0);
+    assert_eq!(pages[2]["changed_pixels"], pages[2]["total_pixels"]);
+    assert!(
+        value["warnings"]
+            .as_array()
+            .ok_or("warnings")?
+            .iter()
+            .any(|warning| warning["code"] == "DIFF_VISUAL_EVIDENCE_LIMITED")
+    );
+
+    for page in 1..=3 {
+        let name = format!("diff_p{page:04}.png");
+        let first_bytes = std::fs::read(first_dir.join(&name))?;
+        let second_bytes = std::fs::read(second_dir.join(&name))?;
+        assert!(!first_bytes.is_empty());
+        assert_eq!(first_bytes, second_bytes);
+    }
 
     Ok(())
 }
@@ -451,6 +497,29 @@ fn diff_schema_declares_cross_version_lineage_contract() -> Result<(), Box<dyn s
             .filter_map(serde_json::Value::as_str)
             .collect();
     assert_eq!(lineage_status, vec!["matched", "ambiguous"]);
+    assert_eq!(
+        schema["properties"]["visual"]["$ref"],
+        "#/$defs/visual_diff"
+    );
+    let visual_required = schema["$defs"]["visual_diff"]["required"]
+        .as_array()
+        .ok_or("visual diff required")?;
+    for field in [
+        "authoritative",
+        "evidence_status",
+        "reason_codes",
+        "page_diffs",
+    ] {
+        assert!(visual_required.iter().any(|value| value == field));
+    }
+    let evidence_status: Vec<&str> =
+        schema["$defs"]["visual_diff"]["properties"]["evidence_status"]["enum"]
+            .as_array()
+            .ok_or("visual evidence status")?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+    assert_eq!(evidence_status, vec!["exact", "evidence_limited"]);
 
     let ndjson: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
         root.join("schemas/v2/ndjson-event.json"),

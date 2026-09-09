@@ -185,6 +185,9 @@ pub struct SemanticDiff {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PageVisualDiff {
     pub page: u32,
+    pub authoritative: bool,
+    pub evidence_status: VisualDiffEvidenceStatus,
+    pub reason_codes: Vec<String>,
     pub changed_pixels: u32,
     pub total_pixels: u32,
     pub change_fraction: f32,
@@ -193,8 +196,19 @@ pub struct PageVisualDiff {
     pub diff_png: Option<Vec<u8>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualDiffEvidenceStatus {
+    #[default]
+    Exact,
+    EvidenceLimited,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VisualDiff {
+    pub authoritative: bool,
+    pub evidence_status: VisualDiffEvidenceStatus,
+    pub reason_codes: Vec<String>,
     pub pages_before: u32,
     pub pages_after: u32,
     pub layout_changed_pages: u32,
@@ -353,6 +367,11 @@ pub fn diff_documents(
             .iter()
             .filter_map(lineage_ambiguity_warning),
     );
+    if let Some(visual) = &visual {
+        if !visual.authoritative {
+            combined_warnings.push(visual_diff_evidence_warning(&visual.reason_codes));
+        }
+    }
 
     let summary_warnings: Vec<String> = combined_warnings
         .iter()
@@ -390,6 +409,21 @@ pub fn diff_documents(
         summary,
         warnings: combined_warnings,
     })
+}
+
+fn visual_diff_evidence_warning(reason_codes: &[String]) -> Diagnostic {
+    Diagnostic {
+        code: "DIFF_VISUAL_EVIDENCE_LIMITED".to_owned(),
+        severity: docsight_core::DiagnosticSeverity::Warning,
+        message: format!(
+            "visual diff uses deterministic approximated rendering affected by {}",
+            reason_codes.join(", ")
+        ),
+        effect: "changed pixels and regions are valid for the DOCSIGHT render profile but are not source-faithful visual evidence"
+            .to_owned(),
+        object: None,
+        page: None,
+    }
 }
 
 fn lineage_ambiguity_warning(record: &LineageRecord) -> Option<Diagnostic> {
@@ -1739,25 +1773,13 @@ pub fn diff_visual(
     threshold: u8,
     out_dir: Option<&Path>,
 ) -> Result<VisualDiff, DocsightError> {
-    if doc_before
-        .warnings
-        .iter()
-        .chain(doc_after.warnings.iter())
-        .any(|warning| {
-            matches!(
-                warning.code.as_str(),
-                "DOCX_FIGURE_RASTER_PLACEHOLDER"
-                    | "DOCX_FONT_SUBSTITUTED"
-                    | "APPROXIMATED_PDF_FONT"
-                    | "PDF_XOBJECT_PLACEHOLDER"
-            )
-        })
-    {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "source-faithful visual diff while fonts or images are not rasterized"
-                .to_owned(),
-        });
-    }
+    let reason_codes = visual_reason_codes(doc_before, doc_after, None);
+    let authoritative = reason_codes.is_empty();
+    let evidence_status = if authoritative {
+        VisualDiffEvidenceStatus::Exact
+    } else {
+        VisualDiffEvidenceStatus::EvidenceLimited
+    };
     let pages_before =
         u32::try_from(doc_before.pages.len()).map_err(|_| DocsightError::ResourceLimit {
             resource: "visual diff pages".to_owned(),
@@ -1783,161 +1805,122 @@ pub fn diff_visual(
     }
 
     for p in 1..=max_pages {
-        if p <= pages_before && p <= pages_after {
-            let req = RenderRequest {
-                target: RenderTarget::Page { page: p },
-                dpi,
-            };
-            let img_a = render_document(source_before, &req)?;
-            let img_b = render_document(source_after, &req)?;
-
-            let w = img_a.metadata.width_px.max(img_b.metadata.width_px);
-            let h = img_a.metadata.height_px.max(img_b.metadata.height_px);
-            let total_pixels = w
-                .checked_mul(h)
+        let request = RenderRequest {
+            target: RenderTarget::Page { page: p },
+            dpi,
+        };
+        let before_image = if p <= pages_before {
+            Some(render_document(source_before, &request)?)
+        } else {
+            None
+        };
+        let after_image = if p <= pages_after {
+            Some(render_document(source_after, &request)?)
+        } else {
+            None
+        };
+        let (width, height) = match (&before_image, &after_image) {
+            (Some(before), Some(after)) => (
+                before.metadata.width_px.max(after.metadata.width_px),
+                before.metadata.height_px.max(after.metadata.height_px),
+            ),
+            (Some(before), None) => (before.metadata.width_px, before.metadata.height_px),
+            (None, Some(after)) => (after.metadata.width_px, after.metadata.height_px),
+            (None, None) => {
+                return Err(DocsightError::MalformedDocument {
+                    message: "visual diff page has no source on either side".to_owned(),
+                });
+            }
+        };
+        let total_pixels =
+            width
+                .checked_mul(height)
                 .ok_or_else(|| DocsightError::ResourceLimit {
                     resource: "visual diff pixels".to_owned(),
                     limit: u64::from(u32::MAX),
                 })?;
-
-            let canvas_bytes = usize::try_from(total_pixels)
-                .ok()
-                .and_then(|pixels| pixels.checked_mul(3))
-                .ok_or_else(|| DocsightError::ResourceLimit {
-                    resource: "visual diff raster bytes".to_owned(),
-                    limit: u64::from(u32::MAX) * 3,
-                })?;
-            let mut diff_canvas = vec![245_u8; canvas_bytes];
-            let mut changed_pixels = 0_u32;
-
-            let mut min_x_pt = f32::INFINITY;
-            let mut min_y_pt = f32::INFINITY;
-            let mut max_x_pt = f32::NEG_INFINITY;
-            let mut max_y_pt = f32::NEG_INFINITY;
-
-            let px_a = img_a.pixels();
-            let px_b = img_b.pixels();
-
-            let wa = img_a.metadata.width_px;
-            let ha = img_a.metadata.height_px;
-            let wb = img_b.metadata.width_px;
-            let hb = img_b.metadata.height_px;
-
-            let scale = 72.0 / f32::from(dpi);
-
-            for y in 0..h {
-                for x in 0..w {
-                    let rgb_a = if x < wa && y < ha {
-                        let idx = rgb_index(x, y, wa)?;
-                        (px_a[idx], px_a[idx + 1], px_a[idx + 2])
-                    } else {
-                        (255, 255, 255)
-                    };
-
-                    let rgb_b = if x < wb && y < hb {
-                        let idx = rgb_index(x, y, wb)?;
-                        (px_b[idx], px_b[idx + 1], px_b[idx + 2])
-                    } else {
-                        (255, 255, 255)
-                    };
-
-                    let diff_r = rgb_a.0.abs_diff(rgb_b.0);
-                    let diff_g = rgb_a.1.abs_diff(rgb_b.1);
-                    let diff_b = rgb_a.2.abs_diff(rgb_b.2);
-                    let max_diff = diff_r.max(diff_g).max(diff_b);
-
-                    let out_idx = rgb_index(x, y, w)?;
-                    if max_diff > threshold {
-                        changed_pixels = changed_pixels.checked_add(1).ok_or_else(|| {
-                            DocsightError::ResourceLimit {
-                                resource: "changed visual diff pixels".to_owned(),
-                                limit: u64::from(u32::MAX),
-                            }
-                        })?;
-                        diff_canvas[out_idx] = 235;
-                        diff_canvas[out_idx + 1] = 40;
-                        diff_canvas[out_idx + 2] = 40;
-
-                        let x_pt = x as f32 * scale;
-                        let y_pt = y as f32 * scale;
-                        min_x_pt = min_x_pt.min(x_pt);
-                        min_y_pt = min_y_pt.min(y_pt);
-                        max_x_pt = max_x_pt.max(x_pt);
-                        max_y_pt = max_y_pt.max(y_pt);
-                    } else {
-                        let gray = ((u16::from(rgb_a.0) + u16::from(rgb_a.1) + u16::from(rgb_a.2))
-                            / 3) as u8;
-                        let subdued = 220 + (gray / 8);
-                        diff_canvas[out_idx] = subdued;
-                        diff_canvas[out_idx + 1] = subdued;
-                        diff_canvas[out_idx + 2] = subdued;
-                    }
-                }
+        let canvas_bytes = usize::try_from(total_pixels)
+            .ok()
+            .and_then(|pixels| pixels.checked_mul(3))
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: "visual diff raster bytes".to_owned(),
+                limit: u64::from(u32::MAX) * 3,
+            })?;
+        let mut diff_canvas = vec![245_u8; canvas_bytes];
+        let scale = 72.0 / f32::from(dpi);
+        let (changed_pixels, changed_regions) = match (&before_image, &after_image) {
+            (Some(before), Some(after)) => compare_visual_pages(
+                before,
+                after,
+                width,
+                height,
+                threshold,
+                scale,
+                &mut diff_canvas,
+            )?,
+            (Some(before), None) => {
+                fill_changed_canvas(&mut diff_canvas);
+                (total_pixels, vec![before.metadata.bbox])
             }
-
-            let mut changed_regions = Vec::new();
-            if changed_pixels > 0 {
-                layout_changed_pages = layout_changed_pages.checked_add(1).ok_or_else(|| {
-                    DocsightError::ResourceLimit {
-                        resource: "visually changed pages".to_owned(),
-                        limit: u64::from(u32::MAX),
-                    }
-                })?;
-                changed_regions.push(Rect::new(
-                    min_x_pt,
-                    min_y_pt,
-                    max_x_pt.max(min_x_pt + 1.0),
-                    max_y_pt.max(min_y_pt + 1.0),
-                )?);
+            (None, Some(after)) => {
+                fill_changed_canvas(&mut diff_canvas);
+                (total_pixels, vec![after.metadata.bbox])
             }
-
-            let change_fraction = if total_pixels > 0 {
-                changed_pixels as f32 / total_pixels as f32
-            } else {
-                0.0
-            };
-
-            let diff_png = if changed_pixels > 0 || out_dir.is_some() {
-                let png_bytes = encode_png(w, h, &diff_canvas)?;
-                if let Some(dir) = out_dir {
-                    let file_path = dir.join(format!("diff_p{p:04}.png"));
-                    std::fs::write(&file_path, &png_bytes).map_err(|error| DocsightError::Io {
-                        path: file_path,
-                        source: error,
-                    })?;
-                }
-                Some(png_bytes)
-            } else {
-                None
-            };
-
-            page_diffs.push(PageVisualDiff {
-                page: p,
-                changed_pixels,
-                total_pixels,
-                change_fraction,
-                changed_regions,
-                diff_png,
-            });
-        } else {
+            (None, None) => {
+                return Err(DocsightError::MalformedDocument {
+                    message: "visual diff page has no source on either side".to_owned(),
+                });
+            }
+        };
+        if changed_pixels > 0 {
             layout_changed_pages = layout_changed_pages.checked_add(1).ok_or_else(|| {
                 DocsightError::ResourceLimit {
                     resource: "visually changed pages".to_owned(),
                     limit: u64::from(u32::MAX),
                 }
             })?;
-            page_diffs.push(PageVisualDiff {
-                page: p,
-                changed_pixels: 0,
-                total_pixels: 0,
-                change_fraction: 1.0,
-                changed_regions: Vec::new(),
-                diff_png: None,
-            });
         }
+        let change_fraction = if total_pixels > 0 {
+            changed_pixels as f32 / total_pixels as f32
+        } else {
+            0.0
+        };
+        let diff_png = if changed_pixels > 0 || out_dir.is_some() {
+            let png_bytes = encode_png(width, height, &diff_canvas)?;
+            if let Some(dir) = out_dir {
+                let file_path = dir.join(format!("diff_p{p:04}.png"));
+                std::fs::write(&file_path, &png_bytes).map_err(|error| DocsightError::Io {
+                    path: file_path,
+                    source: error,
+                })?;
+            }
+            Some(png_bytes)
+        } else {
+            None
+        };
+        let page_reason_codes = visual_reason_codes(doc_before, doc_after, Some(p));
+        let page_authoritative = page_reason_codes.is_empty();
+        page_diffs.push(PageVisualDiff {
+            page: p,
+            authoritative: page_authoritative,
+            evidence_status: if page_authoritative {
+                VisualDiffEvidenceStatus::Exact
+            } else {
+                VisualDiffEvidenceStatus::EvidenceLimited
+            },
+            reason_codes: page_reason_codes,
+            changed_pixels,
+            total_pixels,
+            change_fraction,
+            changed_regions,
+            diff_png,
+        });
     }
 
     Ok(VisualDiff {
+        authoritative,
+        evidence_status,
+        reason_codes,
         pages_before,
         pages_after,
         layout_changed_pages,
@@ -1945,6 +1928,104 @@ pub fn diff_visual(
         largest_drift_page,
         page_diffs,
     })
+}
+
+fn visual_reason_codes(before: &Document, after: &Document, page: Option<u32>) -> Vec<String> {
+    before
+        .warnings
+        .iter()
+        .chain(after.warnings.iter())
+        .filter(|warning| page.is_none() || warning.page.is_none() || warning.page == page)
+        .map(|warning| warning.code.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn compare_visual_pages(
+    before: &docsight_render::RenderedImage,
+    after: &docsight_render::RenderedImage,
+    width: u32,
+    height: u32,
+    threshold: u8,
+    scale: f32,
+    diff_canvas: &mut [u8],
+) -> Result<(u32, Vec<Rect>), DocsightError> {
+    let mut changed_pixels = 0_u32;
+    let mut min_x_pt = f32::INFINITY;
+    let mut min_y_pt = f32::INFINITY;
+    let mut max_x_pt = f32::NEG_INFINITY;
+    let mut max_y_pt = f32::NEG_INFINITY;
+    for y in 0..height {
+        for x in 0..width {
+            let before_rgb = visual_pixel(before, x, y)?;
+            let after_rgb = visual_pixel(after, x, y)?;
+            let difference = before_rgb
+                .0
+                .abs_diff(after_rgb.0)
+                .max(before_rgb.1.abs_diff(after_rgb.1))
+                .max(before_rgb.2.abs_diff(after_rgb.2));
+            let output_index = rgb_index(x, y, width)?;
+            if difference > threshold {
+                changed_pixels =
+                    changed_pixels
+                        .checked_add(1)
+                        .ok_or_else(|| DocsightError::ResourceLimit {
+                            resource: "changed visual diff pixels".to_owned(),
+                            limit: u64::from(u32::MAX),
+                        })?;
+                diff_canvas[output_index] = 235;
+                diff_canvas[output_index + 1] = 40;
+                diff_canvas[output_index + 2] = 40;
+                let x_pt = x as f32 * scale;
+                let y_pt = y as f32 * scale;
+                min_x_pt = min_x_pt.min(x_pt);
+                min_y_pt = min_y_pt.min(y_pt);
+                max_x_pt = max_x_pt.max(x_pt);
+                max_y_pt = max_y_pt.max(y_pt);
+            } else {
+                let gray =
+                    ((u16::from(before_rgb.0) + u16::from(before_rgb.1) + u16::from(before_rgb.2))
+                        / 3) as u8;
+                let subdued = 220 + (gray / 8);
+                diff_canvas[output_index] = subdued;
+                diff_canvas[output_index + 1] = subdued;
+                diff_canvas[output_index + 2] = subdued;
+            }
+        }
+    }
+    let regions = if changed_pixels == 0 {
+        Vec::new()
+    } else {
+        vec![Rect::new(
+            min_x_pt,
+            min_y_pt,
+            max_x_pt.max(min_x_pt + 1.0),
+            max_y_pt.max(min_y_pt + 1.0),
+        )?]
+    };
+    Ok((changed_pixels, regions))
+}
+
+fn visual_pixel(
+    image: &docsight_render::RenderedImage,
+    x: u32,
+    y: u32,
+) -> Result<(u8, u8, u8), DocsightError> {
+    if x >= image.metadata.width_px || y >= image.metadata.height_px {
+        return Ok((255, 255, 255));
+    }
+    let index = rgb_index(x, y, image.metadata.width_px)?;
+    let pixels = image.pixels();
+    Ok((pixels[index], pixels[index + 1], pixels[index + 2]))
+}
+
+fn fill_changed_canvas(canvas: &mut [u8]) {
+    for pixel in canvas.chunks_exact_mut(3) {
+        pixel[0] = 235;
+        pixel[1] = 40;
+        pixel[2] = 40;
+    }
 }
 
 fn rgb_index(x: u32, y: u32, width: u32) -> Result<usize, DocsightError> {

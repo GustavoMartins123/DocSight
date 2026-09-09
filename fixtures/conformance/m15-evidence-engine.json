@@ -639,7 +639,7 @@
     {
       "file": "diff-result.json",
       "id": "https://docsight.dev/schemas/v2/diff-result.json",
-      "sha256": "03b18e522b49a3a5ac7e2d87a319338a0d0e5a9321147b59f11c7b6001df7da8"
+      "sha256": "21f81a40f9bb04167e500433ae11d114fe09db8433c3e261a5ff50666721e740"
     },
     {
       "file": "error-envelope.json",

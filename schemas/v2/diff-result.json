@@ -86,9 +86,81 @@
       }
     },
     "warnings": { "type": "array" },
-    "visual": { "type": "object" }
+    "visual": { "$ref": "#/$defs/visual_diff" }
   },
   "$defs": {
+    "rect": {
+      "type": "object",
+      "required": ["x0", "y0", "x1", "y1"],
+      "properties": {
+        "x0": { "type": "number" },
+        "y0": { "type": "number" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" }
+      }
+    },
+    "visual_page_diff": {
+      "type": "object",
+      "required": [
+        "page",
+        "authoritative",
+        "evidence_status",
+        "reason_codes",
+        "changed_pixels",
+        "total_pixels",
+        "change_fraction",
+        "changed_regions"
+      ],
+      "properties": {
+        "page": { "type": "integer", "minimum": 1 },
+        "authoritative": { "type": "boolean" },
+        "evidence_status": { "enum": ["exact", "evidence_limited"] },
+        "reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "changed_pixels": { "type": "integer", "minimum": 0 },
+        "total_pixels": { "type": "integer", "minimum": 0 },
+        "change_fraction": { "type": "number", "minimum": 0, "maximum": 1 },
+        "changed_regions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rect" }
+        }
+      }
+    },
+    "visual_diff": {
+      "type": "object",
+      "required": [
+        "authoritative",
+        "evidence_status",
+        "reason_codes",
+        "pages_before",
+        "pages_after",
+        "layout_changed_pages",
+        "largest_drift_pt",
+        "largest_drift_page",
+        "page_diffs"
+      ],
+      "properties": {
+        "authoritative": { "type": "boolean" },
+        "evidence_status": { "enum": ["exact", "evidence_limited"] },
+        "reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "pages_before": { "type": "integer", "minimum": 0 },
+        "pages_after": { "type": "integer", "minimum": 0 },
+        "layout_changed_pages": { "type": "integer", "minimum": 0 },
+        "largest_drift_pt": { "type": ["number", "null"] },
+        "largest_drift_page": { "type": ["integer", "null"], "minimum": 1 },
+        "page_diffs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/visual_page_diff" }
+        }
+      }
+    },
     "document_identity": {
       "type": "object",
       "required": ["id", "sha256"],
