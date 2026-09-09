@@ -1,0 +1,731 @@
+{
+  "docx": {
+    "coverage": {
+      "affected_objects_count": 50,
+      "document_sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
+      "format": "docx",
+      "global": {
+        "geometry": {
+          "reason_codes": [
+            "DOCX_FONT_SUBSTITUTED",
+            "DOCX_PAGINATION_BLOCK_GRANULAR"
+          ],
+          "score": 0.0,
+          "status": "unsupported"
+        },
+        "overall_fidelity": 0.5,
+        "page": 0,
+        "structure": {
+          "reason_codes": [],
+          "score": 1.0,
+          "status": "exact"
+        },
+        "text": {
+          "reason_codes": [],
+          "score": 1.0,
+          "status": "exact"
+        },
+        "visual": {
+          "reason_codes": [
+            "DOCX_FONT_SUBSTITUTED"
+          ],
+          "score": 0.0,
+          "status": "unsupported"
+        }
+      },
+      "pages": [
+        {
+          "geometry": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED",
+              "DOCX_PAGINATION_BLOCK_GRANULAR"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          },
+          "overall_fidelity": 0.5,
+          "page": 1,
+          "regions": [
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 1,
+              "reason_code": "DOCX_FONT_SUBSTITUTED",
+              "status": "unsupported"
+            },
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 1,
+              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
+              "status": "approximated"
+            }
+          ],
+          "structure": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "text": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "visual": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          }
+        },
+        {
+          "geometry": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED",
+              "DOCX_PAGINATION_BLOCK_GRANULAR"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          },
+          "overall_fidelity": 0.5,
+          "page": 2,
+          "regions": [
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 2,
+              "reason_code": "DOCX_FONT_SUBSTITUTED",
+              "status": "unsupported"
+            },
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 2,
+              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
+              "status": "approximated"
+            }
+          ],
+          "structure": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "text": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "visual": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          }
+        },
+        {
+          "geometry": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED",
+              "DOCX_PAGINATION_BLOCK_GRANULAR"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          },
+          "overall_fidelity": 0.5,
+          "page": 3,
+          "regions": [
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 3,
+              "reason_code": "DOCX_FONT_SUBSTITUTED",
+              "status": "unsupported"
+            },
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 3,
+              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
+              "status": "approximated"
+            }
+          ],
+          "structure": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "text": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "visual": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          }
+        }
+      ],
+      "reason_codes": [
+        "DOCX_FONT_SUBSTITUTED",
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_PAGINATION_BLOCK_GRANULAR"
+      ]
+    },
+    "evidence": {
+      "document": {
+        "id": "doc_4a59107057e1bfd3a83fd83fff868f8b",
+        "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+      },
+      "result": {
+        "bbox": {
+          "x0": 90.0,
+          "x1": 522.0,
+          "y0": 72.0,
+          "y1": 100.25
+        },
+        "document_digest": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
+        "fidelity": {
+          "geometry": 0.0,
+          "reasons": [
+            "DOCX_FONT_SUBSTITUTED",
+            "DOCX_LAYOUT_PAGINATED",
+            "DOCX_PAGINATION_BLOCK_GRANULAR"
+          ],
+          "structure": 1.0,
+          "text": 1.0,
+          "visual": 0.0
+        },
+        "kind": "heading",
+        "object_id": "h_515ad605791c12fc496c1c18d79f6526",
+        "page": 1,
+        "reading_order": 1,
+        "render_fingerprint": "332569ddd833b1a9f7b0d504db3b3eeace4207650cbeac99c9ae51da5e9555f5",
+        "source_path": "/word/document.xml::body/p[1]",
+        "text_fragment": "Application Architecture Guide",
+        "z_index": 0
+      },
+      "warnings": [
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_SUBSTITUTED",
+        "DOCX_PAGINATION_BLOCK_GRANULAR"
+      ]
+    },
+    "hit": {
+      "query_page": 1,
+      "query_point": [
+        100.0,
+        80.0
+      ],
+      "targets": [
+        {
+          "bbox": {
+            "x0": 90.0,
+            "x1": 522.0,
+            "y0": 72.0,
+            "y1": 100.25
+          },
+          "kind": "heading",
+          "object_id": "h_515ad605791c12fc496c1c18d79f6526",
+          "page": 1,
+          "reading_order": 1,
+          "source_path": "/word/document.xml::body/p[1]",
+          "text_snippet": "Application Architecture Guide",
+          "z_index": 0
+        }
+      ],
+      "total_hits": 1
+    },
+    "lineage": {
+      "first_record": {
+        "after_object": "h_bf8066c3166ffbf9f96a456b40511468",
+        "before_object": "h_bf8066c3166ffbf9f96a456b40511468",
+        "evidence": [
+          {
+            "after": "sha256:1c3a5aa0ae86efcc3faf6d6d40d568f1",
+            "before": "sha256:1c3a5aa0ae86efcc3faf6d6d40d568f1",
+            "kind": "normalized_text",
+            "score": 1.0,
+            "weight": 0.44999998807907104
+          },
+          {
+            "after": "/word/document.xml::body/p[45]",
+            "before": "/word/document.xml::body/p[45]",
+            "kind": "source_path",
+            "score": 1.0,
+            "weight": 0.15000000596046448
+          },
+          {
+            "after": "Heading4",
+            "before": "Heading4",
+            "kind": "style",
+            "score": 1.0,
+            "weight": 0.07999999821186066
+          },
+          {
+            "after": "p3:90.00,307.58,522.00,330.33",
+            "before": "p3:90.00,307.58,522.00,330.33",
+            "kind": "geometry",
+            "score": 1.0,
+            "weight": 0.07999999821186066
+          },
+          {
+            "after": "previous=sha256:4b11508e40541fde54a034370aee86b5;next=sha256:f7214d5756f8cb1015ef86a336dc8a5e",
+            "before": "previous=sha256:4b11508e40541fde54a034370aee86b5;next=sha256:f7214d5756f8cb1015ef86a336dc8a5e",
+            "kind": "neighborhood",
+            "score": 1.0,
+            "weight": 0.09000000357627869
+          },
+          {
+            "after": "1.000",
+            "before": "1.000",
+            "kind": "object_confidence",
+            "score": 1.0,
+            "weight": 0.05000000074505806
+          }
+        ],
+        "id": "lin_0367a62277cf9725b4555fc5fcfb847c",
+        "match_score": 1.0,
+        "status": "matched",
+        "target_type": "heading"
+      },
+      "summary": {
+        "evidence_limited_changes": 0,
+        "images": {
+          "added": 0,
+          "modified": 0,
+          "moved": 0,
+          "removed": 0
+        },
+        "largest_drift_page": null,
+        "largest_drift_pt": null,
+        "layout_changed_pages": 0,
+        "lineage_ambiguous": 0,
+        "pages_after": 3,
+        "pages_before": 3,
+        "semantic_changes": 0,
+        "tables": {
+          "added": 0,
+          "modified": 0,
+          "moved": 0,
+          "removed": 0
+        },
+        "warnings": [
+          "DOCX_LAYOUT_PAGINATED: DOCX was paginated using deterministic layout engine",
+          "DOCX_FONT_SUBSTITUTED: layout used deterministic proportional fallback font",
+          "DOCX_PAGINATION_BLOCK_GRANULAR: pagination never splits a block across pages",
+          "DOCX_LAYOUT_PAGINATED: DOCX was paginated using deterministic layout engine",
+          "DOCX_FONT_SUBSTITUTED: layout used deterministic proportional fallback font",
+          "DOCX_PAGINATION_BLOCK_GRANULAR: pagination never splits a block across pages"
+        ]
+      },
+      "total_records": 50
+    },
+    "render": {
+      "bbox": {
+        "x0": 0.0,
+        "x1": 612.0,
+        "y0": 0.0,
+        "y1": 792.0
+      },
+      "decision_coverage": {
+        "display_list_operations": "verified",
+        "glyph_metrics": "verified",
+        "line_breaks": "verified",
+        "pagination": "verified",
+        "resolved_resources": "verified",
+        "table_sizing": "verified"
+      },
+      "display_list_sha256": "cc5e13b4f8031a5b1d2f912a3efb5b5d797be6bfb55441bd2fe0009ab44a473e",
+      "display_operation_count": 39,
+      "document": {
+        "id": "doc_4a59107057e1bfd3a83fd83fff868f8b",
+        "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+      },
+      "dpi": 72,
+      "glyph_run_count": 39,
+      "height_px": 792,
+      "page": 1,
+      "pagination_decision_count": 17,
+      "raster_sha256": "5965fdf8c6747897b874735a804fb94135e3c06f7df743921faff9b3148367d4",
+      "resource_count": 0,
+      "table_sizing_decision_count": 0,
+      "trace_sha256": "be3afab75665cdc700831607ab60b6f6607e93cabdc39183cf9622f27390f560",
+      "warnings": [
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_SUBSTITUTED",
+        "DOCX_PAGINATION_BLOCK_GRANULAR"
+      ],
+      "width_px": 612
+    },
+    "replay": {
+      "decision_coverage": {
+        "display_list_operations": "verified",
+        "glyph_metrics": "verified",
+        "line_breaks": "verified",
+        "pagination": "verified",
+        "resolved_resources": "verified",
+        "table_sizing": "verified"
+      },
+      "target": {
+        "bbox": {
+          "x0": 0.0,
+          "x1": 612.0,
+          "y0": 0.0,
+          "y1": 792.0
+        },
+        "dpi": 72,
+        "page": 1,
+        "selector": {
+          "kind": "page",
+          "page": 1
+        }
+      },
+      "trace_schema": "docsight.trace/v2",
+      "verification": {
+        "display_list_sha256": "cc5e13b4f8031a5b1d2f912a3efb5b5d797be6bfb55441bd2fe0009ab44a473e",
+        "document_sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
+        "raster_sha256": "5965fdf8c6747897b874735a804fb94135e3c06f7df743921faff9b3148367d4",
+        "schema": "docsight.trace/v2",
+        "trace_sha256": "be3afab75665cdc700831607ab60b6f6607e93cabdc39183cf9622f27390f560",
+        "valid": true
+      },
+      "warnings": [
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_SUBSTITUTED",
+        "DOCX_PAGINATION_BLOCK_GRANULAR"
+      ]
+    }
+  },
+  "failures": [
+    {
+      "diagnostic": "UNSUPPORTED_FORMAT",
+      "effect": "the document was not inspected",
+      "exit_code": 10,
+      "name": "unsupported_format"
+    },
+    {
+      "diagnostic": "MALFORMED_DOCUMENT",
+      "effect": "the document was rejected during parsing",
+      "exit_code": 11,
+      "name": "malformed_document"
+    },
+    {
+      "diagnostic": "OBJECT_NOT_FOUND",
+      "effect": "no document object was returned",
+      "exit_code": 21,
+      "name": "object_not_found"
+    },
+    {
+      "diagnostic": "USAGE",
+      "effect": "the requested operation was not performed",
+      "exit_code": 2,
+      "name": "output_limit"
+    }
+  ],
+  "pdf": {
+    "coverage": {
+      "affected_objects_count": 1,
+      "document_sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362",
+      "format": "pdf",
+      "global": {
+        "geometry": {
+          "reason_codes": [],
+          "score": 0.0,
+          "status": "unsupported"
+        },
+        "overall_fidelity": 0.4977499842643738,
+        "page": 0,
+        "structure": {
+          "reason_codes": [],
+          "score": 0.99099999666214,
+          "status": "inferred"
+        },
+        "text": {
+          "reason_codes": [],
+          "score": 1.0,
+          "status": "exact"
+        },
+        "visual": {
+          "reason_codes": [
+            "APPROXIMATED_PDF_FONT"
+          ],
+          "score": 0.0,
+          "status": "unsupported"
+        }
+      },
+      "pages": [
+        {
+          "geometry": {
+            "reason_codes": [],
+            "score": 0.0,
+            "status": "unsupported"
+          },
+          "overall_fidelity": 0.4977499842643738,
+          "page": 1,
+          "regions": [
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 1,
+              "reason_code": "APPROXIMATED_PDF_FONT",
+              "status": "unsupported"
+            }
+          ],
+          "structure": {
+            "reason_codes": [],
+            "score": 0.99099999666214,
+            "status": "inferred"
+          },
+          "text": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "visual": {
+            "reason_codes": [
+              "APPROXIMATED_PDF_FONT"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          }
+        }
+      ],
+      "reason_codes": [
+        "APPROXIMATED_PDF_FONT"
+      ]
+    },
+    "evidence": {
+      "document": {
+        "id": "doc_9074f729c7f4a39c0f6753300b7b4c08",
+        "sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362"
+      },
+      "result": {
+        "bbox": {
+          "x0": 50.11625671386719,
+          "x1": 741.8837890625,
+          "y0": 53.71624755859375,
+          "y1": 351.6473083496094
+        },
+        "confidence": 0.99099999666214,
+        "document_digest": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362",
+        "fidelity": {
+          "geometry": 0.0,
+          "reasons": [
+            "APPROXIMATED_PDF_FONT"
+          ],
+          "structure": 0.99099999666214,
+          "text": 1.0,
+          "visual": 0.0
+        },
+        "kind": "table",
+        "object_id": "tbl_b54dbb45da2a78dec493d24c309ea8c0",
+        "page": 1,
+        "reading_order": 1,
+        "render_fingerprint": "246cb28219192cd2be56df66f19775092fa5d2812ae77dcde4a7f8d3f366051d",
+        "source_path": "pdf::page[1]::table[0]::ruled",
+        "text_fragment": "\t\tEVENT A: 05/09\tEVENT B: 17/09\t\tEVENT C: 26/09\t\t\nGRUPO:\tORBITA\tLOTE:\t47\t\t\t\t\t\t\t\t\nID\tA1\tR1\tA2\tR2\tA3\tR3\tA4\tR4\tA5\tR5\t\n1\t3,8\t10,0\t8,0\t9,0\t2,9\t14,3\t\t\t\t\t\n2\t18,0\t10,0\t5,2\t4,6\t13,8\t13,0\t\t\t\t\t\n3\t5,9\t7,0\t10,5\t14,7\t4,7\t2,9\t\t\t\t\t\n4\t9,0\t5,7\t17,0\t3,8\t13,0\t14,9\t\t\t\t\t\n5\t6,1\t13,2\t14,8\t13,8\t18,4\t5,9\t\t\t\t\t\n6\t8,2\t15,2\t17,4...",
+        "z_index": 0
+      },
+      "warnings": [
+        "APPROXIMATED_PDF_FONT"
+      ]
+    },
+    "render": {
+      "bbox": {
+        "x0": 0.0,
+        "x1": 792.0,
+        "y0": 0.0,
+        "y1": 612.0
+      },
+      "decision_coverage": {
+        "display_list_operations": "verified",
+        "glyph_metrics": "verified",
+        "line_breaks": "not_applicable",
+        "pagination": "not_applicable",
+        "resolved_resources": "verified",
+        "table_sizing": "not_applicable"
+      },
+      "display_list_sha256": "488f46fc73dfd338530b5544ac0f9b4d462b652717e524fda820b6f80c62630f",
+      "display_operation_count": 183,
+      "document": {
+        "id": "doc_9074f729c7f4a39c0f6753300b7b4c08",
+        "sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362"
+      },
+      "dpi": 36,
+      "glyph_run_count": 158,
+      "height_px": 306,
+      "page": 1,
+      "pagination_decision_count": 0,
+      "raster_sha256": "9d5afa9b2df155e72362fb3885c33948dae680d7de25edbdf884907865daf6df",
+      "resource_count": 4,
+      "table_sizing_decision_count": 0,
+      "trace_sha256": "5537ec764fadbe12354bd561ce18a331ba71a81c26c9ec5138f7dc8035c4881c",
+      "warnings": [
+        "APPROXIMATED_PDF_FONT"
+      ],
+      "width_px": 396
+    },
+    "replay": {
+      "decision_coverage": {
+        "display_list_operations": "verified",
+        "glyph_metrics": "verified",
+        "line_breaks": "not_applicable",
+        "pagination": "not_applicable",
+        "resolved_resources": "verified",
+        "table_sizing": "not_applicable"
+      },
+      "target": {
+        "bbox": {
+          "x0": 0.0,
+          "x1": 792.0,
+          "y0": 0.0,
+          "y1": 612.0
+        },
+        "dpi": 36,
+        "page": 1,
+        "selector": {
+          "kind": "page",
+          "page": 1
+        }
+      },
+      "trace_schema": "docsight.trace/v2",
+      "verification": {
+        "display_list_sha256": "488f46fc73dfd338530b5544ac0f9b4d462b652717e524fda820b6f80c62630f",
+        "document_sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362",
+        "raster_sha256": "9d5afa9b2df155e72362fb3885c33948dae680d7de25edbdf884907865daf6df",
+        "schema": "docsight.trace/v2",
+        "trace_sha256": "5537ec764fadbe12354bd561ce18a331ba71a81c26c9ec5138f7dc8035c4881c",
+        "valid": true
+      },
+      "warnings": [
+        "APPROXIMATED_PDF_FONT"
+      ]
+    }
+  },
+  "public_schemas": [
+    {
+      "file": "agent-envelope.json",
+      "id": "https://docsight.dev/schemas/v2/agent-envelope.json",
+      "sha256": "897c03bc3132df2da1eb827ef7c367fb44435883293beb9633ce2c2aecdeed2b"
+    },
+    {
+      "file": "bundle-result.json",
+      "id": "https://docsight.dev/schemas/v2/bundle-result.json",
+      "sha256": "769051c80a370d0f6ab19f73b41fae6fedd851b63d2611965e7b3be5e97caf47"
+    },
+    {
+      "file": "capabilities-envelope.json",
+      "id": "https://docsight.dev/schemas/v2/capabilities-envelope.json",
+      "sha256": "faa7e2c51505ad1d2557e3298dc5df213ccde37e0c7f193fe03a6a9a6a854210"
+    },
+    {
+      "file": "capabilities-result.json",
+      "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
+      "sha256": "521779683a63da4c1f3fd710f3305af50fddda0b0f8b2fbf4a3ed7d1eeef1b00"
+    },
+    {
+      "file": "context-result.json",
+      "id": "https://docsight.dev/schemas/v2/context-result.json",
+      "sha256": "02b148fa5f9c93965950027e66f3d15433d7637bdd2d0355ae8427a5cbf75700"
+    },
+    {
+      "file": "coverage-report.json",
+      "id": "https://docsight.dev/schemas/v2/coverage-report.json",
+      "sha256": "7a67786653d1c32bd903199d7e7c2de1df80647d69beb412aa0cab0afd32b775"
+    },
+    {
+      "file": "diagnostic.json",
+      "id": "https://docsight.dev/schemas/v2/diagnostic.json",
+      "sha256": "f63192faa837b5621f702e622f15de9561f890e7fbbfabded7983c199aa0954d"
+    },
+    {
+      "file": "diff-result.json",
+      "id": "https://docsight.dev/schemas/v2/diff-result.json",
+      "sha256": "03b18e522b49a3a5ac7e2d87a319338a0d0e5a9321147b59f11c7b6001df7da8"
+    },
+    {
+      "file": "error-envelope.json",
+      "id": "https://docsight.dev/schemas/v2/error-envelope.json",
+      "sha256": "f19fbd706152ace9466f1ea64b816c25b54e1fc6e863cae94969862474323732"
+    },
+    {
+      "file": "evidence-record.json",
+      "id": "https://docsight.dev/schemas/v2/evidence-record.json",
+      "sha256": "2e441fd929d6e0c9d077c608bfb5ef5a1de4362f21f9c065341866673ccb6a9f"
+    },
+    {
+      "file": "hit-result.json",
+      "id": "https://docsight.dev/schemas/v2/hit-result.json",
+      "sha256": "f69d716914dd0344698e3da26929d455b475404315e00b2d5dc67f790a913e26"
+    },
+    {
+      "file": "inspect-result.json",
+      "id": "https://docsight.dev/schemas/v2/inspect-result.json",
+      "sha256": "edd747699f98321f349858a4a97c6c86b0a1f25a9c54484226957396d944371e"
+    },
+    {
+      "file": "ndjson-event.json",
+      "id": "https://docsight.dev/schemas/v2/ndjson-event.json",
+      "sha256": "bf6877e63adba3a502c83e6c594ff4ac1c845c5e597fa85732660e759d6abdb5"
+    },
+    {
+      "file": "overview-result.json",
+      "id": "https://docsight.dev/schemas/v2/overview-result.json",
+      "sha256": "d00fd1b216cb9c74f3efd4fc02ba909e1b6f02e2c00f33aaba80c3bfae6ca354"
+    },
+    {
+      "file": "peek-result.json",
+      "id": "https://docsight.dev/schemas/v2/peek-result.json",
+      "sha256": "15822aa7ad8bd4edaab24ee9896cd6b82855a6f9ba3de8292bb5045af7569b33"
+    },
+    {
+      "file": "proof-bundle-manifest.json",
+      "id": "https://docsight.dev/schemas/v2/proof-bundle-manifest.json",
+      "sha256": "c540ae6b647f3d6acc1ddfe3b28eefb6bbf42b5b467e488d93add528f372ea4e"
+    },
+    {
+      "file": "render-result.json",
+      "id": "https://docsight.dev/schemas/v2/render-result.json",
+      "sha256": "ca8bb5e9846b6b04b35896faaa460a81cd79b205a86f254bdc5b289776fe885f"
+    },
+    {
+      "file": "replay-result.json",
+      "id": "https://docsight.dev/schemas/v2/replay-result.json",
+      "sha256": "e941192a672e38a8624967a986e82046a05d087acae3b0511a612e18aad2d2bf"
+    },
+    {
+      "file": "resolve-result.json",
+      "id": "https://docsight.dev/schemas/v2/resolve-result.json",
+      "sha256": "6ba04daee508e7bbdf6de06e441d37dc28cbf56bdaaf70e2416ad66df502737f"
+    },
+    {
+      "file": "semantic-object.json",
+      "id": "https://docsight.dev/schemas/v2/semantic-object.json",
+      "sha256": "f52f0f86c559621d04c8f8ed3bef9a7aa519c53b3c9c45f1c856c39f42f549fc"
+    },
+    {
+      "file": "semantic-viewport.json",
+      "id": "https://docsight.dev/schemas/v2/semantic-viewport.json",
+      "sha256": "f996bd28bfcd16f3f571973de61084adaaa9663865438bba1346c0e46d215a7a"
+    },
+    {
+      "file": "spatial-query-result.json",
+      "id": "https://docsight.dev/schemas/v2/spatial-query-result.json",
+      "sha256": "a37a94f7e81cf7b24d067b138522d735d3835b3c85cdcb488bf29dfb23ef782c"
+    },
+    {
+      "file": "trace-manifest.json",
+      "id": "https://docsight.dev/schemas/v2/trace-manifest.json",
+      "sha256": "b98dd61c40b1404d5b1453611d32a97526f61d3c4cca2886b3a366f2e524bb2d"
+    },
+    {
+      "file": "trace-result.json",
+      "id": "https://docsight.dev/schemas/v2/trace-result.json",
+      "sha256": "91e98e72b14289eb796b6e57b18af89620933d75f58d7583a3ad78d6e4274471"
+    },
+    {
+      "file": "verify-result.json",
+      "id": "https://docsight.dev/schemas/v2/verify-result.json",
+      "sha256": "f59e1ab719b9e981f9099c0b36ed49f7ca9774f8d568cb7ead6e591cb0809aca"
+    }
+  ],
+  "schema": "docsight.conformance/v1"
+}

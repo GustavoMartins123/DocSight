@@ -48,7 +48,13 @@
         "overview.landmark",
         "focus.summary",
         "focus.object",
-        "focus.visual_reference"
+        "focus.visual_reference",
+        "peek.summary",
+        "peek.object",
+        "context",
+        "context.candidate",
+        "resolve.summary",
+        "resolve.candidate"
       ]
     }
   }

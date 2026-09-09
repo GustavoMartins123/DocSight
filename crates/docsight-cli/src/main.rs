@@ -20,11 +20,15 @@ use docsight_render::{
     },
 };
 use docsight_search::{
-    PageRange, SemanticViewport, SpatialQueryResult, execute_spatial_query, focus_object,
-    focus_pages, overview as document_overview,
+    PageRange, PeekResult, ResolveCandidate, ResolveReason, ResolveResult, ResolveStatus,
+    SemanticKind, SemanticObject, SemanticViewport, SpatialQueryResult, TextMatch, ViewportObject,
+    ViewportRole, context_neighborhood, execute_spatial_query, focus_object, focus_pages,
+    overview as document_overview, peek_object, peek_pages, peek_section,
+    resolve as resolve_descriptor,
 };
 use serde::Serialize;
 use sha2::Digest;
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -284,6 +288,49 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Peek {
+        path: PathBuf,
+        #[arg(long)]
+        page: Option<u32>,
+        #[arg(long, value_parser = parse_page_range)]
+        pages: Option<PageRange>,
+        #[arg(long)]
+        object: Option<String>,
+        #[arg(long)]
+        section: Option<u32>,
+        #[arg(long)]
+        related: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Context {
+        path: PathBuf,
+        object: Option<String>,
+        #[arg(long)]
+        find: Option<String>,
+        #[arg(long, value_enum)]
+        kind: Option<InteractionKind>,
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            default_value = "content,neighbors,geometry,fidelity,provenance,heading,related"
+        )]
+        include: Vec<ContextInclude>,
+        #[arg(long)]
+        json: bool,
+    },
+    Resolve {
+        path: PathBuf,
+        #[arg(long)]
+        text: String,
+        #[arg(long, value_enum)]
+        kind: Option<InteractionKind>,
+        #[arg(long, value_parser = parse_page_range)]
+        pages: Option<PageRange>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -293,6 +340,55 @@ enum TableFormat {
     Csv,
     Html,
     Tsv,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum ContextInclude {
+    Content,
+    Neighbors,
+    Geometry,
+    Fidelity,
+    Provenance,
+    Heading,
+    Related,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum InteractionKind {
+    Paragraph,
+    Heading,
+    ListItem,
+    Table,
+    Figure,
+    Shape,
+    Note,
+    Unknown,
+    Header,
+    Footer,
+    Watermark,
+    CommentMarker,
+    Annotation,
+}
+
+impl From<InteractionKind> for SemanticKind {
+    fn from(value: InteractionKind) -> Self {
+        match value {
+            InteractionKind::Paragraph => Self::Paragraph,
+            InteractionKind::Heading => Self::Heading,
+            InteractionKind::ListItem => Self::ListItem,
+            InteractionKind::Table => Self::Table,
+            InteractionKind::Figure => Self::Figure,
+            InteractionKind::Shape => Self::Shape,
+            InteractionKind::Note => Self::Note,
+            InteractionKind::Unknown => Self::Unknown,
+            InteractionKind::Header => Self::Header,
+            InteractionKind::Footer => Self::Footer,
+            InteractionKind::Watermark => Self::Watermark,
+            InteractionKind::CommentMarker => Self::CommentMarker,
+            InteractionKind::Annotation => Self::Annotation,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -487,6 +583,145 @@ struct FocusNdjsonSummary {
     target: docsight_search::ViewportTarget,
     scope_pages: Vec<u32>,
     total_objects: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct PeekNdjsonSummary {
+    target: docsight_search::PeekTarget,
+    scope_pages: Vec<u32>,
+    total_objects: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ResolveNdjsonSummary {
+    query: docsight_search::ResolveQuery,
+    status: ResolveStatus,
+    total_candidates: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ContextSelectionMode {
+    ExplicitObject,
+    Find,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextSelection {
+    mode: ContextSelectionMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    descriptor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chosen_object: Option<ObjectId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched_range: Option<TextMatch>,
+    reasons: Vec<ResolveReason>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextPage {
+    number: u32,
+    width_pt: f32,
+    height_pt: f32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextSection {
+    id: ObjectId,
+    index: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ContextSectionStatus {
+    Exact,
+    NotApplicable,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextContainers {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<ContextPage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    section: Option<ContextSection>,
+    section_status: ContextSectionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    section_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextRelatedObject {
+    role: ViewportRole,
+    confidence: f32,
+    provenance: String,
+    object: SemanticObject,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextGeometry {
+    available: bool,
+    coordinate_system: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bbox: Option<Rect>,
+    z_index: i32,
+    reading_order: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextFidelity {
+    available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    structure: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geometry: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual: Option<f32>,
+    reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextProvenance {
+    source_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_offset: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_length: Option<u64>,
+    confidence: f32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextPackage {
+    target: SemanticObject,
+    containers: ContextContainers,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    heading: Option<ContextRelatedObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    neighbors: Option<Vec<ContextRelatedObject>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    related: Option<Vec<ContextRelatedObject>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geometry: Option<ContextGeometry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fidelity: Option<ContextFidelity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ContextProvenance>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextResult {
+    status: ResolveStatus,
+    selection: ContextSelection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<ContextPackage>,
+    total_candidates: usize,
+    candidates: Vec<ResolveCandidate>,
 }
 
 fn main() -> ExitCode {
@@ -871,6 +1106,63 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
+        Command::Peek {
+            path,
+            page,
+            pages,
+            object,
+            section,
+            related,
+            json,
+        } => peek(PeekArgs {
+            path,
+            page: *page,
+            pages: *pages,
+            object: object.as_deref(),
+            section: *section,
+            related: *related,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Context {
+            path,
+            object,
+            find,
+            kind,
+            include,
+            json,
+        } => context(ContextArgs {
+            path,
+            object: object.as_deref(),
+            find: find.as_deref(),
+            kind: kind.map(Into::into),
+            include,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
+        Command::Resolve {
+            path,
+            text,
+            kind,
+            pages,
+            json,
+        } => resolve(ResolveArgs {
+            path,
+            text,
+            kind: kind.map(Into::into),
+            pages: *pages,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
     }
 }
 
@@ -901,6 +1193,8 @@ const AGENT_LIMITS: &[&str] = &[
 ];
 const DEFAULT_QUERY_ITEMS: usize = 100;
 const DEFAULT_VIEWPORT_ITEMS: usize = 64;
+const DEFAULT_PEEK_ITEMS: usize = 32;
+const DEFAULT_RESOLVE_ITEMS: usize = 20;
 
 fn bounded_machine_limits(limits: &QueryLimits, default_max_items: usize) -> QueryLimits {
     let mut effective = limits.clone();
@@ -1071,6 +1365,27 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             CommandCapability {
                 name: "focus",
                 summary: "return a bounded semantic neighborhood around an object or page range",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "peek",
+                summary: "return a compact structural projection for a page, range, object or section",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "context",
+                summary: "aggregate selected content, neighborhood, geometry, fidelity and provenance",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                bounded: true,
+            },
+            CommandCapability {
+                name: "resolve",
+                summary: "rank deterministic descriptor matches with explainable component scores",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
                 bounded: true,
@@ -2985,6 +3300,669 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
         .map_err(stdout_error)?;
     }
     emit_warnings(&document.warnings, args.quiet, args.json_errors)
+}
+
+struct PeekArgs<'a> {
+    path: &'a Path,
+    page: Option<u32>,
+    pages: Option<PageRange>,
+    object: Option<&'a str>,
+    section: Option<u32>,
+    related: bool,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let target_count = [
+        args.page.is_some(),
+        args.pages.is_some(),
+        args.object.is_some(),
+        args.section.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if target_count != 1 {
+        return Err(DocsightError::InvalidArgument {
+            message: "peek requires exactly one of --page, --pages, --object or --section"
+                .to_owned(),
+        });
+    }
+    if args.related && args.object.is_none() {
+        return Err(DocsightError::InvalidArgument {
+            message: "peek --related requires --object".to_owned(),
+        });
+    }
+    let result = match (args.page, args.pages, args.object, args.section) {
+        (Some(page), None, None, None) => peek_pages(&document, PageRange::new(page, page)?)?,
+        (None, Some(pages), None, None) => peek_pages(&document, pages)?,
+        (None, None, Some(object), None) => peek_object(&document, object, args.related)?,
+        (None, None, None, Some(section)) => peek_section(&document, section)?,
+        _ => {
+            return Err(DocsightError::InvalidArgument {
+                message: "peek target combination is invalid".to_owned(),
+            });
+        }
+    };
+    let scope = continuation_scope(
+        "peek",
+        &serde_json::to_string(&result.target).map_err(output_serialization_error)?,
+    );
+    let limits = bounded_machine_limits(args.limits, DEFAULT_PEEK_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            scope,
+            source.sha256().to_owned(),
+            1 + result.objects.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(PeekNdjsonSummary {
+            target: result.target.clone(),
+            scope_pages: result.scope_pages.clone(),
+            total_objects: result.total_objects,
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("peek.summary", &summary)? {
+            for warning in &document.warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        for (index, object) in result.objects.iter().enumerate() {
+            if index + 1 < offset {
+                continue;
+            }
+            let value = serde_json::to_value(object).map_err(output_serialization_error)?;
+            if !writer.write_item("peek.object", &value)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let target = result.target.clone();
+        let scope_pages = result.scope_pages.clone();
+        let total_objects = result.total_objects;
+        let envelope = apply_bounded_collection(
+            &result.objects,
+            &limits,
+            &scope,
+            &source,
+            document.warnings,
+            |objects| {
+                serde_json::to_value(PeekResult {
+                    target: target.clone(),
+                    scope_pages: scope_pages.clone(),
+                    total_objects,
+                    objects,
+                })
+                .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Peek: {:?}", result.target).map_err(stdout_error)?;
+    writeln!(writer, "Objects: {}", result.total_objects).map_err(stdout_error)?;
+    for item in &result.objects {
+        let roles = item
+            .relationships
+            .iter()
+            .map(|relationship| format!("{:?}", relationship.role))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            writer,
+            "[{}] {:?} page {:?}: {}",
+            item.object.id, item.object.kind, item.object.page, roles
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, args.quiet, args.json_errors)
+}
+
+struct ResolveArgs<'a> {
+    path: &'a Path,
+    text: &'a str,
+    kind: Option<SemanticKind>,
+    pages: Option<PageRange>,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let result = resolve_descriptor(&document, args.text, args.kind, args.pages)?;
+    let query_scope = serde_json::to_string(&result.query).map_err(output_serialization_error)?;
+    let scope = continuation_scope("resolve", &query_scope);
+    let limits = bounded_machine_limits(args.limits, DEFAULT_RESOLVE_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            scope,
+            source.sha256().to_owned(),
+            1 + result.candidates.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(ResolveNdjsonSummary {
+            query: result.query.clone(),
+            status: result.status,
+            total_candidates: result.total_candidates,
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("resolve.summary", &summary)? {
+            for warning in &document.warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        for (index, candidate) in result.candidates.iter().enumerate() {
+            if index + 1 < offset {
+                continue;
+            }
+            let value = serde_json::to_value(candidate).map_err(output_serialization_error)?;
+            if !writer.write_item("resolve.candidate", &value)? {
+                break;
+            }
+        }
+        for warning in &document.warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let query = result.query.clone();
+        let status = result.status;
+        let total_candidates = result.total_candidates;
+        let envelope = apply_bounded_collection(
+            &result.candidates,
+            &limits,
+            &scope,
+            &source,
+            document.warnings,
+            |candidates| {
+                serde_json::to_value(ResolveResult {
+                    query: query.clone(),
+                    status,
+                    total_candidates,
+                    candidates,
+                })
+                .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Resolve: {:?}", result.status).map_err(stdout_error)?;
+    for candidate in &result.candidates {
+        writeln!(
+            writer,
+            "[{:.6}] [{}] {:?} page {:?}",
+            candidate.score, candidate.object.id, candidate.object.kind, candidate.object.page
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&document.warnings, args.quiet, args.json_errors)
+}
+
+struct ContextArgs<'a> {
+    path: &'a Path,
+    object: Option<&'a str>,
+    find: Option<&'a str>,
+    kind: Option<SemanticKind>,
+    include: &'a [ContextInclude],
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
+    let include = args.include.iter().copied().collect::<BTreeSet<_>>();
+    if include.len() != args.include.len() {
+        return Err(DocsightError::InvalidArgument {
+            message: "context --include values must not be duplicated".to_owned(),
+        });
+    }
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let mut warnings = document.warnings.clone();
+    let (status, selection, total_candidates, candidates, target) = match (args.object, args.find) {
+        (Some(object), None) if args.kind.is_none() => {
+            context_neighborhood(&document, object, false)?;
+            let object_id = ObjectId::from_raw(object);
+            let reason = ResolveReason {
+                code: docsight_search::ResolveReasonCode::ExplicitObjectId,
+                score: 1.0,
+                weight: 1.0,
+                contribution: 1.0,
+                evidence: Some(object.to_owned()),
+            };
+            (
+                ResolveStatus::Resolved,
+                ContextSelection {
+                    mode: ContextSelectionMode::ExplicitObject,
+                    descriptor: None,
+                    chosen_object: Some(object_id.clone()),
+                    matched_range: None,
+                    reasons: vec![reason],
+                },
+                0,
+                Vec::new(),
+                Some(object_id),
+            )
+        }
+        (Some(_), None) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "context --kind is valid only with --find".to_owned(),
+            });
+        }
+        (None, Some(find)) => {
+            let resolved = resolve_descriptor(&document, find, args.kind, None)?;
+            let chosen = (resolved.status == ResolveStatus::Resolved)
+                .then(|| resolved.candidates.first())
+                .flatten();
+            let selection = ContextSelection {
+                mode: ContextSelectionMode::Find,
+                descriptor: Some(find.to_owned()),
+                chosen_object: chosen.map(|candidate| candidate.object.id.clone()),
+                matched_range: chosen.and_then(|candidate| candidate.matched_range.clone()),
+                reasons: chosen
+                    .map(|candidate| candidate.reasons.clone())
+                    .unwrap_or_default(),
+            };
+            let target = chosen.map(|candidate| candidate.object.id.clone());
+            let total_candidates = resolved.total_candidates;
+            let candidates = if resolved.status == ResolveStatus::Resolved {
+                Vec::new()
+            } else {
+                resolved.candidates
+            };
+            (
+                resolved.status,
+                selection,
+                total_candidates,
+                candidates,
+                target,
+            )
+        }
+        (Some(_), Some(_)) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "context accepts either an object target or --find, not both".to_owned(),
+            });
+        }
+        (None, None) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "context requires an object target or --find".to_owned(),
+            });
+        }
+    };
+    let package = target
+        .as_ref()
+        .map(|target| build_context_package(&document, &source, target, &include, &mut warnings))
+        .transpose()?;
+    let result = ContextResult {
+        status,
+        selection,
+        context: package,
+        total_candidates,
+        candidates,
+    };
+    let scope_input = serde_json::to_string(&serde_json::json!({
+        "object": args.object,
+        "find": args.find,
+        "kind": args.kind,
+        "include": args.include
+    }))
+    .map_err(output_serialization_error)?;
+    let scope = continuation_scope("context", &scope_input);
+    let limits = bounded_machine_limits(args.limits, DEFAULT_RESOLVE_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            scope,
+            source.sha256().to_owned(),
+            1 + result.candidates.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(ContextResult {
+            status: result.status,
+            selection: result.selection.clone(),
+            context: result.context.clone(),
+            total_candidates: result.total_candidates,
+            candidates: Vec::new(),
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("context", &summary)? {
+            for warning in &warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        for (index, candidate) in result.candidates.iter().enumerate() {
+            if index + 1 < offset {
+                continue;
+            }
+            let value = serde_json::to_value(candidate).map_err(output_serialization_error)?;
+            if !writer.write_item("context.candidate", &value)? {
+                break;
+            }
+        }
+        for warning in &warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let status = result.status;
+        let selection = result.selection.clone();
+        let package = result.context.clone();
+        let total_candidates = result.total_candidates;
+        let envelope = apply_bounded_collection(
+            &result.candidates,
+            &limits,
+            &scope,
+            &source,
+            warnings,
+            |candidates| {
+                serde_json::to_value(ContextResult {
+                    status,
+                    selection: selection.clone(),
+                    context: package.clone(),
+                    total_candidates,
+                    candidates,
+                })
+                .map_err(output_serialization_error)
+            },
+        )?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(writer, "Context: {:?}", result.status).map_err(stdout_error)?;
+    if let Some(chosen) = &result.selection.chosen_object {
+        writeln!(writer, "Object: {chosen}").map_err(stdout_error)?;
+    }
+    if let Some(package) = &result.context {
+        writeln!(writer, "Page: {:?}", package.target.page).map_err(stdout_error)?;
+        writeln!(writer, "Kind: {:?}", package.target.kind).map_err(stdout_error)?;
+    }
+    emit_warnings(&warnings, args.quiet, args.json_errors)
+}
+
+fn build_context_package(
+    document: &Document,
+    source: &DocumentSource,
+    target_id: &ObjectId,
+    include: &BTreeSet<ContextInclude>,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<ContextPackage, DocsightError> {
+    let neighborhood = context_neighborhood(
+        document,
+        target_id.as_str(),
+        include.contains(&ContextInclude::Related),
+    )?;
+    let target = neighborhood
+        .objects
+        .iter()
+        .find(|entry| {
+            entry.object.id == *target_id
+                && entry
+                    .relationships
+                    .iter()
+                    .any(|relationship| relationship.role == ViewportRole::Target)
+        })
+        .map(|entry| entry.object.clone())
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: target_id.to_string(),
+        })?;
+    let block = document.find_block(target_id.as_str());
+    let overlay = document
+        .pages
+        .iter()
+        .flat_map(|page| page.overlays.iter())
+        .find(|overlay| overlay.id == *target_id);
+    if block.is_none() && overlay.is_none() {
+        return Err(DocsightError::ObjectNotFound {
+            object: target_id.to_string(),
+        });
+    }
+    let page = target
+        .page
+        .and_then(|number| document.page(number))
+        .map(|page| ContextPage {
+            number: page.number,
+            width_pt: page.width_pt,
+            height_pt: page.height_pt,
+        });
+    let (section, section_status, section_reason) = match document.format {
+        DocumentFormat::Pdf => (
+            None,
+            ContextSectionStatus::NotApplicable,
+            Some("PDF documents do not have DOCX sections".to_owned()),
+        ),
+        DocumentFormat::Docx
+            if document.sections.len() == 1
+                && !document
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "DOCX_SECTIONS_COLLAPSED") =>
+        {
+            let section = document.sections.first().map(|section| ContextSection {
+                id: section.id.clone(),
+                index: section.section_index,
+            });
+            (section, ContextSectionStatus::Exact, None)
+        }
+        DocumentFormat::Docx => {
+            warnings.push(Diagnostic {
+                code: "CONTEXT_SECTION_UNAVAILABLE".to_owned(),
+                severity: DiagnosticSeverity::Warning,
+                message: "the target page cannot be assigned to one canonical DOCX section"
+                    .to_owned(),
+                effect: "context omits the containing section".to_owned(),
+                object: Some(target_id.clone()),
+                page: target.page,
+            });
+            (
+                None,
+                ContextSectionStatus::Unavailable,
+                Some("canonical page-to-section mapping is unavailable".to_owned()),
+            )
+        }
+    };
+    let content = if include.contains(&ContextInclude::Content) {
+        match (block, overlay) {
+            (Some(block), _) => {
+                Some(serde_json::to_value(&block.content).map_err(output_serialization_error)?)
+            }
+            (None, Some(overlay)) => Some(serde_json::json!({
+                "type": "overlay",
+                "kind": overlay.kind,
+                "text": overlay.text
+            })),
+            (None, None) => None,
+        }
+    } else {
+        None
+    };
+    let provenance = if include.contains(&ContextInclude::Provenance) {
+        match (block, overlay) {
+            (Some(block), _) => Some(ContextProvenance {
+                source_path: block.source.path.clone(),
+                source_offset: block.source.offset,
+                source_length: block.source.length,
+                confidence: block.confidence,
+            }),
+            (None, Some(overlay)) => Some(ContextProvenance {
+                source_path: overlay.source.path.clone(),
+                source_offset: overlay.source.offset,
+                source_length: overlay.source.length,
+                confidence: 1.0,
+            }),
+            (None, None) => None,
+        }
+    } else {
+        None
+    };
+    let fidelity = if include.contains(&ContextInclude::Fidelity) {
+        match block {
+            Some(_) => {
+                let glyph_coverage = document_glyph_coverage(document, source);
+                let evidence = compute_evidence(document, source, target_id, None, glyph_coverage)?;
+                Some(ContextFidelity {
+                    available: true,
+                    text: Some(evidence.fidelity.text),
+                    structure: Some(evidence.fidelity.structure),
+                    geometry: Some(evidence.fidelity.geometry),
+                    visual: Some(evidence.fidelity.visual),
+                    reasons: evidence.fidelity.reasons,
+                })
+            }
+            None => {
+                warnings.push(Diagnostic {
+                    code: "CONTEXT_FIDELITY_UNAVAILABLE".to_owned(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: "object-level fidelity is unavailable for this overlay".to_owned(),
+                    effect: "context exposes provenance and geometry but no fidelity scores"
+                        .to_owned(),
+                    object: Some(target_id.clone()),
+                    page: target.page,
+                });
+                Some(ContextFidelity {
+                    available: false,
+                    text: None,
+                    structure: None,
+                    geometry: None,
+                    visual: None,
+                    reasons: vec!["CONTEXT_FIDELITY_UNAVAILABLE".to_owned()],
+                })
+            }
+        }
+    } else {
+        None
+    };
+    let geometry = include
+        .contains(&ContextInclude::Geometry)
+        .then(|| ContextGeometry {
+            available: target.page.is_some() && target.bbox.is_some(),
+            coordinate_system: "page-local points at 1/72 inch with top-left origin",
+            page: target.page,
+            bbox: target.bbox,
+            z_index: target.z_index,
+            reading_order: target.reading_order,
+        });
+    let heading = include
+        .contains(&ContextInclude::Heading)
+        .then(|| first_related(&neighborhood.objects, &[ViewportRole::ParentHeading]))
+        .flatten();
+    let neighbors = include.contains(&ContextInclude::Neighbors).then(|| {
+        related_objects(
+            &neighborhood.objects,
+            &[ViewportRole::Previous, ViewportRole::Next],
+        )
+    });
+    let related = include.contains(&ContextInclude::Related).then(|| {
+        related_objects(
+            &neighborhood.objects,
+            &[ViewportRole::RelatedCaption, ViewportRole::RelatedNote],
+        )
+    });
+    Ok(ContextPackage {
+        target,
+        containers: ContextContainers {
+            page,
+            section,
+            section_status,
+            section_reason,
+        },
+        heading,
+        neighbors,
+        related,
+        content,
+        geometry,
+        fidelity,
+        provenance,
+    })
+}
+
+fn first_related(
+    objects: &[ViewportObject],
+    roles: &[ViewportRole],
+) -> Option<ContextRelatedObject> {
+    related_objects(objects, roles).into_iter().next()
+}
+
+fn related_objects(
+    objects: &[ViewportObject],
+    roles: &[ViewportRole],
+) -> Vec<ContextRelatedObject> {
+    let mut related = objects
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .relationships
+                .iter()
+                .filter(|relationship| roles.contains(&relationship.role))
+                .map(|relationship| ContextRelatedObject {
+                    role: relationship.role,
+                    confidence: relationship.confidence,
+                    provenance: relationship.provenance.clone(),
+                    object: entry.object.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    related.sort_by(|left, right| {
+        left.object
+            .page
+            .unwrap_or(u32::MAX)
+            .cmp(&right.object.page.unwrap_or(u32::MAX))
+            .then_with(|| left.object.reading_order.cmp(&right.object.reading_order))
+            .then_with(|| left.object.id.cmp(&right.object.id))
+            .then_with(|| format!("{:?}", left.role).cmp(&format!("{:?}", right.role)))
+    });
+    related
 }
 
 struct DiffCommandArgs<'a> {

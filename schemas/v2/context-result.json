@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/context-result.json",
+  "title": "ContextResult",
+  "type": "object",
+  "required": ["status", "selection", "total_candidates", "candidates"],
+  "properties": {
+    "status": { "$ref": "resolve-result.json#/$defs/status" },
+    "selection": {
+      "type": "object",
+      "required": ["mode", "reasons"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["explicit_object", "find"] },
+        "descriptor": { "type": "string" },
+        "chosen_object": { "type": "string", "pattern": "^[a-z_]+_[0-9a-f]{32}$" },
+        "matched_range": { "$ref": "resolve-result.json#/$defs/text_match" },
+        "reasons": {
+          "type": "array",
+          "items": { "$ref": "resolve-result.json#/$defs/reason" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "context": { "$ref": "#/$defs/context" },
+    "total_candidates": { "type": "integer", "minimum": 0 },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "resolve-result.json#/$defs/candidate" }
+    }
+  },
+  "$defs": {
+    "page": {
+      "type": "object",
+      "required": ["number", "width_pt", "height_pt"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "width_pt": { "type": "number", "exclusiveMinimum": 0 },
+        "height_pt": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "section": {
+      "type": "object",
+      "required": ["id", "index"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^sect_[0-9a-f]{32}$" },
+        "index": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "containers": {
+      "type": "object",
+      "required": ["section_status"],
+      "properties": {
+        "page": { "$ref": "#/$defs/page" },
+        "section": { "$ref": "#/$defs/section" },
+        "section_status": {
+          "type": "string",
+          "enum": ["exact", "not_applicable", "unavailable"]
+        },
+        "section_reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "related_object": {
+      "type": "object",
+      "required": ["role", "confidence", "provenance", "object"],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "target",
+            "page_range",
+            "parent_heading",
+            "previous",
+            "next",
+            "related_caption",
+            "related_note"
+          ]
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "provenance": { "type": "string", "minLength": 1 },
+        "object": { "$ref": "semantic-object.json" }
+      },
+      "additionalProperties": false
+    },
+    "geometry": {
+      "type": "object",
+      "required": ["available", "coordinate_system", "z_index", "reading_order"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "coordinate_system": { "type": "string", "minLength": 1 },
+        "page": { "type": "integer", "minimum": 1 },
+        "bbox": {
+          "type": "object",
+          "required": ["x0", "y0", "x1", "y1"],
+          "properties": {
+            "x0": { "type": "number" },
+            "y0": { "type": "number" },
+            "x1": { "type": "number" },
+            "y1": { "type": "number" }
+          },
+          "additionalProperties": false
+        },
+        "z_index": { "type": "integer" },
+        "reading_order": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "fidelity": {
+      "type": "object",
+      "required": ["available", "reasons"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "text": { "type": "number", "minimum": 0, "maximum": 1 },
+        "structure": { "type": "number", "minimum": 0, "maximum": 1 },
+        "geometry": { "type": "number", "minimum": 0, "maximum": 1 },
+        "visual": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source_path", "confidence"],
+      "properties": {
+        "source_path": { "type": "string", "minLength": 1 },
+        "source_offset": { "type": "integer", "minimum": 0 },
+        "source_length": { "type": "integer", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "content": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "paragraph",
+            "heading",
+            "list_item",
+            "table",
+            "figure",
+            "shape",
+            "note",
+            "unknown",
+            "overlay"
+          ]
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": ["target", "containers"],
+      "properties": {
+        "target": { "$ref": "semantic-object.json" },
+        "containers": { "$ref": "#/$defs/containers" },
+        "heading": { "$ref": "#/$defs/related_object" },
+        "neighbors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/related_object" }
+        },
+        "related": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/related_object" }
+        },
+        "content": { "$ref": "#/$defs/content" },
+        "geometry": { "$ref": "#/$defs/geometry" },
+        "fidelity": { "$ref": "#/$defs/fidelity" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

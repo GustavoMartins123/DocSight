@@ -10,6 +10,10 @@ const MAX_DQL_BYTES: usize = 16 * 1024;
 const MAX_SEMANTIC_OBJECTS: usize = 100_000;
 const MAX_SPATIAL_COMPARISONS: usize = 1_000_000;
 const MAX_VIEWPORT_PAGES: usize = 32;
+const MAX_PEEK_PAGES: usize = 8;
+const MAX_RESOLVE_TEXT_BYTES: usize = 4 * 1024;
+const RESOLVE_THRESHOLD: f64 = 0.35;
+const RESOLVE_AMBIGUITY_MARGIN: f64 = 0.03;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1390,6 +1394,694 @@ fn visual_reference(page: u32, bbox: Rect) -> VisualReference {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum PeekTarget {
+    Page { page: u32 },
+    PageRange { start_page: u32, end_page: u32 },
+    Object { id: ObjectId },
+    Section { index: u32, id: ObjectId },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PeekResult {
+    pub target: PeekTarget,
+    pub scope_pages: Vec<u32>,
+    pub total_objects: usize,
+    pub objects: Vec<ViewportObject>,
+}
+
+pub fn peek_object(
+    document: &Document,
+    object_id: &str,
+    include_related: bool,
+) -> Result<PeekResult, DocsightError> {
+    let viewport = context_neighborhood(document, object_id, include_related)?;
+    Ok(PeekResult {
+        target: PeekTarget::Object {
+            id: ObjectId::from_raw(object_id),
+        },
+        scope_pages: viewport.scope_pages,
+        total_objects: viewport.total_objects,
+        objects: viewport.objects,
+    })
+}
+
+pub fn peek_pages(document: &Document, pages: PageRange) -> Result<PeekResult, DocsightError> {
+    let scope_count = document
+        .pages
+        .iter()
+        .filter(|page| pages.contains(page.number))
+        .count();
+    if scope_count > MAX_PEEK_PAGES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "peek pages".to_owned(),
+            limit: MAX_PEEK_PAGES as u64,
+        });
+    }
+    let viewport = focus_pages(document, pages)?;
+    let target = if pages.start == pages.end {
+        PeekTarget::Page { page: pages.start }
+    } else {
+        PeekTarget::PageRange {
+            start_page: pages.start,
+            end_page: pages.end,
+        }
+    };
+    Ok(PeekResult {
+        target,
+        scope_pages: viewport.scope_pages,
+        total_objects: viewport.total_objects,
+        objects: viewport.objects,
+    })
+}
+
+pub fn peek_section(document: &Document, index: u32) -> Result<PeekResult, DocsightError> {
+    if index == 0 {
+        return Err(DocsightError::InvalidArgument {
+            message: "peek --section uses one-based section indexes".to_owned(),
+        });
+    }
+    if document.format == DocumentFormat::Pdf {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "peek section targeting for PDF documents".to_owned(),
+        });
+    }
+    let section = document
+        .sections
+        .iter()
+        .find(|section| section.section_index == index)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: format!("section {index}"),
+        })?;
+    if document.sections.len() != 1
+        || document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_SECTIONS_COLLAPSED")
+    {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "peek section page mapping for multi-section documents".to_owned(),
+        });
+    }
+    let first_page = document
+        .pages
+        .first()
+        .map(|page| page.number)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: format!("section {index} pages"),
+        })?;
+    let last_page = document
+        .pages
+        .last()
+        .map(|page| page.number)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: format!("section {index} pages"),
+        })?;
+    let mut result = peek_pages(document, PageRange::new(first_page, last_page)?)?;
+    result.target = PeekTarget::Section {
+        index,
+        id: section.id.clone(),
+    };
+    Ok(result)
+}
+
+pub fn context_neighborhood(
+    document: &Document,
+    object_id: &str,
+    include_related: bool,
+) -> Result<SemanticViewport, DocsightError> {
+    let candidates = candidates(document)?;
+    let target_index = candidates
+        .iter()
+        .position(|candidate| candidate.object.id.as_str() == object_id)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: object_id.to_owned(),
+        })?;
+    let target = &candidates[target_index];
+    let mut selected = BTreeMap::new();
+    add_viewport_entry(
+        &mut selected,
+        target,
+        ViewportRelationship {
+            role: ViewportRole::Target,
+            confidence: 1.0,
+            provenance: "explicit_object_id".to_owned(),
+        },
+    );
+    if let Some(parent) = parent_heading(&candidates, target_index, target) {
+        add_viewport_entry(
+            &mut selected,
+            parent,
+            ViewportRelationship {
+                role: ViewportRole::ParentHeading,
+                confidence: 0.75,
+                provenance: "heading_level_and_reading_order".to_owned(),
+            },
+        );
+    }
+    let page_candidates = candidates
+        .iter()
+        .filter(|candidate| candidate.object.page == target.object.page)
+        .collect::<Vec<_>>();
+    if let Some(position) = page_candidates
+        .iter()
+        .position(|candidate| candidate.object.id == target.object.id)
+    {
+        if let Some(previous) = position
+            .checked_sub(1)
+            .and_then(|index| page_candidates.get(index))
+        {
+            add_viewport_entry(
+                &mut selected,
+                previous,
+                ViewportRelationship {
+                    role: ViewportRole::Previous,
+                    confidence: 1.0,
+                    provenance: "canonical_reading_order".to_owned(),
+                },
+            );
+        }
+        if let Some(next) = page_candidates.get(position + 1) {
+            add_viewport_entry(
+                &mut selected,
+                next,
+                ViewportRelationship {
+                    role: ViewportRole::Next,
+                    confidence: 1.0,
+                    provenance: "canonical_reading_order".to_owned(),
+                },
+            );
+        }
+    }
+    if include_related {
+        if let Some(target_geometry) = target.geometry()
+            && let Some(caption) = nearest_caption(&page_candidates, target, target_geometry.1)
+        {
+            add_viewport_entry(
+                &mut selected,
+                caption,
+                ViewportRelationship {
+                    role: ViewportRole::RelatedCaption,
+                    confidence: 0.5,
+                    provenance: "same_page_nearest_caption_geometry".to_owned(),
+                },
+            );
+        }
+        for note in page_candidates.iter().filter(|candidate| {
+            candidate.object.kind == SemanticKind::Note
+                && candidate.note_anchor_path.as_deref() == Some(target.object.source.as_str())
+        }) {
+            add_viewport_entry(
+                &mut selected,
+                note,
+                ViewportRelationship {
+                    role: ViewportRole::RelatedNote,
+                    confidence: 1.0,
+                    provenance: "source_anchor_path".to_owned(),
+                },
+            );
+        }
+    }
+    let mut objects = selected.into_values().collect::<Vec<_>>();
+    objects.sort_by(|left, right| {
+        left.object
+            .page
+            .unwrap_or(u32::MAX)
+            .cmp(&right.object.page.unwrap_or(u32::MAX))
+            .then_with(|| left.object.reading_order.cmp(&right.object.reading_order))
+            .then_with(|| left.object.id.cmp(&right.object.id))
+    });
+    let scope_pages = target.object.page.into_iter().collect::<Vec<_>>();
+    let visual_references = target
+        .geometry()
+        .map(|(page, bbox)| vec![visual_reference(page, bbox)])
+        .unwrap_or_default();
+    Ok(SemanticViewport {
+        target: ViewportTarget::Object {
+            id: target.object.id.clone(),
+        },
+        scope_pages,
+        total_objects: objects.len(),
+        objects,
+        visual_references,
+    })
+}
+
+fn nearest_caption<'a>(
+    page_candidates: &[&'a Candidate],
+    target: &Candidate,
+    target_bbox: Rect,
+) -> Option<&'a Candidate> {
+    page_candidates
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            candidate.object.id != target.object.id
+                && selector_kind_matches(candidate, SelectorKind::Caption)
+                && candidate.geometry().is_some()
+        })
+        .min_by(|left, right| {
+            let left_distance = left
+                .geometry()
+                .map(|(_, bbox)| rect_distance(target_bbox, bbox))
+                .unwrap_or(f64::INFINITY);
+            let right_distance = right
+                .geometry()
+                .map(|(_, bbox)| rect_distance(target_bbox, bbox))
+                .unwrap_or(f64::INFINITY);
+            left_distance
+                .total_cmp(&right_distance)
+                .then_with(|| canonical_candidate_cmp(left, right))
+        })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolveStatus {
+    Resolved,
+    Ambiguous,
+    NoMatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolveReasonCode {
+    ExplicitObjectId,
+    DirectText,
+    TokenOverlap,
+    KindConstraint,
+    CaptionText,
+    HeadingText,
+    PageConstraint,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveReason {
+    pub code: ResolveReasonCode,
+    pub score: f64,
+    pub weight: f64,
+    pub contribution: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TextMatch {
+    pub start_char: usize,
+    pub end_char: usize,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveCandidate {
+    pub object: SemanticObject,
+    pub score: f64,
+    pub reasons: Vec<ResolveReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_range: Option<TextMatch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveQuery {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<SemanticKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pages: Option<PageRange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveResult {
+    pub query: ResolveQuery,
+    pub status: ResolveStatus,
+    pub total_candidates: usize,
+    pub candidates: Vec<ResolveCandidate>,
+}
+
+pub fn resolve(
+    document: &Document,
+    text: &str,
+    kind: Option<SemanticKind>,
+    pages: Option<PageRange>,
+) -> Result<ResolveResult, DocsightError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(DocsightError::InvalidArgument {
+            message: "resolve --text must not be empty".to_owned(),
+        });
+    }
+    if text.len() > MAX_RESOLVE_TEXT_BYTES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "resolve text bytes".to_owned(),
+            limit: MAX_RESOLVE_TEXT_BYTES as u64,
+        });
+    }
+    let normalized_query = normalize_lexical(text);
+    if normalized_query.is_empty() {
+        return Err(DocsightError::InvalidArgument {
+            message: "resolve --text must contain letters or numbers".to_owned(),
+        });
+    }
+    let candidates = candidates(document)?;
+    let mut ranked = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
+            kind.is_none_or(|kind| candidate.object.kind == kind)
+                && pages.is_none_or(|pages| {
+                    candidate
+                        .object
+                        .page
+                        .is_some_and(|page| pages.contains(page))
+                })
+        })
+        .filter_map(|(index, candidate)| {
+            score_candidate(
+                &candidates,
+                index,
+                candidate,
+                text,
+                &normalized_query,
+                kind,
+                pages,
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| semantic_object_cmp(&left.object, &right.object))
+    });
+    let status = match ranked.as_slice() {
+        [] => ResolveStatus::NoMatch,
+        [first, ..] if first.score < RESOLVE_THRESHOLD => ResolveStatus::Ambiguous,
+        [first, second, ..] if first.score - second.score <= RESOLVE_AMBIGUITY_MARGIN => {
+            ResolveStatus::Ambiguous
+        }
+        _ => ResolveStatus::Resolved,
+    };
+    Ok(ResolveResult {
+        query: ResolveQuery {
+            text: text.to_owned(),
+            kind,
+            pages,
+        },
+        status,
+        total_candidates: ranked.len(),
+        candidates: ranked,
+    })
+}
+
+fn score_candidate(
+    candidates: &[Candidate],
+    index: usize,
+    candidate: &Candidate,
+    query: &str,
+    normalized_query: &str,
+    kind: Option<SemanticKind>,
+    pages: Option<PageRange>,
+) -> Option<ResolveCandidate> {
+    let normalized_text = normalize_lexical(&candidate.search_text);
+    let matched_range = find_casefold_range(&candidate.search_text, query)
+        .or_else(|| find_normalized_range(&candidate.search_text, query));
+    let direct_score = if normalized_text == normalized_query {
+        1.0
+    } else if normalized_text.contains(normalized_query) || matched_range.is_some() {
+        0.9
+    } else {
+        0.0
+    };
+    let token_score = token_overlap(normalized_query, &normalized_text);
+    let (caption_score, caption_evidence) =
+        related_caption_score(candidates, candidate, normalized_query);
+    let (heading_score, heading_evidence) =
+        related_heading_score(candidates, index, normalized_query);
+    if direct_score == 0.0 && token_score == 0.0 && caption_score == 0.0 && heading_score == 0.0 {
+        return None;
+    }
+    let mut reasons = vec![
+        resolve_reason(
+            ResolveReasonCode::DirectText,
+            direct_score,
+            0.5,
+            matched_range
+                .as_ref()
+                .map(|_| "normalized_substring".to_owned()),
+        ),
+        resolve_reason(
+            ResolveReasonCode::TokenOverlap,
+            token_score,
+            0.2,
+            (token_score > 0.0).then(|| "normalized_alphanumeric_tokens".to_owned()),
+        ),
+        resolve_reason(
+            ResolveReasonCode::CaptionText,
+            caption_score,
+            0.15,
+            caption_evidence,
+        ),
+        resolve_reason(
+            ResolveReasonCode::HeadingText,
+            heading_score,
+            0.1,
+            heading_evidence,
+        ),
+    ];
+    if kind.is_some() {
+        reasons.push(resolve_reason(
+            ResolveReasonCode::KindConstraint,
+            1.0,
+            0.03,
+            Some(format!("{:?}", candidate.object.kind).to_lowercase()),
+        ));
+    }
+    if pages.is_some() {
+        reasons.push(resolve_reason(
+            ResolveReasonCode::PageConstraint,
+            1.0,
+            0.02,
+            candidate.object.page.map(|page| format!("page:{page}")),
+        ));
+    }
+    let score = round_score(reasons.iter().map(|reason| reason.contribution).sum());
+    if score == 0.0 {
+        return None;
+    }
+    Some(ResolveCandidate {
+        object: candidate.object.clone(),
+        score,
+        reasons,
+        matched_range,
+    })
+}
+
+fn resolve_reason(
+    code: ResolveReasonCode,
+    score: f64,
+    weight: f64,
+    evidence: Option<String>,
+) -> ResolveReason {
+    ResolveReason {
+        code,
+        score: round_score(score),
+        weight,
+        contribution: round_score(score * weight),
+        evidence,
+    }
+}
+
+fn related_caption_score(
+    candidates: &[Candidate],
+    candidate: &Candidate,
+    query: &str,
+) -> (f64, Option<String>) {
+    let Some(page) = candidate.object.page else {
+        return (0.0, None);
+    };
+    candidates
+        .iter()
+        .filter(|other| {
+            other.object.page == Some(page)
+                && other.object.id != candidate.object.id
+                && selector_kind_matches(other, SelectorKind::Caption)
+        })
+        .filter_map(|caption| {
+            let lexical = lexical_relation_score(query, &caption.search_text);
+            if lexical == 0.0 {
+                return None;
+            }
+            let proximity = match (candidate.geometry(), caption.geometry()) {
+                (Some((_, candidate_bbox)), Some((_, caption_bbox))) => {
+                    1.0 / (1.0 + rect_distance(candidate_bbox, caption_bbox) / 72.0)
+                }
+                _ => 0.5,
+            };
+            Some((lexical * proximity, caption))
+        })
+        .max_by(|(left_score, left), (right_score, right)| {
+            left_score
+                .total_cmp(right_score)
+                .then_with(|| canonical_candidate_cmp(right, left))
+        })
+        .map(|(score, caption)| (score, Some(caption.object.id.to_string())))
+        .unwrap_or((0.0, None))
+}
+
+fn related_heading_score(
+    candidates: &[Candidate],
+    index: usize,
+    query: &str,
+) -> (f64, Option<String>) {
+    candidates[..index]
+        .iter()
+        .rev()
+        .find(|candidate| candidate.object.kind == SemanticKind::Heading)
+        .map(|heading| {
+            let score = lexical_relation_score(query, &heading.search_text);
+            (score, (score > 0.0).then(|| heading.object.id.to_string()))
+        })
+        .unwrap_or((0.0, None))
+}
+
+fn lexical_relation_score(query: &str, text: &str) -> f64 {
+    let text = normalize_lexical(text);
+    if query.is_empty() || text.is_empty() {
+        return 0.0;
+    }
+    if text == query {
+        1.0
+    } else if text.contains(query) || query.contains(&text) {
+        0.9
+    } else {
+        token_overlap(query, &text)
+    }
+}
+
+fn normalize_lexical(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut pending_space = false;
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() {
+            if pending_space && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push(character);
+            pending_space = false;
+        } else {
+            pending_space = true;
+        }
+    }
+    normalized
+}
+
+fn token_overlap(query: &str, text: &str) -> f64 {
+    let query_tokens = query.split_whitespace().collect::<BTreeSet<_>>();
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let text_tokens = text.split_whitespace().collect::<BTreeSet<_>>();
+    let matches = query_tokens.intersection(&text_tokens).count();
+    matches as f64 / query_tokens.len() as f64
+}
+
+fn find_casefold_range(text: &str, query: &str) -> Option<TextMatch> {
+    let (text_folded, text_map) = casefold_chars(text);
+    let (query_folded, _) = casefold_chars(query);
+    if query_folded.is_empty() || query_folded.len() > text_folded.len() {
+        return None;
+    }
+    let start = text_folded
+        .windows(query_folded.len())
+        .position(|window| window == query_folded.as_slice())?;
+    let start_char = *text_map.get(start)?;
+    let end_char = text_map
+        .get(start + query_folded.len() - 1)?
+        .checked_add(1)?;
+    let matched = text
+        .chars()
+        .skip(start_char)
+        .take(end_char - start_char)
+        .collect();
+    Some(TextMatch {
+        start_char,
+        end_char,
+        text: matched,
+    })
+}
+
+fn find_normalized_range(text: &str, query: &str) -> Option<TextMatch> {
+    let (text_normalized, text_map) = normalized_chars_with_map(text);
+    let (query_normalized, _) = normalized_chars_with_map(query);
+    if query_normalized.is_empty() || query_normalized.len() > text_normalized.len() {
+        return None;
+    }
+    let start = text_normalized
+        .windows(query_normalized.len())
+        .position(|window| window == query_normalized.as_slice())?;
+    let start_char = *text_map.get(start)?;
+    let end_char = text_map
+        .get(start + query_normalized.len() - 1)?
+        .checked_add(1)?;
+    let matched = text
+        .chars()
+        .skip(start_char)
+        .take(end_char - start_char)
+        .collect();
+    Some(TextMatch {
+        start_char,
+        end_char,
+        text: matched,
+    })
+}
+
+fn normalized_chars_with_map(value: &str) -> (Vec<char>, Vec<usize>) {
+    let mut normalized = Vec::new();
+    let mut source_indices = Vec::new();
+    let mut pending_space = false;
+    for (index, character) in value.chars().enumerate() {
+        for lowered in character.to_lowercase() {
+            if lowered.is_alphanumeric() {
+                if pending_space && !normalized.is_empty() {
+                    normalized.push(' ');
+                    source_indices.push(index);
+                }
+                normalized.push(lowered);
+                source_indices.push(index);
+                pending_space = false;
+            } else {
+                pending_space = true;
+            }
+        }
+    }
+    (normalized, source_indices)
+}
+
+fn casefold_chars(value: &str) -> (Vec<char>, Vec<usize>) {
+    let mut folded = Vec::new();
+    let mut source_indices = Vec::new();
+    for (index, character) in value.chars().enumerate() {
+        for lowered in character.to_lowercase() {
+            folded.push(lowered);
+            source_indices.push(index);
+        }
+    }
+    (folded, source_indices)
+}
+
+fn round_score(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn semantic_object_cmp(left: &SemanticObject, right: &SemanticObject) -> Ordering {
+    left.page
+        .unwrap_or(u32::MAX)
+        .cmp(&right.page.unwrap_or(u32::MAX))
+        .then_with(|| left.reading_order.cmp(&right.reading_order))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1661,6 +2353,79 @@ mod tests {
         }
         let result = focus_pages(&document, PageRange::new(1, 33)?);
         assert!(matches!(result, Err(DocsightError::ResourceLimit { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_ranks_direct_text_with_explainable_components()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let result = resolve(
+            &document()?,
+            "quarterly-results",
+            Some(SemanticKind::Paragraph),
+            None,
+        )?;
+        assert_eq!(result.status, ResolveStatus::Resolved);
+        assert_eq!(result.candidates[0].object.id.as_str(), "p_intro");
+        assert!(result.candidates[0].matched_range.is_some());
+        assert!(result.candidates[0].reasons.iter().any(|reason| {
+            reason.code == ResolveReasonCode::DirectText && reason.contribution > 0.0
+        }));
+        assert!(result.candidates[0].reasons.iter().any(|reason| {
+            reason.code == ResolveReasonCode::KindConstraint && reason.score == 1.0
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_exposes_ties_and_absent_lexical_evidence() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut document = document()?;
+        let mut duplicate = document.find_block("p_intro").ok_or("paragraph")?.clone();
+        duplicate.id = ObjectId::from_raw("p_duplicate");
+        duplicate.reading_order = 6;
+        document.blocks.push(duplicate);
+        let ambiguous = resolve(
+            &document,
+            "Quarterly results",
+            Some(SemanticKind::Paragraph),
+            None,
+        )?;
+        assert_eq!(ambiguous.status, ResolveStatus::Ambiguous);
+        assert_eq!(ambiguous.candidates.len(), 2);
+
+        let absent = resolve(
+            &document,
+            "nonexistent descriptor",
+            Some(SemanticKind::Table),
+            None,
+        )?;
+        assert_eq!(absent.status, ResolveStatus::NoMatch);
+        assert!(absent.candidates.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn peek_and_context_use_canonical_relationships_without_pixels()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let document = document()?;
+        let peek = peek_object(&document, "tbl_revenue", true)?;
+        assert_eq!(
+            peek.target,
+            PeekTarget::Object {
+                id: ObjectId::from_raw("tbl_revenue")
+            }
+        );
+        assert!(peek.objects.iter().any(|entry| {
+            entry.object.id.as_str() == "h_revenue"
+                && entry
+                    .relationships
+                    .iter()
+                    .any(|relationship| relationship.role == ViewportRole::ParentHeading)
+        }));
+        let context = context_neighborhood(&document, "tbl_revenue", true)?;
+        assert_eq!(context.visual_references.len(), 1);
+        assert!(!context.visual_references[0].artifact_available);
         Ok(())
     }
 }

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/resolve-result.json",
+  "title": "ResolveResult",
+  "type": "object",
+  "required": ["query", "status", "total_candidates", "candidates"],
+  "properties": {
+    "query": { "$ref": "#/$defs/query" },
+    "status": { "$ref": "#/$defs/status" },
+    "total_candidates": { "type": "integer", "minimum": 0 },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate" }
+    }
+  },
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": ["resolved", "ambiguous", "no_match"]
+    },
+    "semantic_kind": {
+      "type": "string",
+      "enum": [
+        "paragraph",
+        "heading",
+        "list_item",
+        "table",
+        "figure",
+        "shape",
+        "note",
+        "unknown",
+        "header",
+        "footer",
+        "watermark",
+        "comment_marker",
+        "annotation"
+      ]
+    },
+    "page_range": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 1 },
+        "end": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "query": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "$ref": "#/$defs/semantic_kind" },
+        "pages": { "$ref": "#/$defs/page_range" }
+      },
+      "additionalProperties": false
+    },
+    "text_match": {
+      "type": "object",
+      "required": ["start_char", "end_char", "text"],
+      "properties": {
+        "start_char": { "type": "integer", "minimum": 0 },
+        "end_char": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "reason": {
+      "type": "object",
+      "required": ["code", "score", "weight", "contribution"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "explicit_object_id",
+            "direct_text",
+            "token_overlap",
+            "kind_constraint",
+            "caption_text",
+            "heading_text",
+            "page_constraint"
+          ]
+        },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+        "contribution": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "required": ["object", "score", "reasons"],
+      "properties": {
+        "object": { "$ref": "semantic-object.json" },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reasons": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reason" }
+        },
+        "matched_range": { "$ref": "#/$defs/text_match" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -43,6 +43,35 @@ Supported relation names are `above`, `below`, `inside`, `overlaps`, `nearest`, 
 
 Viewport visual references are deterministic crop requests at 36 DPI. They carry page-local geometry and do not write or embed an image artifact; `artifact_available` is therefore always `false`. Use the existing `crop` command with the emitted page and bounding box when pixels are necessary.
 
+Use `peek` for compact structural sight without materializing full object content:
+
+```text
+docsight --agent peek input.docx --page 7
+docsight --agent peek input.pdf --pages 20..22
+docsight --agent peek input.docx --object tbl_0008 --related
+docsight --agent peek input.docx --section 1
+```
+
+Exactly one target is required. Page ranges are inclusive and limited to eight existing pages. Section targeting uses the canonical one-based DOCX section index and fails closed when the current layout cannot map a multi-section document to canonical page ranges. A peek result contains 240-character semantic snippets and typed relationship hints; it never embeds raster artifacts or full table content.
+
+Use `context` to aggregate evidence for an explicit object or to perform deterministic lookup and expansion in one call:
+
+```text
+docsight --agent context input.docx tbl_0008 --include content,neighbors,geometry,fidelity,provenance,heading,related
+docsight --agent context input.docx --find "quarterly revenue" --kind table
+```
+
+`content` is the canonical typed DIR content, including table spans and nested cell blocks. `neighbors`, `heading`, and `related` carry explicit roles, confidence, and provenance. `geometry`, `fidelity`, and `provenance` remain separate evidence surfaces. A `--find` request returns its descriptor, matched character range, selected object, and ranking components. Ambiguous or weak matches return `status: "ambiguous"` with ranked candidates and no silently chosen context. `--kind` is valid only with `--find`.
+
+Use `resolve` when the caller needs ranked navigation candidates rather than an expanded context:
+
+```text
+docsight --agent resolve input.docx --text "revenue table" --kind table
+docsight --agent resolve input.pdf --text "director signature" --pages 10..14
+```
+
+Resolve uses normalized lexical evidence, token overlap, object-kind and page constraints, nearby caption text, nearest preceding heading text, and canonical geometry for caption proximity. It does not use embeddings, a remote model, or natural-language question answering. Each candidate exposes the component score, weight, contribution, evidence anchor, and direct matched range when available. Scores below the resolution threshold and ties within the fixed ambiguity margin remain explicitly ambiguous.
+
 Compare revisions through the same machine profile:
 
 ```text
@@ -84,3 +113,5 @@ Agent errors use `schemas/v2/error-envelope.json` and include a stable diagnosti
 The M12 result contracts are `schemas/v2/spatial-query-result.json`, `schemas/v2/overview-result.json`, `schemas/v2/semantic-viewport.json`, and the shared `schemas/v2/semantic-object.json`.
 
 The M13 diff contract is `schemas/v2/diff-result.json`; its NDJSON event type is defined in `schemas/v2/ndjson-event.json`.
+
+The M16 interaction contracts are `schemas/v2/peek-result.json`, `schemas/v2/context-result.json`, and `schemas/v2/resolve-result.json`.
