@@ -88,6 +88,9 @@
             "integer",
             "null"
           ]
+        },
+        "projection": {
+          "$ref": "projection-selection.json"
         }
       },
       "additionalProperties": false

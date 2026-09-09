@@ -604,7 +604,7 @@
     {
       "file": "agent-envelope.json",
       "id": "https://docsight.dev/schemas/v2/agent-envelope.json",
-      "sha256": "897c03bc3132df2da1eb827ef7c367fb44435883293beb9633ce2c2aecdeed2b"
+      "sha256": "b1f287703e809c3f8fa97c0edae1c7371f6123e6411424aa1b80bdd68efaa86f"
     },
     {
       "file": "bundle-result.json",
@@ -675,6 +675,11 @@
       "file": "peek-result.json",
       "id": "https://docsight.dev/schemas/v2/peek-result.json",
       "sha256": "15822aa7ad8bd4edaab24ee9896cd6b82855a6f9ba3de8292bb5045af7569b33"
+    },
+    {
+      "file": "projection-selection.json",
+      "id": "https://docsight.dev/schemas/v2/projection-selection.json",
+      "sha256": "f8c0192e5db849da93a956f06c1033b75f298665a0f9526f613af84d2b747910"
     },
     {
       "file": "proof-bundle-manifest.json",

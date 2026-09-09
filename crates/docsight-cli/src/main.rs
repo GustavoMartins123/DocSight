@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use docsight_agent::{
-    AgentEnvelope, AgentErrorEnvelope, NdjsonWriter, OutputLimits, QueryLimits,
-    apply_bounded_collection, project_json, truncate_json_text_fields, validate_projection,
+    AgentEnvelope, AgentErrorEnvelope, NdjsonWriter, OutputLimits, ProjectionProfile, QueryLimits,
+    adaptive_agent_envelope, apply_bounded_collection, project_json, truncate_json_text_fields,
+    validate_projection,
 };
 use docsight_core::{
     BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
@@ -59,6 +60,22 @@ struct Cli {
     #[arg(long, global = true, help = "Hard limit for serialized output bytes")]
     max_bytes: Option<usize>,
 
+    #[arg(
+        long,
+        global = true,
+        value_parser = parse_byte_budget,
+        help = "Adaptive serialized-output byte budget, such as 4kb or 24kb"
+    )]
+    budget: Option<usize>,
+
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        help = "Fixed compact, balanced or rich evidence projection"
+    )]
+    budget_profile: Option<BudgetProfile>,
+
     #[arg(long, global = true, help = "Maximum number of result items")]
     max_items: Option<usize>,
 
@@ -95,6 +112,8 @@ impl Cli {
             text_limit: self.text_limit,
             continue_token: self.continue_token.clone(),
             select: self.select.clone(),
+            budget_bytes: self.budget,
+            budget_profile: self.budget_profile.map(Into::into),
         }
     }
 
@@ -106,6 +125,8 @@ impl Cli {
             || self.text_limit.is_some()
             || self.continue_token.is_some()
             || self.select.is_some()
+            || self.budget.is_some()
+            || self.budget_profile.is_some()
     }
 
     fn quiet_mode(&self) -> bool {
@@ -340,6 +361,23 @@ enum TableFormat {
     Csv,
     Html,
     Tsv,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum BudgetProfile {
+    Compact,
+    Balanced,
+    Rich,
+}
+
+impl From<BudgetProfile> for ProjectionProfile {
+    fn from(value: BudgetProfile) -> Self {
+        match value {
+            BudgetProfile::Compact => Self::Compact,
+            BudgetProfile::Balanced => Self::Balanced,
+            BudgetProfile::Rich => Self::Rich,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, clap::ValueEnum)]
@@ -814,6 +852,20 @@ fn main() -> ExitCode {
 }
 
 fn execute(cli: &Cli) -> Result<(), DocsightError> {
+    if cli.ndjson && (cli.budget.is_some() || cli.budget_profile.is_some()) {
+        return Err(DocsightError::InvalidArgument {
+            message: "--budget and --budget-profile require a bounded JSON envelope; use --max-bytes for NDJSON streams"
+                .to_owned(),
+        });
+    }
+    if matches!(cli.command, Command::Capabilities { .. })
+        && (cli.budget.is_some() || cli.budget_profile.is_some())
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: "--budget and --budget-profile apply to document evidence, not capabilities"
+                .to_owned(),
+        });
+    }
     let limits = cli.query_limits();
     let quiet = cli.quiet_mode();
     let json_errors = cli.structured_errors();
@@ -1190,6 +1242,8 @@ const AGENT_LIMITS: &[&str] = &[
     "--text-limit",
     "--continue",
     "--select",
+    "--budget",
+    "--budget-profile",
 ];
 const DEFAULT_QUERY_ITEMS: usize = 100;
 const DEFAULT_VIEWPORT_ITEMS: usize = 64;
@@ -2776,12 +2830,13 @@ fn write_single_json<T: Serialize>(
             returned_warnings: warnings_truncated.then_some(selected_warnings.len()),
             ..OutputLimits::default()
         };
-        let envelope = AgentEnvelope::with_limits(
+        let envelope = adaptive_agent_envelope(
             source,
             val.clone(),
             selected_warnings.clone(),
             limits_record,
-        );
+            limits,
+        )?;
         if let Some(max_bytes) = limits.max_bytes {
             let serialized =
                 serde_json::to_string(&envelope).map_err(output_serialization_error)?;
@@ -2905,6 +2960,36 @@ fn stderr_error(source: io::Error) -> DocsightError {
         path: PathBuf::from("<stderr>"),
         source,
     }
+}
+
+fn parse_byte_budget(raw: &str) -> Result<usize, String> {
+    if raw.is_empty() || raw.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Err(
+            "byte budget must be a positive integer with optional b, kb or mb suffix".to_owned(),
+        );
+    }
+    let digit_count = raw.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 {
+        return Err("byte budget must start with a positive integer".to_owned());
+    }
+    let (digits, suffix) = raw.split_at(digit_count);
+    let value = digits
+        .parse::<usize>()
+        .map_err(|_| "byte budget integer is out of range".to_owned())?;
+    if value == 0 {
+        return Err("byte budget must be greater than zero".to_owned());
+    }
+    let multiplier = match suffix.to_ascii_lowercase().as_str() {
+        "" | "b" => 1_usize,
+        "kb" => 1024_usize,
+        "mb" => 1024_usize
+            .checked_mul(1024)
+            .ok_or_else(|| "byte budget multiplier overflowed".to_owned())?,
+        _ => return Err("byte budget suffix must be b, kb or mb".to_owned()),
+    };
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| "byte budget is out of range".to_owned())
 }
 
 fn parse_bbox(raw: &str) -> Result<Rect, String> {

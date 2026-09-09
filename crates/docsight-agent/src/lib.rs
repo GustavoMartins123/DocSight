@@ -1,9 +1,45 @@
 use docsight_core::{Diagnostic, DocsightError, DocumentSource};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::PathBuf;
 
 pub const AGENT_SCHEMA: &str = "docsight.agent/v2";
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionProfile {
+    Compact,
+    Balanced,
+    Rich,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionOmission {
+    ExtendedSnippets,
+    FullContent,
+    SemanticNeighbors,
+    RelatedObjects,
+    Geometry,
+    Fidelity,
+    Provenance,
+    MatchedRanges,
+    RankingComponents,
+    VisualReferences,
+    RelationshipHints,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProjectionSelection {
+    pub adaptive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_profile: Option<ProjectionProfile>,
+    pub selected_profile: ProjectionProfile,
+    pub omitted_evidence: Vec<ProjectionOmission>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DocumentReference {
@@ -37,6 +73,8 @@ pub struct OutputLimits {
     pub total_warnings: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub returned_warnings: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection: Option<ProjectionSelection>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -211,6 +249,8 @@ pub struct QueryLimits {
     pub text_limit: Option<usize>,
     pub continue_token: Option<String>,
     pub select: Option<Vec<String>>,
+    pub budget_bytes: Option<usize>,
+    pub budget_profile: Option<ProjectionProfile>,
 }
 
 pub fn apply_text_limit(text: &str, limit: Option<usize>) -> (String, bool) {
@@ -340,6 +380,325 @@ fn value_contains_key(val: &serde_json::Value, key: &str) -> bool {
     }
 }
 
+fn remove_evidence_field(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    omission: ProjectionOmission,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    if map.remove(field).is_some() {
+        omissions.insert(omission);
+    }
+}
+
+fn clear_array_field(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    omission: ProjectionOmission,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    if let Some(serde_json::Value::Array(values)) = map.get_mut(field)
+        && !values.is_empty()
+    {
+        values.clear();
+        omissions.insert(omission);
+    }
+}
+
+fn reduce_candidate_evidence(
+    candidates: &mut serde_json::Value,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    let serde_json::Value::Array(candidates) = candidates else {
+        return;
+    };
+    for candidate in candidates {
+        let serde_json::Value::Object(candidate) = candidate else {
+            continue;
+        };
+        remove_evidence_field(
+            candidate,
+            "matched_range",
+            ProjectionOmission::MatchedRanges,
+            omissions,
+        );
+        clear_array_field(
+            candidate,
+            "reasons",
+            ProjectionOmission::RankingComponents,
+            omissions,
+        );
+    }
+}
+
+fn project_context_result(
+    result: &mut serde_json::Map<String, serde_json::Value>,
+    profile: ProjectionProfile,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    if !result.contains_key("selection") || !result.contains_key("total_candidates") {
+        return;
+    }
+    if let Some(serde_json::Value::Object(context)) = result.get_mut("context") {
+        remove_evidence_field(
+            context,
+            "content",
+            ProjectionOmission::FullContent,
+            omissions,
+        );
+        remove_evidence_field(
+            context,
+            "related",
+            ProjectionOmission::RelatedObjects,
+            omissions,
+        );
+        if profile == ProjectionProfile::Compact {
+            remove_evidence_field(
+                context,
+                "neighbors",
+                ProjectionOmission::SemanticNeighbors,
+                omissions,
+            );
+            remove_evidence_field(context, "geometry", ProjectionOmission::Geometry, omissions);
+            remove_evidence_field(context, "fidelity", ProjectionOmission::Fidelity, omissions);
+            remove_evidence_field(
+                context,
+                "provenance",
+                ProjectionOmission::Provenance,
+                omissions,
+            );
+        }
+    }
+    if profile == ProjectionProfile::Compact {
+        if let Some(serde_json::Value::Object(selection)) = result.get_mut("selection") {
+            remove_evidence_field(
+                selection,
+                "matched_range",
+                ProjectionOmission::MatchedRanges,
+                omissions,
+            );
+            clear_array_field(
+                selection,
+                "reasons",
+                ProjectionOmission::RankingComponents,
+                omissions,
+            );
+        }
+        if let Some(candidates) = result.get_mut("candidates") {
+            reduce_candidate_evidence(candidates, omissions);
+        }
+    }
+}
+
+fn project_resolve_result(
+    result: &mut serde_json::Map<String, serde_json::Value>,
+    profile: ProjectionProfile,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    if profile != ProjectionProfile::Compact
+        || result.contains_key("selection")
+        || !result.contains_key("query")
+        || !result.contains_key("total_candidates")
+    {
+        return;
+    }
+    if let Some(candidates) = result.get_mut("candidates") {
+        reduce_candidate_evidence(candidates, omissions);
+    }
+}
+
+fn project_viewport_result(
+    result: &mut serde_json::Map<String, serde_json::Value>,
+    profile: ProjectionProfile,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    if !result.contains_key("target")
+        || !result.contains_key("scope_pages")
+        || !result.contains_key("objects")
+    {
+        return;
+    }
+    if profile != ProjectionProfile::Rich {
+        clear_array_field(
+            result,
+            "visual_references",
+            ProjectionOmission::VisualReferences,
+            omissions,
+        );
+    }
+    if profile != ProjectionProfile::Compact {
+        return;
+    }
+    let Some(serde_json::Value::Array(objects)) = result.get_mut("objects") else {
+        return;
+    };
+    for object in objects {
+        let serde_json::Value::Object(object) = object else {
+            continue;
+        };
+        let Some(serde_json::Value::Array(relationships)) = object.get_mut("relationships") else {
+            continue;
+        };
+        let original_len = relationships.len();
+        relationships.retain(|relationship| {
+            relationship
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|role| matches!(role, "target" | "parent_heading"))
+        });
+        if relationships.len() != original_len {
+            omissions.insert(ProjectionOmission::RelationshipHints);
+        }
+    }
+}
+
+fn cap_text_snippets(
+    value: &mut serde_json::Value,
+    max_chars: usize,
+    omissions: &mut BTreeSet<ProjectionOmission>,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                cap_text_snippets(value, max_chars, omissions);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let shortened = if let Some(serde_json::Value::String(text)) =
+                map.get_mut("text_snippet")
+                && text.chars().count() > max_chars
+            {
+                *text = text.chars().take(max_chars).collect();
+                true
+            } else {
+                false
+            };
+            if shortened {
+                map.insert("text_truncated".to_owned(), serde_json::Value::Bool(true));
+                omissions.insert(ProjectionOmission::ExtendedSnippets);
+            }
+            for value in map.values_mut() {
+                cap_text_snippets(value, max_chars, omissions);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn project_agent_result(
+    result: &serde_json::Value,
+    profile: ProjectionProfile,
+) -> (serde_json::Value, Vec<ProjectionOmission>) {
+    if profile == ProjectionProfile::Rich {
+        return (result.clone(), Vec::new());
+    }
+    let mut projected = result.clone();
+    let mut omissions = BTreeSet::new();
+    if let serde_json::Value::Object(map) = &mut projected {
+        project_context_result(map, profile, &mut omissions);
+        project_resolve_result(map, profile, &mut omissions);
+        project_viewport_result(map, profile, &mut omissions);
+    }
+    let snippet_limit = match profile {
+        ProjectionProfile::Compact => 80,
+        ProjectionProfile::Balanced => 160,
+        ProjectionProfile::Rich => usize::MAX,
+    };
+    cap_text_snippets(&mut projected, snippet_limit, &mut omissions);
+    (projected, omissions.into_iter().collect())
+}
+
+fn projection_profiles(limits: &QueryLimits) -> Option<Vec<ProjectionProfile>> {
+    if let Some(profile) = limits.budget_profile {
+        return Some(vec![profile]);
+    }
+    limits.budget_bytes.map(|_| {
+        vec![
+            ProjectionProfile::Rich,
+            ProjectionProfile::Balanced,
+            ProjectionProfile::Compact,
+        ]
+    })
+}
+
+fn try_adaptive_agent_envelope(
+    source: &DocumentSource,
+    result: &serde_json::Value,
+    warnings: &[Diagnostic],
+    output_limits: &OutputLimits,
+    limits: &QueryLimits,
+) -> Result<Option<AgentEnvelope<serde_json::Value>>, DocsightError> {
+    let Some(profiles) = projection_profiles(limits) else {
+        return Ok(Some(AgentEnvelope::with_limits(
+            source,
+            result.clone(),
+            warnings.to_vec(),
+            output_limits.clone(),
+        )));
+    };
+    for profile in profiles {
+        let (projected, omitted_evidence) = project_agent_result(result, profile);
+        let mut projected_limits = output_limits.clone();
+        projected_limits.text_truncated = projected_limits.text_truncated
+            || omitted_evidence.contains(&ProjectionOmission::ExtendedSnippets);
+        projected_limits.projection = Some(ProjectionSelection {
+            adaptive: limits.budget_bytes.is_some() && limits.budget_profile.is_none(),
+            budget_bytes: limits.budget_bytes,
+            requested_profile: limits.budget_profile,
+            selected_profile: profile,
+            omitted_evidence,
+        });
+        let envelope =
+            AgentEnvelope::with_limits(source, projected, warnings.to_vec(), projected_limits);
+        let fits = if let Some(budget_bytes) = limits.budget_bytes {
+            serde_json::to_vec(&envelope)
+                .map_err(|error| DocsightError::MalformedDocument {
+                    message: error.to_string(),
+                })?
+                .len()
+                .checked_add(1)
+                .is_some_and(|bytes| bytes <= budget_bytes)
+        } else {
+            true
+        };
+        if fits {
+            return Ok(Some(envelope));
+        }
+    }
+    Ok(None)
+}
+
+fn budget_too_small_error(limits: &QueryLimits) -> DocsightError {
+    let budget_bytes = limits.budget_bytes.unwrap_or(0);
+    let profile = limits
+        .budget_profile
+        .map(|profile| {
+            let name = match profile {
+                ProjectionProfile::Compact => "compact",
+                ProjectionProfile::Balanced => "balanced",
+                ProjectionProfile::Rich => "rich",
+            };
+            format!(" for the requested {name} profile")
+        })
+        .unwrap_or_default();
+    DocsightError::InvalidArgument {
+        message: format!(
+            "--budget {budget_bytes} bytes is smaller than the minimum deterministic projection{profile}; increase the budget or reduce the requested evidence"
+        ),
+    }
+}
+
+pub fn adaptive_agent_envelope(
+    source: &DocumentSource,
+    result: serde_json::Value,
+    warnings: Vec<Diagnostic>,
+    output_limits: OutputLimits,
+    limits: &QueryLimits,
+) -> Result<AgentEnvelope<serde_json::Value>, DocsightError> {
+    try_adaptive_agent_envelope(source, &result, &warnings, &output_limits, limits)?
+        .ok_or_else(|| budget_too_small_error(limits))
+}
+
 pub fn apply_collection_limits<T: Clone>(
     items: &[T],
     limits: &QueryLimits,
@@ -365,6 +724,7 @@ pub fn apply_collection_limits<T: Clone>(
                 returned_items: Some(0),
                 total_warnings: None,
                 returned_warnings: None,
+                projection: None,
             },
         ));
     }
@@ -396,6 +756,7 @@ pub fn apply_collection_limits<T: Clone>(
             returned_items: Some(count),
             total_warnings: None,
             returned_warnings: None,
+            projection: None,
         },
     ))
 }
@@ -467,13 +828,22 @@ where
                 returned_items: Some(count),
                 total_warnings: warnings_truncated.then_some(total_warnings),
                 returned_warnings: warnings_truncated.then_some(selected_warnings.len()),
+                projection: None,
             };
-            let envelope = AgentEnvelope::with_limits(
+            let Some(envelope) = try_adaptive_agent_envelope(
                 source,
-                val.clone(),
-                selected_warnings.clone(),
-                output_limits,
-            );
+                &val,
+                &selected_warnings,
+                &output_limits,
+                limits,
+            )?
+            else {
+                if count > 1 {
+                    count -= 1;
+                    continue 'items;
+                }
+                return Err(budget_too_small_error(limits));
+            };
 
             if let Some(max_bytes) = limits.max_bytes {
                 let serialized = serde_json::to_string(&envelope).map_err(|e| {
@@ -594,6 +964,7 @@ impl<W: Write> NdjsonWriter<W> {
             returned_items: Some(self.total_items),
             total_warnings: None,
             returned_warnings: None,
+            projection: None,
         };
         let line = serde_json::json!({
             "seq": u64::MAX,
@@ -609,6 +980,7 @@ impl<W: Write> NdjsonWriter<W> {
             returned_items: Some(self.total_items),
             total_warnings: Some(self.warnings_seen),
             returned_warnings: Some(self.warnings_emitted),
+            projection: None,
         };
         let warning_line = serde_json::json!({
             "seq": u64::MAX,
@@ -837,6 +1209,7 @@ impl<W: Write> NdjsonWriter<W> {
                 .then_some(self.warnings_seen),
             returned_warnings: (self.warnings_emitted < self.warnings_seen)
                 .then_some(self.warnings_emitted),
+            projection: None,
         };
         let line = serde_json::json!({
             "seq": self.seq,
@@ -1005,6 +1378,116 @@ mod tests {
         assert_eq!(projected_copy["text"], "Extremely");
         assert!(truncated);
         assert_eq!(projected_copy["id"], "item_1");
+    }
+
+    fn projection_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "status": "resolved",
+            "selection": {
+                "mode": "find",
+                "chosen_object": "tbl_1",
+                "matched_range": {"start_char": 0, "end_char": 5, "text": "table"},
+                "reasons": [{"code": "direct_text", "score": 1.0}]
+            },
+            "context": {
+                "target": {
+                    "id": "tbl_1",
+                    "kind": "table",
+                    "page": 1,
+                    "z_index": 0,
+                    "reading_order": 1,
+                    "source": "/document/table[1]",
+                    "confidence": 1.0,
+                    "text_snippet": "x".repeat(240),
+                    "text_truncated": false
+                },
+                "containers": {"section_status": "exact"},
+                "heading": {"object": {"id": "h_1", "kind": "heading"}},
+                "neighbors": [{"object": {"id": "p_1", "kind": "paragraph"}}],
+                "related": [{"object": {"id": "p_2", "kind": "paragraph"}}],
+                "content": {"type": "table", "text": "y".repeat(8_000)},
+                "geometry": {"available": true},
+                "fidelity": {"available": true},
+                "provenance": {"source_path": "/document/table[1]"}
+            },
+            "total_candidates": 1,
+            "candidates": []
+        })
+    }
+
+    #[test]
+    fn projection_profiles_expose_every_omitted_evidence_class()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = DocumentSource::from_bytes(b"%PDF-1.7\n".to_vec())?;
+        let compact = adaptive_agent_envelope(
+            &source,
+            projection_fixture(),
+            Vec::new(),
+            OutputLimits::default(),
+            &QueryLimits {
+                budget_profile: Some(ProjectionProfile::Compact),
+                ..Default::default()
+            },
+        )?;
+        let context = compact.result["context"].as_object().ok_or("context")?;
+        assert!(context.get("heading").is_some());
+        assert!(context.get("content").is_none());
+        assert!(context.get("neighbors").is_none());
+        assert!(context.get("geometry").is_none());
+        assert!(context.get("fidelity").is_none());
+        assert!(context.get("provenance").is_none());
+        assert!(compact.result["selection"]["reasons"] == serde_json::json!([]));
+        assert!(compact.result["selection"].get("matched_range").is_none());
+        let projection = compact.limits.projection.ok_or("projection")?;
+        assert_eq!(projection.selected_profile, ProjectionProfile::Compact);
+        assert!(
+            projection
+                .omitted_evidence
+                .contains(&ProjectionOmission::FullContent)
+        );
+        assert!(
+            projection
+                .omitted_evidence
+                .contains(&ProjectionOmission::RankingComponents)
+        );
+        assert!(compact.limits.text_truncated);
+        Ok(())
+    }
+
+    #[test]
+    fn adaptive_budget_selects_the_richest_profile_that_fits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = DocumentSource::from_bytes(b"%PDF-1.7\n".to_vec())?;
+        let balanced = adaptive_agent_envelope(
+            &source,
+            projection_fixture(),
+            Vec::new(),
+            OutputLimits::default(),
+            &QueryLimits {
+                budget_profile: Some(ProjectionProfile::Balanced),
+                ..Default::default()
+            },
+        )?;
+        let balanced_bytes = serde_json::to_vec(&balanced)?
+            .len()
+            .checked_add(256)
+            .ok_or("budget overflow")?;
+        let adaptive = adaptive_agent_envelope(
+            &source,
+            projection_fixture(),
+            Vec::new(),
+            OutputLimits::default(),
+            &QueryLimits {
+                budget_bytes: Some(balanced_bytes),
+                ..Default::default()
+            },
+        )?;
+        let projection = adaptive.limits.projection.as_ref().ok_or("projection")?;
+        assert!(projection.adaptive);
+        assert_eq!(projection.budget_bytes, Some(balanced_bytes));
+        assert_eq!(projection.selected_profile, ProjectionProfile::Balanced);
+        assert!(serde_json::to_vec(&adaptive)?.len() < balanced_bytes);
+        Ok(())
     }
 
     #[test]

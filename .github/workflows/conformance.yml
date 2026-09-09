@@ -18,4 +18,4 @@ jobs:
           toolchain: 1.85.0
           components: rustfmt, clippy
       - run: cargo test -p docsight-search
-      - run: cargo test -p docsight-cli --test m15_conformance_cli --test m16_interaction_cli
+      - run: cargo test -p docsight-cli --test m15_conformance_cli --test m16_interaction_cli --test m17_budget_cli

@@ -1,0 +1,77 @@
+{
+  "fixtures": {
+    "sample_semantic.pdf": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05",
+    "sample_tables.docx": "ae83cc0410fa35a70f9cac1c19d25e1cf59d6f05822ecf2de05d4b28982611ae"
+  },
+  "runs": [
+    {
+      "name": "context-rich-24kb",
+      "omitted_evidence": [],
+      "returned_items": 0,
+      "selected_profile": "rich",
+      "stdout_bytes": 23659,
+      "stdout_sha256": "d096cc464e5cc96f0a398284a864308e1474b86bfdd38be461f41a38e7576fc0",
+      "total_items": 0,
+      "truncated": false
+    },
+    {
+      "name": "context-balanced-4kb",
+      "omitted_evidence": [
+        "extended_snippets",
+        "full_content",
+        "related_objects"
+      ],
+      "returned_items": 0,
+      "selected_profile": "balanced",
+      "stdout_bytes": 3645,
+      "stdout_sha256": "d5742fb138f7f97afd6b07efc9edf1d86cc6f077f2affc79d76139f3b16e1da6",
+      "total_items": 0,
+      "truncated": false
+    },
+    {
+      "name": "context-compact-3kb",
+      "omitted_evidence": [
+        "extended_snippets",
+        "full_content",
+        "semantic_neighbors",
+        "related_objects",
+        "geometry",
+        "fidelity",
+        "provenance",
+        "ranking_components"
+      ],
+      "returned_items": 0,
+      "selected_profile": "compact",
+      "stdout_bytes": 2197,
+      "stdout_sha256": "41e95a91be7c307abad259840bfc6c35b80208160544e17bf918cc10734f7f95",
+      "total_items": 0,
+      "truncated": false
+    },
+    {
+      "name": "peek-docx-compact-4kb",
+      "omitted_evidence": [
+        "relationship_hints"
+      ],
+      "returned_items": 7,
+      "selected_profile": "compact",
+      "stdout_bytes": 4022,
+      "stdout_sha256": "1b1fe2d503799f6f4cd46dc93301e80248feab7ac31942857740333c9cb1413e",
+      "total_items": 30,
+      "truncated": true
+    },
+    {
+      "name": "peek-pdf-compact-3kb",
+      "omitted_evidence": [
+        "extended_snippets",
+        "relationship_hints"
+      ],
+      "returned_items": 6,
+      "selected_profile": "compact",
+      "stdout_bytes": 2940,
+      "stdout_sha256": "5ef6893627d00b0e271a94a3266be1b0092f4ddb41e5ca2432bb3be275ab28d7",
+      "total_items": 7,
+      "truncated": true
+    }
+  ],
+  "schema": "docsight.budget-conformance/v1"
+}

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/projection-selection.json",
+  "title": "ProjectionSelection",
+  "type": "object",
+  "required": [
+    "adaptive",
+    "selected_profile",
+    "omitted_evidence"
+  ],
+  "properties": {
+    "adaptive": {
+      "type": "boolean"
+    },
+    "budget_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "requested_profile": {
+      "$ref": "#/$defs/profile"
+    },
+    "selected_profile": {
+      "$ref": "#/$defs/profile"
+    },
+    "omitted_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "extended_snippets",
+          "full_content",
+          "semantic_neighbors",
+          "related_objects",
+          "geometry",
+          "fidelity",
+          "provenance",
+          "matched_ranges",
+          "ranking_components",
+          "visual_references",
+          "relationship_hints"
+        ]
+      },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "string",
+      "enum": [
+        "compact",
+        "balanced",
+        "rich"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

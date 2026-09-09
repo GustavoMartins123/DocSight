@@ -72,6 +72,20 @@ docsight --agent resolve input.pdf --text "director signature" --pages 10..14
 
 Resolve uses normalized lexical evidence, token overlap, object-kind and page constraints, nearby caption text, nearest preceding heading text, and canonical geometry for caption proximity. It does not use embeddings, a remote model, or natural-language question answering. Each candidate exposes the component score, weight, contribution, evidence anchor, and direct matched range when available. Scores below the resolution threshold and ties within the fixed ambiguity margin remain explicitly ambiguous.
 
+Use `--budget` when the JSON envelope should adapt its evidence projection before serialization:
+
+```text
+docsight --agent context input.docx tbl_0008 --budget 12kb
+docsight --agent peek input.pdf --pages 20..22 --budget 4kb
+docsight --agent context input.docx tbl_0008 --budget-profile compact
+```
+
+Budgets are deterministic serialized-byte limits. Bare integers and the `b`, `kb`, and `mb` suffixes are accepted; `kb` and `mb` use powers of 1024. Without a fixed profile, DOCSIGHT tests `rich`, `balanced`, then `compact` against the complete JSON envelope and chooses the first representation that fits. Collection results may then expose a deterministic continuation boundary if even the compact form cannot carry every item. No result is emitted when one compact item and the envelope cannot fit.
+
+`rich` preserves every requested evidence class. `balanced` keeps structural context, snippets, geometry, fidelity, provenance, neighbors and ranking evidence while omitting full object content, related objects and viewport visual references when present. `compact` preserves identities, kinds, pages, containing structures and headings while additionally omitting extended snippets, semantic neighbors, geometry, fidelity, provenance, matched ranges and ranking components when present. `limits.projection` records the requested byte budget or fixed profile, the selected profile, whether selection was adaptive and every evidence class actually omitted. Warnings are not removed to satisfy `--budget`.
+
+`--budget-profile compact|balanced|rich` fixes the policy instead of allowing a lower tier. Collections may still expose a continuation boundary; a single result or one collection item that does not fit a simultaneous `--budget` fails with a typed usage error. `--max-bytes` remains an independent hard safety cap. Adaptive budgets require a complete bounded JSON envelope; NDJSON streams continue to use `--max-bytes` and reject `--budget` and `--budget-profile` explicitly.
+
 Compare revisions through the same machine profile:
 
 ```text
@@ -115,3 +129,5 @@ The M12 result contracts are `schemas/v2/spatial-query-result.json`, `schemas/v2
 The M13 diff contract is `schemas/v2/diff-result.json`; its NDJSON event type is defined in `schemas/v2/ndjson-event.json`.
 
 The M16 interaction contracts are `schemas/v2/peek-result.json`, `schemas/v2/context-result.json`, and `schemas/v2/resolve-result.json`.
+
+The M17 adaptive projection contract is `schemas/v2/projection-selection.json`, referenced by `schemas/v2/agent-envelope.json`.
