@@ -1,0 +1,100 @@
+{
+  "schema": "docsight.interaction-economy/v1",
+  "policy": {
+    "maximum_cli_invocations": 2,
+    "scratch_parser_invocations": 0,
+    "allowed_executable": "docsight"
+  },
+  "scenarios": [
+    {
+      "id": "locate-table",
+      "task": "Locate a table from a compact descriptor",
+      "document_formats": [
+        "docx"
+      ],
+      "max_cli_invocations": 1,
+      "max_serialized_bytes": 4096,
+      "max_render_requests": 0,
+      "required_evidence": [
+        "deterministic_object_id",
+        "matched_range",
+        "ranking_reason_codes"
+      ]
+    },
+    {
+      "id": "read-merged-cells",
+      "task": "Read a structural table including merged-cell spans",
+      "document_formats": [
+        "docx"
+      ],
+      "max_cli_invocations": 1,
+      "max_serialized_bytes": 24576,
+      "max_render_requests": 0,
+      "required_evidence": [
+        "canonical_table_content",
+        "merged_cell_span",
+        "source_provenance"
+      ]
+    },
+    {
+      "id": "locate-pdf-table",
+      "task": "Locate an inferred PDF table from a compact descriptor",
+      "document_formats": [
+        "pdf"
+      ],
+      "max_cli_invocations": 1,
+      "max_serialized_bytes": 4096,
+      "max_render_requests": 0,
+      "required_evidence": [
+        "deterministic_object_id",
+        "inference_confidence",
+        "matched_range"
+      ]
+    },
+    {
+      "id": "inspect-page-context",
+      "task": "Inspect the complete bounded semantic context of one page",
+      "document_formats": [
+        "docx"
+      ],
+      "max_cli_invocations": 1,
+      "max_serialized_bytes": 8192,
+      "max_render_requests": 0,
+      "required_evidence": [
+        "canonical_geometry",
+        "reading_order",
+        "semantic_kinds"
+      ]
+    },
+    {
+      "id": "verify-visual-region",
+      "task": "Create and independently verify one visual evidence region",
+      "document_formats": [
+        "docx"
+      ],
+      "max_cli_invocations": 2,
+      "max_serialized_bytes": 16384,
+      "max_render_requests": 1,
+      "required_evidence": [
+        "crop_digest",
+        "proof_bundle_digest",
+        "replay_verification"
+      ]
+    },
+    {
+      "id": "compare-generated-documents",
+      "task": "Compare two generated DOCX documents without format-specific glue",
+      "document_formats": [
+        "docx"
+      ],
+      "max_cli_invocations": 1,
+      "max_serialized_bytes": 8192,
+      "max_render_requests": 0,
+      "required_evidence": [
+        "document_digests",
+        "semantic_change_count",
+        "evidence_limited_count"
+      ]
+    }
+  ]
+}

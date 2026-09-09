@@ -131,3 +131,5 @@ The M13 diff contract is `schemas/v2/diff-result.json`; its NDJSON event type is
 The M16 interaction contracts are `schemas/v2/peek-result.json`, `schemas/v2/context-result.json`, and `schemas/v2/resolve-result.json`.
 
 The M17 adaptive projection contract is `schemas/v2/projection-selection.json`, referenced by `schemas/v2/agent-envelope.json`.
+
+M18 interaction-economy conformance is defined by `fixtures/conformance/m18-interaction-economy.json`. The corpus exercises table location in DOCX and PDF, merged-cell reading, bounded page context, visual proof creation and verification, and generated-document comparison. Every scenario declares maximum CLI invocations, serialized output bytes, render requests and required evidence. The conformance runner invokes only the `docsight` executable, requires one or two calls per normal workflow and rejects missing scenario definitions or evidence assertions.
