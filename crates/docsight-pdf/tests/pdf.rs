@@ -959,3 +959,133 @@ fn accepts_type3_fonts_with_tounicode_for_extraction() -> Result<(), DocsightErr
     );
     Ok(())
 }
+
+#[test]
+fn reads_cross_reference_streams_with_compressed_objects() -> Result<(), Box<dyn std::error::Error>>
+{
+    let content = "BT /F1 12 Tf 20 70 Td (Modern DOCSIGHT) Tj ET";
+    for options in [
+        pdf_fixture::ModernPdfOptions {
+            compress_objects: true,
+            predictor: true,
+            incremental_update: false,
+        },
+        pdf_fixture::ModernPdfOptions {
+            compress_objects: true,
+            predictor: false,
+            incremental_update: false,
+        },
+        pdf_fixture::ModernPdfOptions {
+            compress_objects: false,
+            predictor: true,
+            incremental_update: false,
+        },
+        pdf_fixture::ModernPdfOptions {
+            compress_objects: true,
+            predictor: true,
+            incremental_update: true,
+        },
+    ] {
+        let bytes = pdf_fixture::build_modern_pdf(content, &options);
+        let source = DocumentSource::from_bytes(bytes)?;
+        let document = PdfDocument::open(&source)?.to_document()?;
+        assert_eq!(document.pages.len(), 1);
+        let text = document
+            .paragraphs()
+            .map(|(_, paragraph)| paragraph.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            text.contains("Modern DOCSIGHT"),
+            "compressed={} predictor={} incremental={} produced {text:?}",
+            options.compress_objects,
+            options.predictor,
+            options.incremental_update
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn classic_and_modern_cross_references_agree_on_text() -> Result<(), Box<dyn std::error::Error>> {
+    let content = "BT /F1 12 Tf 20 70 Td (Same Bytes) Tj ET";
+    let classic = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let modern = DocumentSource::from_bytes(pdf_fixture::build_modern_pdf(
+        content,
+        &pdf_fixture::ModernPdfOptions::default(),
+    ))?;
+    let classic = PdfDocument::open(&classic)?.to_document()?;
+    let modern = PdfDocument::open(&modern)?.to_document()?;
+    let text = |document: &docsight_core::Document| {
+        document
+            .paragraphs()
+            .map(|(_, paragraph)| paragraph.text.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(text(&classic), text(&modern));
+    Ok(())
+}
+
+#[test]
+fn degenerate_clipping_path_hides_content_instead_of_failing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let content = "q 10 10 m 20 20 l W n 0 0 0 rg 0 0 200 100 re f Q";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?;
+    document.to_document()?;
+    Ok(())
+}
+
+#[test]
+fn decodes_ascii_filters_in_content_streams() -> Result<(), Box<dyn std::error::Error>> {
+    let plain = "BT /F1 12 Tf 20 70 Td (Filtered) Tj ET";
+
+    let hex = plain
+        .bytes()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>()
+        + ">";
+    let source =
+        DocumentSource::from_bytes(build_pdf(&hex, "[0 0 200 100]", "/Filter /ASCIIHexDecode"))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert!(
+        document
+            .paragraphs()
+            .any(|(_, paragraph)| paragraph.text.contains("Filtered"))
+    );
+
+    let a85 = ascii85_encode(plain.as_bytes());
+    let source =
+        DocumentSource::from_bytes(build_pdf(&a85, "[0 0 200 100]", "/Filter /ASCII85Decode"))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert!(
+        document
+            .paragraphs()
+            .any(|(_, paragraph)| paragraph.text.contains("Filtered"))
+    );
+    Ok(())
+}
+
+fn ascii85_encode(data: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in data.chunks(4) {
+        let mut group = [0_u8; 4];
+        group[..chunk.len()].copy_from_slice(chunk);
+        let value = u32::from_be_bytes(group);
+        if chunk.len() == 4 && value == 0 {
+            out.push('z');
+            continue;
+        }
+        let mut symbols = [0_u8; 5];
+        let mut remaining = value;
+        for slot in symbols.iter_mut().rev() {
+            *slot = (remaining % 85) as u8 + b'!';
+            remaining /= 85;
+        }
+        for symbol in symbols.iter().take(chunk.len() + 1) {
+            out.push(char::from(*symbol));
+        }
+    }
+    out.push_str("~>");
+    out
+}

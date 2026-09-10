@@ -1,7 +1,8 @@
 use docsight_core::DocsightError;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_OBJECTS: usize = 100_000;
+const MAX_XREF_SECTIONS: usize = 64;
 const MAX_DEPTH: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,9 +31,22 @@ pub(crate) struct StreamValue {
     pub data: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum XrefEntry {
+    Offset(usize),
+    Compressed { stream: u32, index: u32 },
+}
+
 pub(crate) struct Xref {
-    pub entries: BTreeMap<ObjectRef, usize>,
+    pub entries: BTreeMap<ObjectRef, XrefEntry>,
     pub trailer: BTreeMap<String, Value>,
+}
+
+struct XrefSection {
+    entries: BTreeMap<ObjectRef, XrefEntry>,
+    trailer: BTreeMap<String, Value>,
+    prev: Option<usize>,
+    hybrid: Option<usize>,
 }
 
 pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
@@ -64,12 +78,71 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
     if xref_offset >= bytes.len() {
         return Err(malformed("startxref points outside the document"));
     }
-    let mut parser = Parser::new(bytes, xref_offset);
-    if !parser.consume_keyword(b"xref") {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "xref streams".to_owned(),
-        });
+
+    let mut entries: BTreeMap<ObjectRef, XrefEntry> = BTreeMap::new();
+    let mut trailer: Option<BTreeMap<String, Value>> = None;
+    let mut visited = BTreeSet::new();
+    let mut next = Some(xref_offset);
+    while let Some(offset) = next {
+        if !visited.insert(offset) {
+            return Err(malformed("PDF xref chain revisits the same section"));
+        }
+        if visited.len() > MAX_XREF_SECTIONS {
+            return Err(DocsightError::ResourceLimit {
+                resource: "PDF xref sections".to_owned(),
+                limit: MAX_XREF_SECTIONS as u64,
+            });
+        }
+        let section = parse_xref_section(bytes, offset)?;
+        merge_xref_entries(&mut entries, section.entries)?;
+        if let Some(hybrid) = section.hybrid
+            && visited.insert(hybrid)
+        {
+            let stream = parse_xref_section(bytes, hybrid)?;
+            merge_xref_entries(&mut entries, stream.entries)?;
+        }
+        if trailer.is_none() {
+            trailer = Some(section.trailer);
+        }
+        next = section.prev;
     }
+
+    let trailer = trailer.ok_or_else(|| malformed("PDF has no trailer"))?;
+    match trailer.get("Size") {
+        Some(Value::Int(size)) if *size >= 0 && (*size as u64) <= MAX_OBJECTS as u64 => {}
+        _ => return Err(malformed("trailer has no valid Size")),
+    }
+    Ok(Xref { entries, trailer })
+}
+
+fn merge_xref_entries(
+    into: &mut BTreeMap<ObjectRef, XrefEntry>,
+    from: BTreeMap<ObjectRef, XrefEntry>,
+) -> Result<(), DocsightError> {
+    for (reference, entry) in from {
+        if into.len() >= MAX_OBJECTS && !into.contains_key(&reference) {
+            return Err(DocsightError::ResourceLimit {
+                resource: "PDF xref entries".to_owned(),
+                limit: MAX_OBJECTS as u64,
+            });
+        }
+        into.entry(reference).or_insert(entry);
+    }
+    Ok(())
+}
+
+fn parse_xref_section(bytes: &[u8], offset: usize) -> Result<XrefSection, DocsightError> {
+    if offset >= bytes.len() {
+        return Err(malformed("xref section points outside the document"));
+    }
+    let mut parser = Parser::new(bytes, offset);
+    if parser.consume_keyword(b"xref") {
+        return parse_xref_table(parser, bytes);
+    }
+    parse_xref_stream(bytes, offset)
+}
+
+fn parse_xref_table(mut parser: Parser<'_>, bytes: &[u8]) -> Result<XrefSection, DocsightError> {
     let mut entries = BTreeMap::new();
     loop {
         parser.skip_space_and_comments();
@@ -80,20 +153,14 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
         let count = parser.parse_usize()?;
         let projected = entries.len().checked_add(count).ok_or_else(xref_limit)?;
         if count > MAX_OBJECTS || projected > MAX_OBJECTS {
-            return Err(DocsightError::ResourceLimit {
-                resource: "PDF xref entries".to_owned(),
-                limit: MAX_OBJECTS as u64,
-            });
+            return Err(xref_limit());
         }
         for index in 0..count {
             let offset = parser.parse_usize()?;
             let generation = parser.parse_u16()?;
             let status = parser.read_word()?;
             if status == b"n" {
-                let index = u32::try_from(index).map_err(|_| DocsightError::ResourceLimit {
-                    resource: "PDF xref entries".to_owned(),
-                    limit: MAX_OBJECTS as u64,
-                })?;
+                let index = u32::try_from(index).map_err(|_| xref_limit())?;
                 let number = first
                     .checked_add(index)
                     .ok_or_else(|| malformed("xref object number overflow"))?;
@@ -101,7 +168,7 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
                     return Err(malformed("xref entry points outside the document"));
                 }
                 if entries
-                    .insert(ObjectRef { number, generation }, offset)
+                    .insert(ObjectRef { number, generation }, XrefEntry::Offset(offset))
                     .is_some()
                 {
                     return Err(malformed("duplicate PDF xref entry"));
@@ -115,28 +182,213 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
         Value::Dict(dict) => dict,
         _ => return Err(malformed("trailer must be a dictionary")),
     };
-    if trailer.contains_key("Prev") {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "incremental PDF updates".to_owned(),
-        });
+    let prev = section_offset(&trailer, "Prev", bytes)?;
+    let hybrid = section_offset(&trailer, "XRefStm", bytes)?;
+    Ok(XrefSection {
+        entries,
+        trailer,
+        prev,
+        hybrid,
+    })
+}
+
+fn parse_xref_stream(bytes: &[u8], offset: usize) -> Result<XrefSection, DocsightError> {
+    let mut parser = Parser::new(bytes, offset);
+    parser.parse_u32()?;
+    parser.parse_u16()?;
+    parser.require_keyword(b"obj")?;
+    let value = parser.parse_value(0)?;
+    let Value::Stream(stream) = value else {
+        return Err(malformed(
+            "startxref does not point at an xref table or stream",
+        ));
+    };
+    if !matches!(stream.dict.get("Type"), Some(Value::Name(name)) if name == "XRef") {
+        return Err(malformed("cross-reference stream is not of type XRef"));
     }
-    if trailer.contains_key("XRefStm") {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "hybrid xref streams".to_owned(),
-        });
+    let data = crate::filters::decode_stream(&stream)?;
+
+    let widths = match stream.dict.get("W") {
+        Some(Value::Array(values)) if (1..=8).contains(&values.len()) => values
+            .iter()
+            .map(|value| match value {
+                Value::Int(width) if (0..=8).contains(width) => Ok(*width as usize),
+                _ => Err(malformed("xref stream W entry must be a small integer")),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(malformed("xref stream has no valid W array")),
+    };
+    let record_width: usize = widths.iter().sum();
+    if record_width == 0 {
+        return Err(malformed("xref stream records must not be empty"));
     }
-    match trailer.get("Size") {
-        Some(Value::Int(size)) if *size >= 0 && (*size as u64) <= MAX_OBJECTS as u64 => {}
-        _ => return Err(malformed("trailer has no valid Size")),
+
+    let size = match stream.dict.get("Size") {
+        Some(Value::Int(size)) if *size >= 0 && (*size as u64) <= MAX_OBJECTS as u64 => {
+            *size as u32
+        }
+        _ => return Err(malformed("xref stream has no valid Size")),
+    };
+    let index: Vec<(u32, usize)> = match stream.dict.get("Index") {
+        None => vec![(0, size as usize)],
+        Some(Value::Array(values)) if values.len().is_multiple_of(2) => values
+            .chunks(2)
+            .map(|pair| match (&pair[0], &pair[1]) {
+                (Value::Int(start), Value::Int(count))
+                    if *start >= 0
+                        && *count >= 0
+                        && *start <= u32::MAX as i64
+                        && (*count as u64) <= MAX_OBJECTS as u64 =>
+                {
+                    Ok((*start as u32, *count as usize))
+                }
+                _ => Err(malformed("xref stream Index entry is out of range")),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(malformed("xref stream has no valid Index array")),
+    };
+
+    let mut entries = BTreeMap::new();
+    let mut cursor = 0_usize;
+    for (start, count) in index {
+        if count > MAX_OBJECTS || entries.len().saturating_add(count) > MAX_OBJECTS {
+            return Err(xref_limit());
+        }
+        for position in 0..count {
+            let end = cursor
+                .checked_add(record_width)
+                .ok_or_else(|| malformed("xref stream record overflow"))?;
+            if end > data.len() {
+                return Err(malformed("xref stream is shorter than its Index declares"));
+            }
+            let record = &data[cursor..end];
+            cursor = end;
+            let mut fields = [1_u64, 0, 0];
+            let mut field_cursor = 0_usize;
+            for (slot, width) in widths.iter().enumerate().take(3) {
+                if *width == 0 {
+                    field_cursor += width;
+                    continue;
+                }
+                let mut value = 0_u64;
+                for byte in &record[field_cursor..field_cursor + width] {
+                    value = (value << 8) | u64::from(*byte);
+                }
+                fields[slot] = value;
+                field_cursor += width;
+            }
+            let position = u32::try_from(position).map_err(|_| xref_limit())?;
+            let number = match start.checked_add(position) {
+                Some(number) => number,
+                None => return Err(malformed("xref stream object number overflow")),
+            };
+            match fields[0] {
+                0 => {}
+                1 => {
+                    let offset = usize::try_from(fields[1])
+                        .map_err(|_| malformed("xref stream offset is out of range"))?;
+                    if offset >= bytes.len() {
+                        return Err(malformed("xref stream entry points outside the document"));
+                    }
+                    let generation = u16::try_from(fields[2])
+                        .map_err(|_| malformed("xref stream generation is out of range"))?;
+                    entries.insert(ObjectRef { number, generation }, XrefEntry::Offset(offset));
+                }
+                2 => {
+                    let container = u32::try_from(fields[1])
+                        .map_err(|_| malformed("object stream number is out of range"))?;
+                    let position = u32::try_from(fields[2])
+                        .map_err(|_| malformed("object stream index is out of range"))?;
+                    entries.insert(
+                        ObjectRef {
+                            number,
+                            generation: 0,
+                        },
+                        XrefEntry::Compressed {
+                            stream: container,
+                            index: position,
+                        },
+                    );
+                }
+                other => {
+                    return Err(malformed(format!("unknown xref stream entry type {other}")));
+                }
+            }
+        }
     }
-    Ok(Xref { entries, trailer })
+
+    let prev = section_offset(&stream.dict, "Prev", bytes)?;
+    Ok(XrefSection {
+        entries,
+        trailer: stream.dict,
+        prev,
+        hybrid: None,
+    })
+}
+
+fn section_offset(
+    dict: &BTreeMap<String, Value>,
+    key: &str,
+    bytes: &[u8],
+) -> Result<Option<usize>, DocsightError> {
+    match dict.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Int(offset)) if *offset >= 0 => {
+            let offset = usize::try_from(*offset)
+                .map_err(|_| malformed(format!("{key} offset is out of range")))?;
+            if offset >= bytes.len() {
+                return Err(malformed(format!("{key} points outside the document")));
+            }
+            Ok(Some(offset))
+        }
+        _ => Err(malformed(format!("{key} must be a byte offset"))),
+    }
+}
+
+pub(crate) fn parse_object_stream_index(
+    data: &[u8],
+    count: usize,
+    first: usize,
+) -> Result<Vec<(u32, usize)>, DocsightError> {
+    if count > MAX_OBJECTS {
+        return Err(xref_limit());
+    }
+    let mut parser = Parser::new(data, 0);
+    let mut index = Vec::with_capacity(count);
+    for _ in 0..count {
+        let number = parser.parse_u32()?;
+        let offset = parser.parse_usize()?;
+        if parser.cursor > first {
+            return Err(malformed("object stream index runs past its First offset"));
+        }
+        let start = first
+            .checked_add(offset)
+            .ok_or_else(|| malformed("object stream offset overflow"))?;
+        if start >= data.len() {
+            return Err(malformed("object stream entry points outside the stream"));
+        }
+        index.push((number, start));
+    }
+    Ok(index)
+}
+
+pub(crate) fn parse_object_stream_value(
+    data: &[u8],
+    offset: usize,
+) -> Result<Value, DocsightError> {
+    let mut parser = Parser::new(data, offset);
+    let value = parser.parse_value(0)?;
+    if matches!(value, Value::Stream(_)) {
+        return Err(malformed("object streams must not contain stream objects"));
+    }
+    Ok(value)
 }
 
 pub(crate) fn parse_object(
     bytes: &[u8],
     offset: usize,
     expected: ObjectRef,
-    entries: &BTreeMap<ObjectRef, usize>,
+    entries: &BTreeMap<ObjectRef, XrefEntry>,
 ) -> Result<Value, DocsightError> {
     let mut parser = Parser::with_entries(bytes, offset, entries);
     let number = parser.parse_u32()?;
@@ -155,7 +407,7 @@ pub(crate) fn parse_object(
 struct Parser<'a> {
     bytes: &'a [u8],
     cursor: usize,
-    entries: Option<&'a BTreeMap<ObjectRef, usize>>,
+    entries: Option<&'a BTreeMap<ObjectRef, XrefEntry>>,
 }
 
 impl<'a> Parser<'a> {
@@ -170,7 +422,7 @@ impl<'a> Parser<'a> {
     fn with_entries(
         bytes: &'a [u8],
         cursor: usize,
-        entries: &'a BTreeMap<ObjectRef, usize>,
+        entries: &'a BTreeMap<ObjectRef, XrefEntry>,
     ) -> Self {
         Self {
             bytes,
@@ -247,12 +499,20 @@ impl<'a> Parser<'a> {
         let entries = self
             .entries
             .ok_or_else(|| malformed("indirect stream length cannot be resolved here"))?;
-        let offset = entries.get(&reference).copied().ok_or_else(|| {
-            malformed(format!(
-                "missing xref entry for stream length object {}",
-                reference.number
-            ))
-        })?;
+        let offset = match entries.get(&reference).copied() {
+            Some(XrefEntry::Offset(offset)) => offset,
+            Some(XrefEntry::Compressed { .. }) => {
+                return Err(malformed(
+                    "stream length object must not live inside an object stream",
+                ));
+            }
+            None => {
+                return Err(malformed(format!(
+                    "missing xref entry for stream length object {}",
+                    reference.number
+                )));
+            }
+        };
         let mut parser = Parser::new(self.bytes, offset);
         let number = parser.parse_u32()?;
         let generation = parser.parse_u16()?;

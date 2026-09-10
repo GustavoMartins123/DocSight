@@ -80,11 +80,12 @@ fn arm_memory_watchdog(policy: &SandboxPolicy) -> Result<bool, DocsightError> {
 
 fn physical_footprint() -> Result<u64, DocsightError> {
     let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    let mut buffer = &mut info as *mut libc::rusage_info_v4 as libc::rusage_info_t;
     let status = unsafe {
         libc::proc_pid_rusage(
             std::process::id() as libc::c_int,
             libc::RUSAGE_INFO_V4,
-            &mut info as *mut libc::rusage_info_v4 as libc::rusage_info_t,
+            &mut buffer,
         )
     };
     if status != 0 {
