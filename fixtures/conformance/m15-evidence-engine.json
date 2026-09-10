@@ -334,7 +334,7 @@
         "resolved_resources": "verified",
         "table_sizing": "verified"
       },
-      "display_list_sha256": "cc5e13b4f8031a5b1d2f912a3efb5b5d797be6bfb55441bd2fe0009ab44a473e",
+      "display_list_sha256": "e66612cb5cd18d75aa4e1ce9ffb79d7ac3b896e2fedef8c34057f7568a194834",
       "display_operation_count": 39,
       "document": {
         "id": "doc_4a59107057e1bfd3a83fd83fff868f8b",
@@ -348,7 +348,7 @@
       "raster_sha256": "3a21369311355e117f78daac82020b48254ae77b22a9ebe9931614f7fecdb80f",
       "resource_count": 0,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "5ac16dc84a9ddc12d0f028e99f22416d733c798dba1eca3a98c7060af457bf66",
+      "trace_sha256": "98c1dfcb7d9853e82e4d9465d3eb90b76e055d6781beca012c42cd4fbb6a1b94",
       "warnings": [
         "DOCX_LAYOUT_PAGINATED",
         "DOCX_FONT_SUBSTITUTED",
@@ -381,11 +381,11 @@
       },
       "trace_schema": "docsight.trace/v2",
       "verification": {
-        "display_list_sha256": "cc5e13b4f8031a5b1d2f912a3efb5b5d797be6bfb55441bd2fe0009ab44a473e",
+        "display_list_sha256": "e66612cb5cd18d75aa4e1ce9ffb79d7ac3b896e2fedef8c34057f7568a194834",
         "document_sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
         "raster_sha256": "3a21369311355e117f78daac82020b48254ae77b22a9ebe9931614f7fecdb80f",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "5ac16dc84a9ddc12d0f028e99f22416d733c798dba1eca3a98c7060af457bf66",
+        "trace_sha256": "98c1dfcb7d9853e82e4d9465d3eb90b76e055d6781beca012c42cd4fbb6a1b94",
         "valid": true
       },
       "warnings": [
@@ -543,7 +543,7 @@
         "resolved_resources": "verified",
         "table_sizing": "not_applicable"
       },
-      "display_list_sha256": "488f46fc73dfd338530b5544ac0f9b4d462b652717e524fda820b6f80c62630f",
+      "display_list_sha256": "40686718fe72f069d798bd4f60c8af49da55286d21e2804af08ad14e5850e5be",
       "display_operation_count": 183,
       "document": {
         "id": "doc_9074f729c7f4a39c0f6753300b7b4c08",
@@ -557,7 +557,7 @@
       "raster_sha256": "6caf9ff8a1810729255450db425619f186562213da234bf950eac1d81c215fec",
       "resource_count": 4,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "c75e95ec002cfbdbe2685c54fcbe2be906cfb158f349e708ecc82eb2a3e0efcc",
+      "trace_sha256": "ee3d0b566da758eb49c8b2f780d6c56e6c2d7dac3930778303a94fef5e3d1af7",
       "warnings": [
         "APPROXIMATED_PDF_FONT"
       ],
@@ -588,11 +588,11 @@
       },
       "trace_schema": "docsight.trace/v2",
       "verification": {
-        "display_list_sha256": "488f46fc73dfd338530b5544ac0f9b4d462b652717e524fda820b6f80c62630f",
+        "display_list_sha256": "40686718fe72f069d798bd4f60c8af49da55286d21e2804af08ad14e5850e5be",
         "document_sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362",
         "raster_sha256": "6caf9ff8a1810729255450db425619f186562213da234bf950eac1d81c215fec",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "c75e95ec002cfbdbe2685c54fcbe2be906cfb158f349e708ecc82eb2a3e0efcc",
+        "trace_sha256": "ee3d0b566da758eb49c8b2f780d6c56e6c2d7dac3930778303a94fef5e3d1af7",
         "valid": true
       },
       "warnings": [
@@ -644,7 +644,7 @@
     {
       "file": "error-envelope.json",
       "id": "https://docsight.dev/schemas/v2/error-envelope.json",
-      "sha256": "f19fbd706152ace9466f1ea64b816c25b54e1fc6e863cae94969862474323732"
+      "sha256": "3176bac709289ed4db879d37cdf04cf9a81382cfe96f429c6296dcdf4001baed"
     },
     {
       "file": "evidence-record.json",
@@ -724,7 +724,7 @@
     {
       "file": "resolve-result.json",
       "id": "https://docsight.dev/schemas/v2/resolve-result.json",
-      "sha256": "6ba04daee508e7bbdf6de06e441d37dc28cbf56bdaaf70e2416ad66df502737f"
+      "sha256": "2d55d947338a84c7e7e35ae708351076c8f3fe5c1ca2b3e3a13fc54174c06a66"
     },
     {
       "file": "semantic-object.json",
@@ -759,7 +759,7 @@
     {
       "file": "trace-manifest.json",
       "id": "https://docsight.dev/schemas/v2/trace-manifest.json",
-      "sha256": "b98dd61c40b1404d5b1453611d32a97526f61d3c4cca2886b3a366f2e524bb2d"
+      "sha256": "4f6f9e6a39c16091c45c4e0581f1def7470639cb173441b849beb39348c18cef"
     },
     {
       "file": "trace-result.json",

@@ -63,6 +63,37 @@ impl Diagnostic {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ErrorLocation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+}
+
+impl Display for ErrorLocation {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut fields = Vec::new();
+        if let Some(page) = self.page {
+            fields.push(format!("page {page}"));
+        }
+        if let Some(object) = &self.object {
+            fields.push(format!("object {object}"));
+        }
+        if let Some(operator) = &self.operator {
+            fields.push(format!("operator {operator}"));
+        }
+        if let Some(offset) = self.offset {
+            fields.push(format!("offset {offset}"));
+        }
+        formatter.write_str(&fields.join(", "))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DocsightError {
     #[error("invalid argument: {message}")]
@@ -79,6 +110,11 @@ pub enum DocsightError {
     ResourceLimit { resource: String, limit: u64 },
     #[error("malformed document: {message}")]
     MalformedDocument { message: String },
+    #[error("malformed document at {location}: {message}")]
+    MalformedDocumentAt {
+        message: String,
+        location: ErrorLocation,
+    },
     #[error("verification failed: {message}")]
     VerificationFailed { message: String },
     #[error("encrypted documents require a password and are not supported")]
@@ -103,7 +139,9 @@ impl DocsightError {
         match self {
             Self::InvalidArgument { .. } => 2,
             Self::UnsupportedFormat | Self::UnsupportedOperation { .. } => 10,
-            Self::MalformedDocument { .. } | Self::VerificationFailed { .. } => 11,
+            Self::MalformedDocument { .. }
+            | Self::MalformedDocumentAt { .. }
+            | Self::VerificationFailed { .. } => 11,
             Self::EncryptedDocument | Self::EncryptedPackage => 12,
             Self::ResourceLimit { .. } => 13,
             Self::UnsupportedFeature { .. } => 20,
@@ -125,7 +163,7 @@ impl DocsightError {
                 "LAYOUT_PARTIAL",
                 "the requested result requires unsupported layout or rendering behavior",
             ),
-            Self::MalformedDocument { .. } => (
+            Self::MalformedDocument { .. } | Self::MalformedDocumentAt { .. } => (
                 "MALFORMED_DOCUMENT",
                 "the document was rejected during parsing",
             ),
@@ -145,13 +183,40 @@ impl DocsightError {
             ),
             Self::Io { .. } => ("IO_ERROR", "the requested file could not be read"),
         };
+        let page = self.error_location().and_then(|location| location.page);
         Diagnostic {
             code: code.to_owned(),
             severity: DiagnosticSeverity::Error,
             message: self.to_string(),
             effect: effect.to_owned(),
             object: None,
-            page: None,
+            page,
+        }
+    }
+
+    pub fn with_error_location(self, location: ErrorLocation) -> Self {
+        match self {
+            Self::MalformedDocument { message } => Self::MalformedDocumentAt { message, location },
+            Self::MalformedDocumentAt {
+                message,
+                location: existing,
+            } => Self::MalformedDocumentAt {
+                message,
+                location: ErrorLocation {
+                    page: location.page.or(existing.page),
+                    object: location.object.or(existing.object),
+                    operator: location.operator.or(existing.operator),
+                    offset: location.offset.or(existing.offset),
+                },
+            },
+            error => error,
+        }
+    }
+
+    pub fn error_location(&self) -> Option<&ErrorLocation> {
+        match self {
+            Self::MalformedDocumentAt { location, .. } => Some(location),
+            _ => None,
         }
     }
 }

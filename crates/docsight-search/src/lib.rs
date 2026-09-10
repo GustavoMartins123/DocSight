@@ -1660,6 +1660,7 @@ fn nearest_caption<'a>(
 #[serde(rename_all = "snake_case")]
 pub enum ResolveStatus {
     Resolved,
+    LowConfidence,
     Ambiguous,
     NoMatch,
 }
@@ -1776,11 +1777,8 @@ pub fn resolve(
     });
     let status = match ranked.as_slice() {
         [] => ResolveStatus::NoMatch,
-        [_] => ResolveStatus::Resolved,
-        [first, second, ..]
-            if first.score < RESOLVE_THRESHOLD
-                || first.score - second.score <= RESOLVE_AMBIGUITY_MARGIN =>
-        {
+        [first, ..] if first.score < RESOLVE_THRESHOLD => ResolveStatus::LowConfidence,
+        [first, second, ..] if first.score - second.score <= RESOLVE_AMBIGUITY_MARGIN => {
             ResolveStatus::Ambiguous
         }
         _ => ResolveStatus::Resolved,
@@ -2409,7 +2407,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_single_candidate_is_never_ambiguous() -> Result<(), Box<dyn std::error::Error>> {
+    fn resolve_single_weak_candidate_is_low_confidence() -> Result<(), Box<dyn std::error::Error>> {
         let paragraph = block(
             "p_due",
             BlockKind::Paragraph,
@@ -2426,7 +2424,7 @@ mod tests {
         document.pages[0].block_ids = vec![paragraph.id.clone()];
         let result = resolve(&document, "Amount due", None, None)?;
         assert_eq!(result.candidates.len(), 1);
-        assert_eq!(result.status, ResolveStatus::Resolved);
+        assert_eq!(result.status, ResolveStatus::LowConfidence);
         Ok(())
     }
 

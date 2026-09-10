@@ -134,6 +134,22 @@ fn resolve_is_explainable_deterministic_and_ambiguity_preserving()
             >= 2
     );
 
+    let low_confidence = agent_json(&[
+        "--agent",
+        "resolve",
+        headings,
+        "--text",
+        "Architecture unmatched-token",
+        "--kind",
+        "heading",
+    ])?;
+    assert_eq!(low_confidence["result"]["status"], "low_confidence");
+    assert!(
+        low_confidence["result"]["candidates"]
+            .as_array()
+            .is_some_and(|candidates| !candidates.is_empty())
+    );
+
     let absent = agent_json(&[
         "--agent",
         "resolve",

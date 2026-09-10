@@ -6,11 +6,12 @@ mod syntax;
 
 use content::{
     ClipRegion, DisplayCommand, ExtGraphicsState, FontInfo, LineCap, LineJoin, Paint, PathSegment,
-    Point, TextRun, ext_graphics_states_from_resources, fonts_from_resources, parse_content,
+    Point, TextRun, VisualIssue, ext_graphics_states_from_resources, fonts_from_resources,
+    parse_content,
 };
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
-    DocumentSource, ObjectId, Page, Rect, SourceSpan,
+    DocumentSource, ErrorLocation, ObjectId, Page, Rect, SourceSpan,
 };
 use raster::{MAX_DPI, MIN_DPI};
 use serde::{Deserialize, Serialize};
@@ -161,6 +162,10 @@ pub enum PdfTraceDisplayOperation {
         font_name: String,
         bold: bool,
         color_argb: u32,
+        stroke_color_argb: u32,
+        stroke_width_pt: f32,
+        render_mode: u8,
+        mirrored_x: bool,
         clips: Vec<PdfTraceClip>,
     },
     Fill {
@@ -308,7 +313,15 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
-        warnings.extend(graphics_state_visual_warnings(number, &parsed));
+        let warning_objects = spans
+            .iter()
+            .map(|span| (span.id.clone(), span.bbox))
+            .collect::<Vec<_>>();
+        warnings.extend(graphics_state_visual_warnings(
+            number,
+            &parsed,
+            &warning_objects,
+        ));
         let page = self.page_record(number)?;
         Ok(PdfTracePage {
             number,
@@ -352,8 +365,6 @@ impl<'a> PdfDocument<'a> {
             if parsed.omitted_xobjects {
                 all_warnings.push(xobject_placeholder_warning(page_num));
             }
-            all_warnings.extend(graphics_state_visual_warnings(page_num, &parsed));
-
             let reconstructed = reconstruction::reconstruct_page_semantics(
                 page_num,
                 self.source.sha256(),
@@ -363,6 +374,16 @@ impl<'a> PdfDocument<'a> {
                 &parsed.commands,
                 &mut global_reading_order,
             )?;
+            let warning_objects = reconstructed
+                .blocks
+                .iter()
+                .filter_map(|block| block.bbox.map(|bbox| (block.id.clone(), bbox)))
+                .collect::<Vec<_>>();
+            all_warnings.extend(graphics_state_visual_warnings(
+                page_num,
+                &parsed,
+                &warning_objects,
+            ));
             blocks.extend(reconstructed.blocks);
 
             pages.push(Page {
@@ -422,7 +443,7 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
-        warnings.extend(graphics_state_visual_warnings(number, &parsed));
+        warnings.extend(graphics_state_visual_warnings(number, &parsed, &[]));
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
             page: number,
@@ -462,42 +483,60 @@ impl<'a> PdfDocument<'a> {
             Some(value) => self.store.resolve_dict(value)?.into_keys().collect(),
             None => BTreeSet::new(),
         };
-        let graphics_states =
-            ext_graphics_states_from_resources(&resources, |value| self.store.resolve(value))?;
+        let graphics_states = ext_graphics_states_from_resources(
+            &resources,
+            |value| self.store.resolve(value),
+            |value| {
+                let value = self.store.resolve(value)?;
+                match value {
+                    Value::Stream(stream) => decode_stream(&stream),
+                    _ => Err(malformed("font program must resolve to a stream")),
+                }
+            },
+        )?;
         let trace_resources = trace_resources(&fonts, &xobjects, &graphics_states.states);
         let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(
-            &content,
+            &content.bytes,
             page.media_box.x0,
             page.media_box.y1,
             &fonts,
             &xobjects,
             &graphics_states.states,
         )
-        .map_err(|error| match error {
-            DocsightError::MalformedDocument { message } => DocsightError::MalformedDocument {
-                message: format!("page {number}: {message}"),
-            },
-            other => other,
+        .map_err(|error| {
+            let mut location = ErrorLocation {
+                page: Some(number),
+                ..ErrorLocation::default()
+            };
+            if let Some(error_location) = error.error_location()
+                && let Some(offset) = error_location.offset
+            {
+                let stream_location = content.location(offset);
+                location.object = stream_location.object;
+                location.offset = stream_location.offset;
+            }
+            error.with_error_location(location)
         })?;
         Ok(ParsedPage {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
             omitted_xobjects: parsed.omitted_xobjects,
-            clip_text: parsed.clip_text,
-            negative_font_size: parsed.negative_font_size,
-            unsupported_color_spaces: parsed.unsupported_color_spaces,
-            pattern_paints: parsed.pattern_paints,
-            unsupported_blend_modes: graphics_states.blend_modes,
-            ignored_ext_keys: graphics_states.ignored_keys,
             trace_resources,
         })
     }
 
-    fn read_content_streams(&self, contents: &[Value]) -> Result<Vec<u8>, DocsightError> {
+    fn read_content_streams(&self, contents: &[Value]) -> Result<ContentStreams, DocsightError> {
         let mut combined = Vec::new();
-        for value in contents {
+        let mut segments = Vec::new();
+        for (index, value) in contents.iter().enumerate() {
+            let object = match value {
+                Value::Ref(reference) => {
+                    format!("{} {} R", reference.number, reference.generation)
+                }
+                _ => format!("contents[{index}]"),
+            };
             let value = self.store.resolve(value)?;
             let stream = match value {
                 Value::Stream(stream) => stream,
@@ -512,10 +551,19 @@ impl<'a> PdfDocument<'a> {
             if projected > docsight_core::MAX_INSPECT_BYTES as usize {
                 return Err(content_limit());
             }
+            let start = combined.len() as u64;
             combined.extend_from_slice(&data);
             combined.push(b'\n');
+            segments.push(ContentSegment {
+                start,
+                end: combined.len() as u64,
+                object,
+            });
         }
-        Ok(combined)
+        Ok(ContentStreams {
+            bytes: combined,
+            segments,
+        })
     }
 
     fn page_record(&self, number: u32) -> Result<&PageRecord, DocsightError> {
@@ -569,13 +617,39 @@ struct ParsedPage {
     text_runs: Vec<TextRun>,
     approximated_font: bool,
     omitted_xobjects: bool,
-    clip_text: bool,
-    negative_font_size: bool,
-    unsupported_color_spaces: Vec<String>,
-    pattern_paints: Vec<String>,
-    unsupported_blend_modes: Vec<String>,
-    ignored_ext_keys: Vec<String>,
     trace_resources: Vec<PdfTraceResource>,
+}
+
+struct ContentStreams {
+    bytes: Vec<u8>,
+    segments: Vec<ContentSegment>,
+}
+
+impl ContentStreams {
+    fn location(&self, offset: u64) -> ErrorLocation {
+        let segment = self
+            .segments
+            .iter()
+            .find(|segment| offset >= segment.start && offset < segment.end)
+            .or_else(|| self.segments.last());
+        match segment {
+            Some(segment) => ErrorLocation {
+                object: Some(segment.object.clone()),
+                offset: Some(offset.saturating_sub(segment.start)),
+                ..ErrorLocation::default()
+            },
+            None => ErrorLocation {
+                offset: Some(offset),
+                ..ErrorLocation::default()
+            },
+        }
+    }
+}
+
+struct ContentSegment {
+    start: u64,
+    end: u64,
+    object: String,
 }
 
 fn trace_resources(
@@ -619,6 +693,10 @@ fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation
             font_name: run.font_name.clone(),
             bold: run.bold,
             color_argb: run.argb,
+            stroke_color_argb: run.stroke_argb,
+            stroke_width_pt: run.stroke_style.width,
+            render_mode: run.render_mode,
+            mirrored_x: run.mirrored_x,
             clips: trace_clips(&run.clips),
         },
         DisplayCommand::Fill {
@@ -626,6 +704,7 @@ fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation
             paint,
             even_odd,
             clips,
+            ..
         } => PdfTraceDisplayOperation::Fill {
             path: path.iter().map(trace_path_segment).collect(),
             color_argb: paint_argb(*paint),
@@ -637,6 +716,7 @@ fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation
             paint,
             style,
             clips,
+            ..
         } => PdfTraceDisplayOperation::Stroke {
             path: path.iter().map(trace_path_segment).collect(),
             color_argb: paint_argb(*paint),
@@ -660,6 +740,7 @@ fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation
             bbox,
             resource_name,
             clips,
+            ..
         } => PdfTraceDisplayOperation::Figure {
             bbox: *bbox,
             resource_name: resource_name.clone(),
@@ -847,7 +928,11 @@ fn collect_pages(
             let contents = match dict.get("Contents") {
                 None => Vec::new(),
                 Some(Value::Array(values)) => values.clone(),
-                Some(value) => vec![value.clone()],
+                Some(value) => match store.resolve(value)? {
+                    Value::Array(values) => values,
+                    Value::Stream(_) => vec![value.clone()],
+                    _ => return Err(malformed("Contents must be a stream or array of streams")),
+                },
             };
             pages.push(PageRecord {
                 media_box: effective_box,
@@ -966,129 +1051,134 @@ fn xobject_placeholder_warning(page: u32) -> Diagnostic {
     }
 }
 
-fn ext_state_ignored_warning(page: u32, keys: &[String]) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_EXTGSTATE_IGNORED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} uses PDF ExtGState entries {} that do not affect text extraction",
-            keys.join(", ")
-        ),
-        effect: "text and structure remain exact; visual rendering does not reproduce these raster-only graphics state entries"
-            .to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-
-fn soft_mask_warning(page: u32) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_SOFT_MASK_IGNORED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} uses a PDF soft mask (transparency group)"),
-        effect: "text and structure remain exact; visual rendering paints masked content without its transparency mask"
-            .to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-
-fn graphics_state_visual_warnings(page: u32, parsed: &ParsedPage) -> Vec<Diagnostic> {
-    let mut warnings = Vec::new();
-    if !parsed.ignored_ext_keys.is_empty() {
-        let (masks, rest): (Vec<String>, Vec<String>) = parsed
-            .ignored_ext_keys
-            .iter()
-            .cloned()
-            .partition(|key| key == "SMask");
-        if !masks.is_empty() {
-            warnings.push(soft_mask_warning(page));
-        }
-        if !rest.is_empty() {
-            warnings.push(ext_state_ignored_warning(page, &rest));
+fn graphics_state_visual_warnings(
+    page: u32,
+    parsed: &ParsedPage,
+    objects: &[(ObjectId, Rect)],
+) -> Vec<Diagnostic> {
+    let mut warning_targets = BTreeSet::new();
+    for command in &parsed.commands {
+        let (issues, bbox) = command_visual_evidence(command);
+        for issue in issues {
+            let affected = bbox
+                .map(|bbox| {
+                    objects
+                        .iter()
+                        .filter(|(_, object_bbox)| bbox.intersects(*object_bbox))
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if affected.is_empty() {
+                warning_targets.insert((issue.clone(), None));
+            } else {
+                warning_targets.extend(
+                    affected
+                        .into_iter()
+                        .map(|object| (issue.clone(), Some(object))),
+                );
+            }
         }
     }
-    if parsed.clip_text {
-        warnings.push(clip_text_warning(page));
-    }
-    if parsed.negative_font_size {
-        warnings.push(negative_font_size_warning(page));
-    }
-    if !parsed.unsupported_color_spaces.is_empty() {
-        warnings.push(color_space_warning(page, &parsed.unsupported_color_spaces));
-    }
-    if !parsed.pattern_paints.is_empty() {
-        warnings.push(pattern_warning(page, &parsed.pattern_paints));
-    }
-    if !parsed.unsupported_blend_modes.is_empty() {
-        warnings.push(blend_mode_warning(page, &parsed.unsupported_blend_modes));
-    }
-    warnings
+    warning_targets
+        .into_iter()
+        .map(|(issue, object)| visual_warning(page, issue, object))
+        .collect()
 }
 
-fn clip_text_warning(page: u32) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_CLIP_TEXT_VISUAL".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} uses PDF text rendering modes 4-7 (clipping text)"),
-        effect: "text was extracted; visual rendering does not clip text to its outline".to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-fn negative_font_size_warning(page: u32) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_NEGATIVE_FONT_SIZE_VISUAL".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} uses a negative PDF font size"),
-        effect: "text was extracted with mirrored geometry; visual rendering paints upright glyphs instead of mirrored ones"
-            .to_owned(),
-        object: None,
-        page: Some(page),
+fn command_visual_evidence(command: &DisplayCommand) -> (&[VisualIssue], Option<Rect>) {
+    match command {
+        DisplayCommand::Text(run) => (&run.visual_issues, Some(run.bbox)),
+        DisplayCommand::Figure {
+            bbox,
+            visual_issues,
+            ..
+        } => (visual_issues, Some(*bbox)),
+        DisplayCommand::Fill {
+            path,
+            visual_issues,
+            ..
+        }
+        | DisplayCommand::Stroke {
+            path,
+            visual_issues,
+            ..
+        } => (visual_issues, path_bbox(path)),
     }
 }
 
-fn color_space_warning(page: u32, names: &[String]) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_COLOR_SPACE_UNSUPPORTED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} uses PDF color spaces {} without a calibrated conversion",
-            names.join(", ")
+fn path_bbox(path: &[PathSegment]) -> Option<Rect> {
+    let points = path.iter().flat_map(|segment| match segment {
+        PathSegment::Move(point) | PathSegment::Line(point) => vec![*point],
+        PathSegment::Cubic(control_1, control_2, end) => vec![*control_1, *control_2, *end],
+        PathSegment::Close => Vec::new(),
+    });
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for point in points {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    if !min_x.is_finite() {
+        return None;
+    }
+    if min_x == max_x {
+        max_x += 0.001;
+    }
+    if min_y == max_y {
+        max_y += 0.001;
+    }
+    Rect::new(min_x, min_y, max_x, max_y).ok()
+}
+
+fn visual_warning(page: u32, issue: VisualIssue, object: Option<ObjectId>) -> Diagnostic {
+    let (code, message, effect) = match issue {
+        VisualIssue::ExtGraphicsState(key) => (
+            "PDF_EXTGSTATE_IGNORED",
+            format!("page {page} paints content with unsupported ExtGState entry {key}"),
+            "the affected object's pixels omit this graphics-state behavior",
         ),
-        effect: "text and structure remain exact; visual rendering paints affected fills and strokes black"
-            .to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-
-fn pattern_warning(page: u32, names: &[String]) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_PATTERN_PAINT_UNSUPPORTED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} paints with PDF patterns {} without rendering their tiles",
-            names.join(", ")
+        VisualIssue::SoftMask => (
+            "PDF_SOFT_MASK_IGNORED",
+            format!("page {page} paints content under a PDF soft mask"),
+            "the affected object's pixels are painted without their transparency mask",
         ),
-        effect: "text and structure remain exact; visual rendering paints patterned fills and strokes with the previous flat color"
-            .to_owned(),
-        object: None,
-        page: Some(page),
-    }
-}
-
-fn blend_mode_warning(page: u32, names: &[String]) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_BLEND_MODE_UNSUPPORTED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} uses PDF blend modes {} without blending support",
-            names.join(", ")
+        VisualIssue::BlendMode(name) => (
+            "PDF_BLEND_MODE_UNSUPPORTED",
+            format!("page {page} paints content with unsupported blend mode {name}"),
+            "the affected object's pixels are composited without the declared blend mode",
         ),
-        effect: "text and structure remain exact; visual rendering paints blended content opaque"
-            .to_owned(),
-        object: None,
+        VisualIssue::ColorSpace(name) => (
+            "PDF_COLOR_SPACE_UNSUPPORTED",
+            format!("page {page} paints content in unsupported color space {name}"),
+            "the affected object's pixels use black instead of a calibrated color conversion",
+        ),
+        VisualIssue::Pattern(name) => (
+            "PDF_PATTERN_PAINT_UNSUPPORTED",
+            format!("page {page} paints content with unsupported pattern {name}"),
+            "the affected object's pixels use the previous flat color instead of the pattern",
+        ),
+        VisualIssue::TextClip => (
+            "PDF_CLIP_TEXT_VISUAL",
+            format!("page {page} uses a clipping text rendering mode"),
+            "the affected text was extracted, but its outline was not added to the clipping path",
+        ),
+        VisualIssue::NegativeFontSize => (
+            "PDF_NEGATIVE_FONT_SIZE_VISUAL",
+            format!("page {page} uses a negative PDF font size"),
+            "the affected text was extracted, but the complete signed font transform is not reproduced by the axis-aligned renderer",
+        ),
+    };
+    Diagnostic {
+        code: code.to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message,
+        effect: effect.to_owned(),
+        object,
         page: Some(page),
     }
 }

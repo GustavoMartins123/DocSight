@@ -81,12 +81,14 @@ pub(crate) fn rasterize(
                 paint,
                 even_odd,
                 clips,
+                ..
             } => canvas.fill_path(path, *paint, *even_odd, clips)?,
             DisplayCommand::Stroke {
                 path,
                 paint,
                 style,
                 clips,
+                ..
             } => {
                 canvas.stroke_path(path, *paint, style, clips)?;
             }
@@ -98,6 +100,39 @@ pub(crate) fn rasterize(
         png: docsight_core::encode_png(width, height, &canvas.pixels)?,
         pixels: canvas.pixels,
     })
+}
+
+fn argb_paint(argb: u32) -> Paint {
+    Paint {
+        color: Color {
+            red: ((argb >> 16) & 0xff) as u8,
+            green: ((argb >> 8) & 0xff) as u8,
+            blue: (argb & 0xff) as u8,
+        },
+        alpha: ((argb >> 24) & 0xff) as f32 / 255.0,
+    }
+}
+
+fn transformed_glyph_contours(
+    glyph: &GlyphOutline,
+    origin_x: f32,
+    baseline_y: f32,
+    scale_x: f32,
+    scale_y: f32,
+) -> Vec<Vec<Point>> {
+    glyph
+        .contours
+        .iter()
+        .map(|contour| {
+            contour
+                .iter()
+                .map(|point| Point {
+                    x: origin_x + point.x * scale_x,
+                    y: baseline_y - point.y * scale_y,
+                })
+                .collect()
+        })
+        .collect()
 }
 
 struct Canvas {
@@ -162,26 +197,21 @@ impl Canvas {
     }
 
     fn draw_text(&mut self, run: &TextRun) -> Result<(), DocsightError> {
-        if !run.glyphs.is_empty() {
-            let color = Color {
-                red: ((run.argb >> 16) & 0xff) as u8,
-                green: ((run.argb >> 8) & 0xff) as u8,
-                blue: (run.argb & 0xff) as u8,
-            };
-            self.draw_outline_text(run, color, ((run.argb >> 24) & 0xff) as f32 / 255.0);
+        if matches!(run.render_mode, 3 | 7) {
             return Ok(());
+        }
+        let fill = matches!(run.render_mode, 0 | 2 | 4 | 6);
+        let stroke = matches!(run.render_mode, 1 | 2 | 5 | 6);
+        let fill_paint = argb_paint(run.argb);
+        let stroke_paint = argb_paint(run.stroke_argb);
+        if !run.glyphs.is_empty() {
+            return self.draw_outline_text(run, fill, stroke, fill_paint, stroke_paint);
         }
         let character_count = run.text.chars().count();
         if character_count == 0 {
             return Ok(());
         }
         let advance = run.bbox.width() / character_count as f32;
-        let color = Color {
-            red: ((run.argb >> 16) & 0xff) as u8,
-            green: ((run.argb >> 8) & 0xff) as u8,
-            blue: (run.argb & 0xff) as u8,
-        };
-        let alpha = ((run.argb >> 24) & 0xff) as f32 / 255.0;
         for (index, character) in run.text.chars().enumerate() {
             if character.is_whitespace() || character == '\u{200b}' {
                 continue;
@@ -189,7 +219,12 @@ impl Canvas {
             let pattern = glyph(character).ok_or_else(|| DocsightError::UnsupportedFeature {
                 feature: format!("bitmap glyph for character {character:?}"),
             })?;
-            let left = run.bbox.x0 + index as f32 * advance;
+            let visual_index = if run.mirrored_x {
+                character_count - index - 1
+            } else {
+                index
+            };
+            let left = run.bbox.x0 + visual_index as f32 * advance;
             let cell_width = advance / 6.0;
             let cell_height = run.bbox.height() / 7.0;
             for (row, bits) in pattern.iter().enumerate() {
@@ -197,18 +232,39 @@ impl Canvas {
                     if bits & (1 << (4 - column)) == 0 {
                         continue;
                     }
-                    let x0 = left + column as f32 * cell_width;
+                    let visual_column = if run.mirrored_x { 4 - column } else { column };
+                    let x0 = left + visual_column as f32 * cell_width;
                     let y0 = run.bbox.y0 + row as f32 * cell_height;
                     let x1 = x0 + cell_width * if run.bold { 1.35 } else { 1.0 };
                     let y1 = y0 + cell_height;
-                    self.fill_rect(x0, y0, x1, y1, Paint { color, alpha }, &run.clips);
+                    if stroke {
+                        let expansion = run.stroke_style.width / 2.0;
+                        self.fill_rect(
+                            x0 - expansion,
+                            y0 - expansion,
+                            x1 + expansion,
+                            y1 + expansion,
+                            stroke_paint,
+                            &run.clips,
+                        );
+                    }
+                    if fill {
+                        self.fill_rect(x0, y0, x1, y1, fill_paint, &run.clips);
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    fn draw_outline_text(&mut self, run: &TextRun, color: Color, alpha: f32) {
+    fn draw_outline_text(
+        &mut self,
+        run: &TextRun,
+        fill: bool,
+        stroke: bool,
+        fill_paint: Paint,
+        stroke_paint: Paint,
+    ) -> Result<(), DocsightError> {
         let units_per_em = run
             .glyphs
             .first()
@@ -225,51 +281,34 @@ impl Canvas {
         } else {
             1.0
         };
-        let mut cursor = run.bbox.x0;
+        let direction = if run.mirrored_x { -1.0 } else { 1.0 };
+        let mut cursor = if run.mirrored_x {
+            run.bbox.x1
+        } else {
+            run.bbox.x0
+        };
         for glyph in &run.glyphs {
-            self.fill_glyph(
-                glyph,
-                cursor,
-                run.baseline_y,
-                nominal_scale * horizontal_scale,
-                nominal_scale,
-                color,
-                alpha,
-                &run.clips,
-            );
-            cursor += glyph.advance * nominal_scale * horizontal_scale;
+            let scale_x = nominal_scale * horizontal_scale * direction;
+            let contours =
+                transformed_glyph_contours(glyph, cursor, run.baseline_y, scale_x, nominal_scale);
+            if stroke {
+                for contour in &contours {
+                    if contour.is_empty() {
+                        continue;
+                    }
+                    let mut path = Vec::with_capacity(contour.len() + 1);
+                    path.push(PathSegment::Move(contour[0]));
+                    path.extend(contour.iter().skip(1).copied().map(PathSegment::Line));
+                    path.push(PathSegment::Close);
+                    self.stroke_path(&path, stroke_paint, &run.stroke_style, &run.clips)?;
+                }
+            }
+            if fill {
+                self.fill_polygons(&contours, fill_paint, false, &run.clips);
+            }
+            cursor += glyph.advance * nominal_scale * horizontal_scale * direction;
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn fill_glyph(
-        &mut self,
-        glyph: &GlyphOutline,
-        origin_x: f32,
-        baseline_y: f32,
-        scale_x: f32,
-        scale_y: f32,
-        color: Color,
-        alpha: f32,
-        clips: &[ClipRegion],
-    ) {
-        if glyph.contours.is_empty() {
-            return;
-        }
-        let transformed = glyph
-            .contours
-            .iter()
-            .map(|contour| {
-                contour
-                    .iter()
-                    .map(|point| Point {
-                        x: origin_x + point.x * scale_x,
-                        y: baseline_y - point.y * scale_y,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        self.fill_polygons(&transformed, Paint { color, alpha }, false, clips);
+        Ok(())
     }
 
     fn fill_path(
@@ -1168,18 +1207,18 @@ mod tests {
             advance: 1000.0,
             units_per_em: 1000.0,
         };
-        canvas.fill_glyph(
-            &glyph,
-            2.0,
-            16.0,
-            1.0,
-            1.0,
-            Color {
-                red: 0,
-                green: 0,
-                blue: 0,
+        let contours = transformed_glyph_contours(&glyph, 2.0, 16.0, 1.0, 1.0);
+        canvas.fill_polygons(
+            &contours,
+            Paint {
+                color: Color {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                },
+                alpha: 1.0,
             },
-            1.0,
+            false,
             &[],
         );
         assert!(canvas.pixels.chunks_exact(3).any(|pixel| {

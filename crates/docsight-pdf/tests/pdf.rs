@@ -339,6 +339,30 @@ fn rejects_unknown_content_operators() -> Result<(), DocsightError> {
 }
 
 #[test]
+fn reports_typed_content_error_location() -> Result<(), DocsightError> {
+    let content = "BT /F1 10 Tf 20 Td (Hello) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let error = match PdfDocument::open(&source)?.page(1) {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(DocsightError::VerificationFailed {
+                message: "malformed content was accepted".to_owned(),
+            });
+        }
+    };
+    let location = error
+        .error_location()
+        .ok_or_else(|| DocsightError::VerificationFailed {
+            message: "typed error location is missing".to_owned(),
+        })?;
+    assert_eq!(location.page, Some(1));
+    assert_eq!(location.object.as_deref(), Some("5 0 R"));
+    assert_eq!(location.operator.as_deref(), Some("Td"));
+    assert_eq!(location.offset, Some(16));
+    Ok(())
+}
+
+#[test]
 fn decodes_simple_truetype_text_through_to_unicode() -> Result<(), DocsightError> {
     let content = "BT /F1 12 Tf 20 70 Td (\\001\\002) Tj ET";
     let cmap = "begincmap\n2 beginbfchar\n<01> <00E9>\n<02> <4F60>\nendbfchar\nendcmap";
@@ -360,6 +384,49 @@ fn decodes_simple_truetype_text_through_to_unicode() -> Result<(), DocsightError
 }
 
 #[test]
+fn pads_odd_tounicode_hex_strings() -> Result<(), DocsightError> {
+    let content = "BT /F1 12 Tf 20 70 Td (\\001) Tj ET";
+    let cmap = "begincmap\n1 beginbfchar\n<01> <041>\nendbfchar\nendcmap";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /TrueType /BaseFont /Example /ToUnicode 6 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(page.spans[0].text, "А");
+    Ok(())
+}
+
+#[test]
+fn resolves_indirect_contents_arrays() -> Result<(), DocsightError> {
+    let first = "BT /F1 10 Tf 20 70 Td (Hello) Tj";
+    let second = " ( world) Tj ET";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        "[6 0 R 7 0 R]".to_owned(),
+        format!("<< /Length {} >>\nstream\n{first}\nendstream", first.len()),
+        format!("<< /Length {} >>\nstream\n{second}\nendstream", second.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(
+        page.spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>(),
+        "Hello world"
+    );
+    Ok(())
+}
+
+#[test]
 fn preserves_clipping_paths_in_native_rasterization() -> Result<(), DocsightError> {
     let content = "0 0 100 100 re W n 0 0 200 100 re f";
     let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
@@ -369,6 +436,16 @@ fn preserves_clipping_paths_in_native_rasterization() -> Result<(), DocsightErro
     let outside = (50usize * raster.width_px as usize + 150) * 3;
     assert_eq!(&raster.pixels[inside..inside + 3], &[0, 0, 0]);
     assert_eq!(&raster.pixels[outside..outside + 3], &[255, 255, 255]);
+    Ok(())
+}
+
+#[test]
+fn repeated_closepath_after_rectangle_is_a_noop() -> Result<(), DocsightError> {
+    let content = "10 10 80 80 re h f";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 100 100]", ""))?;
+    let raster = PdfDocument::open(&source)?.rasterize(1, 72, None)?;
+    let pixel = (50usize * raster.width_px as usize + 50) * 3;
+    assert_eq!(&raster.pixels[pixel..pixel + 3], &[0, 0, 0]);
     Ok(())
 }
 
@@ -594,8 +671,18 @@ fn accepts_negative_and_zero_font_size() -> Result<(), DocsightError> {
     let document = PdfDocument::open(&source)?.to_document()?;
     assert_eq!(document.paragraphs().count(), 1);
     assert!(document.warnings.iter().any(|warning| {
-        warning.code == "PDF_NEGATIVE_FONT_SIZE_VISUAL" && warning.page == Some(1)
+        warning.code == "PDF_NEGATIVE_FONT_SIZE_VISUAL"
+            && warning.page == Some(1)
+            && warning.object.is_some()
     }));
+    let trace = PdfDocument::open(&source)?.trace_page(1)?;
+    assert!(matches!(
+        trace.operations.as_slice(),
+        [PdfTraceDisplayOperation::Text {
+            mirrored_x: true,
+            ..
+        }]
+    ));
     let content = "BT /F1 0 Tf 20 70 Td (Invisible) Tj ET";
     let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
     let page = PdfDocument::open(&source)?.page(1)?;
@@ -611,6 +698,24 @@ fn accepts_negative_and_zero_horizontal_scale() -> Result<(), DocsightError> {
     assert_eq!(page.spans.len(), 1);
     assert_eq!(page.spans[0].text, "Mirror");
     assert!(page.spans[0].bbox.x1 > page.spans[0].bbox.x0);
+    let trace = PdfDocument::open(&source)?.trace_page(1)?;
+    assert!(matches!(
+        trace.operations.as_slice(),
+        [PdfTraceDisplayOperation::Text {
+            mirrored_x: true,
+            ..
+        }]
+    ));
+    let content = "q -1 0 0 1 200 0 cm BT /F1 10 Tf -100 Tz 20 70 Td (Upright) Tj ET Q";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let trace = PdfDocument::open(&source)?.trace_page(1)?;
+    assert!(matches!(
+        trace.operations.as_slice(),
+        [PdfTraceDisplayOperation::Text {
+            mirrored_x: false,
+            ..
+        }]
+    ));
     let content = "BT /F1 10 Tf 0 Tz 20 70 Td (Hi) Tj ET";
     let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
     let page = PdfDocument::open(&source)?.page(1)?;
@@ -632,6 +737,12 @@ fn accepts_invisible_text_rendering_modes_for_extraction() -> Result<(), Docsigh
                 .any(|warning| warning.code == "PDF_CLIP_TEXT_VISUAL"),
             "mode {mode} must not emit a clip warning"
         );
+        let raster = PdfDocument::open(&source)?.rasterize(1, 72, None)?;
+        let painted = raster
+            .pixels
+            .chunks_exact(3)
+            .any(|pixel| pixel != [255, 255, 255]);
+        assert_eq!(painted, mode != 3, "mode {mode}");
     }
     let content = "BT /F1 10 Tf 5 Tr 20 70 Td (Clip) Tj ET";
     let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
@@ -664,12 +775,13 @@ fn accepts_raster_only_extgstate_entries_with_visual_warning() -> Result<(), Doc
         warning.code == "PDF_EXTGSTATE_IGNORED"
             && warning.page == Some(1)
             && warning.message.contains("SA")
+            && warning.object.is_some()
     }));
     Ok(())
 }
 
 #[test]
-fn accepts_unknown_extgstate_entries_with_visual_warning() -> Result<(), DocsightError> {
+fn rejects_unknown_extgstate_entries() -> Result<(), DocsightError> {
     let content = "q /GS0 gs BT /F1 10 Tf 20 70 Td (Hello) Tj ET Q";
     let objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
@@ -680,13 +792,19 @@ fn accepts_unknown_extgstate_entries_with_visual_warning() -> Result<(), Docsigh
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
     ];
     let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
-    let document = PdfDocument::open(&source)?.to_document()?;
-    assert_eq!(document.paragraphs().count(), 1);
-    assert!(document.warnings.iter().any(|warning| {
-        warning.code == "PDF_EXTGSTATE_IGNORED"
-            && warning.page == Some(1)
-            && warning.message.contains("FutureKey")
-    }));
+    let error = match PdfDocument::open(&source)?.to_document() {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(DocsightError::VerificationFailed {
+                message: "unknown ExtGState entry was accepted".to_owned(),
+            });
+        }
+    };
+    assert!(matches!(
+        error,
+        DocsightError::UnsupportedFeature { feature }
+            if feature == "PDF ExtGState entry FutureKey"
+    ));
     Ok(())
 }
 
@@ -704,12 +822,76 @@ fn accepts_soft_masks_for_extraction_with_visual_warning() -> Result<(), Docsigh
     let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
     let document = PdfDocument::open(&source)?.to_document()?;
     assert_eq!(document.paragraphs().count(), 1);
+    assert!(document.warnings.iter().any(|warning| {
+        warning.code == "PDF_SOFT_MASK_IGNORED"
+            && warning.page == Some(1)
+            && warning.object.is_some()
+    }));
+    Ok(())
+}
+
+#[test]
+fn ignores_unused_soft_mask_resources_without_a_warning() -> Result<(), DocsightError> {
+    let content = "BT /F1 10 Tf 20 70 Td (Hello) Tj ET";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /ExtGState /SMask << /S /Luminosity >> >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
     assert!(
         document
             .warnings
             .iter()
-            .any(|warning| { warning.code == "PDF_SOFT_MASK_IGNORED" && warning.page == Some(1) })
+            .all(|warning| warning.code != "PDF_SOFT_MASK_IGNORED")
     );
+    Ok(())
+}
+
+#[test]
+fn ignores_soft_masks_on_invisible_text_without_a_warning() -> Result<(), DocsightError> {
+    let content = "q /GS0 gs BT /F1 10 Tf 3 Tr 20 70 Td (Hidden) Tj ET Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /ExtGState /SMask << /S /Luminosity >> >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(
+        document
+            .warnings
+            .iter()
+            .all(|warning| warning.code != "PDF_SOFT_MASK_IGNORED")
+    );
+    Ok(())
+}
+
+#[test]
+fn applies_font_from_ext_graphics_state() -> Result<(), DocsightError> {
+    let content = "BT /F1 10 Tf /GS0 gs 20 70 Td (Hello) Tj ET";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /ExtGState /Font [7 0 R 20] >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>".to_owned(),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(page.spans[0].font_name, "Times-Bold");
+    assert_eq!(page.spans[0].font_size_pt, 20.0);
+    assert!(page.spans[0].bold);
     Ok(())
 }
 
@@ -723,6 +905,7 @@ fn accepts_named_color_spaces_for_extraction_with_visual_warning() -> Result<(),
         warning.code == "PDF_COLOR_SPACE_UNSUPPORTED"
             && warning.page == Some(1)
             && warning.message.contains("C1")
+            && warning.object.is_some()
     }));
     let raster = PdfDocument::open(&source)?.rasterize(1, 72, None)?;
     assert!(
@@ -744,6 +927,7 @@ fn accepts_pattern_paints_without_changing_text() -> Result<(), DocsightError> {
         warning.code == "PDF_PATTERN_PAINT_UNSUPPORTED"
             && warning.page == Some(1)
             && warning.message.contains("P1")
+            && warning.object.is_some()
     }));
     Ok(())
 }

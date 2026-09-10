@@ -20,7 +20,18 @@
         "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
         "message": { "type": "string" },
         "effect": { "type": "string" },
-        "object": { "type": ["string", "null"] }
+        "object": { "type": ["string", "null"] },
+        "location": {
+          "type": "object",
+          "properties": {
+            "page": { "type": "integer", "minimum": 1 },
+            "object": { "type": "string", "minLength": 1 },
+            "operator": { "type": "string", "minLength": 1 },
+            "offset": { "type": "integer", "minimum": 0 }
+          },
+          "minProperties": 1,
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }
