@@ -3,26 +3,52 @@
   "$id": "https://docsight.dev/schemas/v2/semantic-viewport.json",
   "title": "SemanticViewport",
   "type": "object",
-  "required": ["target", "scope_pages", "total_objects", "objects", "visual_references"],
+  "required": [
+    "target",
+    "scope_pages",
+    "total_objects",
+    "objects",
+    "visual_references"
+  ],
   "properties": {
     "target": {
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "id"],
+          "required": [
+            "kind",
+            "id"
+          ],
           "properties": {
-            "kind": { "const": "object" },
-            "id": { "type": "string", "pattern": "^[a-z_]+_[0-9a-f]{32}$" }
+            "kind": {
+              "const": "object"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+            }
           },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["kind", "start_page", "end_page"],
+          "required": [
+            "kind",
+            "start_page",
+            "end_page"
+          ],
           "properties": {
-            "kind": { "const": "page_range" },
-            "start_page": { "type": "integer", "minimum": 1 },
-            "end_page": { "type": "integer", "minimum": 1 }
+            "kind": {
+              "const": "page_range"
+            },
+            "start_page": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "end_page": {
+              "type": "integer",
+              "minimum": 1
+            }
           },
           "additionalProperties": false
         }
@@ -30,21 +56,36 @@
     },
     "scope_pages": {
       "type": "array",
-      "items": { "type": "integer", "minimum": 1 }
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
     },
-    "total_objects": { "type": "integer", "minimum": 0 },
+    "total_objects": {
+      "type": "integer",
+      "minimum": 0
+    },
     "objects": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["object", "relationships"],
+        "required": [
+          "object",
+          "relationships"
+        ],
         "properties": {
-          "object": { "$ref": "semantic-object.json" },
+          "object": {
+            "$ref": "#/$defs/semantic_object"
+          },
           "relationships": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["role", "confidence", "provenance"],
+              "required": [
+                "role",
+                "confidence",
+                "provenance"
+              ],
               "properties": {
                 "role": {
                   "type": "string",
@@ -58,8 +99,14 @@
                     "related_note"
                   ]
                 },
-                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                "provenance": { "type": "string" }
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "provenance": {
+                  "type": "string"
+                }
               },
               "additionalProperties": false
             }
@@ -72,27 +119,148 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["page", "bbox", "dpi", "command", "artifact_available"],
+        "required": [
+          "page",
+          "bbox",
+          "dpi",
+          "command",
+          "artifact_available"
+        ],
         "properties": {
-          "page": { "type": "integer", "minimum": 1 },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
           "bbox": {
             "type": "object",
-            "required": ["x0", "y0", "x1", "y1"],
+            "required": [
+              "x0",
+              "y0",
+              "x1",
+              "y1"
+            ],
             "properties": {
-              "x0": { "type": "number" },
-              "y0": { "type": "number" },
-              "x1": { "type": "number" },
-              "y1": { "type": "number" }
+              "x0": {
+                "type": "number"
+              },
+              "y0": {
+                "type": "number"
+              },
+              "x1": {
+                "type": "number"
+              },
+              "y1": {
+                "type": "number"
+              }
             },
             "additionalProperties": false
           },
-          "dpi": { "type": "integer", "const": 36 },
-          "command": { "type": "string", "const": "crop" },
-          "artifact_available": { "type": "boolean", "const": false }
+          "dpi": {
+            "type": "integer",
+            "const": 36
+          },
+          "command": {
+            "type": "string",
+            "const": "crop"
+          },
+          "artifact_available": {
+            "type": "boolean",
+            "const": false
+          }
         },
         "additionalProperties": false
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "semantic_object": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "z_index",
+        "reading_order",
+        "source",
+        "confidence",
+        "text_snippet",
+        "text_truncated"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "paragraph",
+            "heading",
+            "list_item",
+            "table",
+            "figure",
+            "shape",
+            "note",
+            "unknown",
+            "header",
+            "footer",
+            "watermark",
+            "comment_marker",
+            "annotation"
+          ]
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "type": "object",
+          "required": [
+            "x0",
+            "y0",
+            "x1",
+            "y1"
+          ],
+          "properties": {
+            "x0": {
+              "type": "number"
+            },
+            "y0": {
+              "type": "number"
+            },
+            "x1": {
+              "type": "number"
+            },
+            "y1": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "z_index": {
+          "type": "integer"
+        },
+        "reading_order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "text_snippet": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "text_truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

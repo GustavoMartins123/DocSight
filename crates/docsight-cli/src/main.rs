@@ -6,7 +6,7 @@ use docsight_agent::{
 };
 use docsight_core::{
     BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
-    DocumentSource, ObjectId, Rect, compute_coverage, compute_evidence, table_to_csv,
+    DocumentSource, ObjectId, PageFidelity, Rect, compute_coverage, compute_evidence, table_to_csv,
     table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
 use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents};
@@ -140,42 +140,50 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = SUMMARY_CAPABILITIES)]
     Capabilities {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_INSPECT)]
     Inspect {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_OUTLINE)]
     Outline {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_TEXT)]
     Text {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_TABLES)]
     Tables {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_TABLE)]
     Table {
         path: PathBuf,
         object: String,
         #[arg(long, value_enum, default_value_t = TableFormat::Markdown)]
         format: TableFormat,
     },
+    #[command(about = SUMMARY_PAGE)]
     Page {
         path: PathBuf,
         page: u32,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_RENDER)]
     Render {
         path: PathBuf,
         #[arg(long)]
@@ -187,6 +195,7 @@ enum Command {
         #[arg(long)]
         trace: Option<PathBuf>,
     },
+    #[command(about = SUMMARY_CROP)]
     Crop {
         path: PathBuf,
         #[arg(long)]
@@ -200,16 +209,19 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    #[command(about = SUMMARY_IMAGES)]
     Images {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_LINKS)]
     Links {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_DIFF)]
     Diff {
         before: PathBuf,
         after: PathBuf,
@@ -226,11 +238,13 @@ enum Command {
         #[arg(long)]
         out_dir: Option<PathBuf>,
     },
+    #[command(about = SUMMARY_FINGERPRINT)]
     Fingerprint {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_EVIDENCE)]
     Evidence {
         path: PathBuf,
         object: String,
@@ -239,6 +253,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_BUNDLE)]
     Bundle {
         path: PathBuf,
         #[arg(long)]
@@ -256,6 +271,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_REPLAY)]
     Replay {
         trace: PathBuf,
         #[arg(long)]
@@ -263,11 +279,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_VERIFY)]
     Verify {
         bundle: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_COVERAGE)]
     Coverage {
         path: PathBuf,
         #[arg(long)]
@@ -277,6 +295,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_HIT)]
     Hit {
         path: PathBuf,
         #[arg(long)]
@@ -288,17 +307,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_QUERY)]
     Query {
         path: PathBuf,
         expression: String,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_OVERVIEW)]
     Overview {
         path: PathBuf,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_FOCUS)]
     Focus {
         path: PathBuf,
         target: Option<String>,
@@ -309,6 +331,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_PEEK)]
     Peek {
         path: PathBuf,
         #[arg(long)]
@@ -324,6 +347,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_CONTEXT)]
     Context {
         path: PathBuf,
         object: Option<String>,
@@ -341,6 +365,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_RESOLVE)]
     Resolve {
         path: PathBuf,
         #[arg(long)]
@@ -443,6 +468,44 @@ struct CapabilityAssessment {
     fidelity: &'static str,
 }
 
+impl CapabilityAssessment {
+    fn exact() -> Self {
+        Self {
+            available: true,
+            source_faithful: true,
+            fidelity: "exact",
+        }
+    }
+
+    fn inferred() -> Self {
+        Self {
+            available: true,
+            source_faithful: false,
+            fidelity: "inferred",
+        }
+    }
+
+    fn unsupported() -> Self {
+        Self {
+            available: false,
+            source_faithful: false,
+            fidelity: "unsupported",
+        }
+    }
+
+    fn exact_unless(approximated: bool) -> Self {
+        if approximated {
+            Self {
+                available: true,
+                source_faithful: false,
+                fidelity: "approximated",
+            }
+        } else {
+            Self::exact()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct InspectCapabilityDetails {
     structure: CapabilityAssessment,
@@ -450,11 +513,30 @@ struct InspectCapabilityDetails {
     render: CapabilityAssessment,
 }
 
+impl InspectCapabilityDetails {
+    fn available(&self) -> InspectCapabilities {
+        InspectCapabilities {
+            structure: self.structure.available,
+            text: self.text.available,
+            render: self.render.available,
+        }
+    }
+
+    fn source_faithful(&self) -> InspectCapabilities {
+        InspectCapabilities {
+            structure: self.structure.source_faithful,
+            text: self.text.source_faithful,
+            render: self.render.source_faithful,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct InspectResult {
     format: DocumentFormat,
     size_bytes: u64,
     capabilities: InspectCapabilities,
+    source_faithful: InspectCapabilities,
     capability_details: InspectCapabilityDetails,
     paragraphs: Option<usize>,
     headings: Option<usize>,
@@ -512,6 +594,7 @@ struct TableSummary {
 #[derive(Clone, Debug, Serialize)]
 struct TablesResult {
     tables: Vec<TableSummary>,
+    page_fidelity: PageFidelity,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -540,6 +623,7 @@ struct PageResult {
     spans: Vec<PageSpanRecord>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     overlays: Vec<PageOverlayRecord>,
+    page_fidelity: PageFidelity,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -597,11 +681,20 @@ struct AgentSandboxCapability {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct AgentErrorContract {
+    channel: &'static str,
+    schema: &'static str,
+    success_exit_code: u8,
+    codes: &'static [docsight_core::ErrorCatalogEntry],
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AgentCapabilitiesResult {
     profile: &'static str,
     protocol: &'static str,
     error_schema: &'static str,
     error_channel: &'static str,
+    errors: AgentErrorContract,
     invocation_prefix: &'static str,
     sandbox: AgentSandboxCapability,
     document_formats: &'static [&'static str],
@@ -1250,6 +1343,40 @@ fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
     }
 }
 
+const ERROR_ENVELOPE_SCHEMA: &str = "https://docsight.dev/schemas/v2/error-envelope.json";
+
+const SUMMARY_CAPABILITIES: &str = "discover the machine contract and command surface";
+const SUMMARY_INSPECT: &str = "summarize format, counts, capabilities and fidelity";
+const SUMMARY_OUTLINE: &str = "return headings in reading order";
+const SUMMARY_TEXT: &str = "return text blocks and deterministic continuation";
+const SUMMARY_TABLES: &str = "list structural or inferred tables with confidence";
+const SUMMARY_TABLE: &str = "export one table or return its machine record";
+const SUMMARY_PAGE: &str = "return page geometry, spans and overlays";
+const SUMMARY_IMAGES: &str = "list figure resources and placements";
+const SUMMARY_LINKS: &str = "list link metadata without fetching targets";
+const SUMMARY_RENDER: &str =
+    "write a PNG artifact with provenance metadata and optional deterministic trace";
+const SUMMARY_CROP: &str = "write a page or object crop with provenance metadata";
+const SUMMARY_DIFF: &str = "compare changes with evidence-backed cross-version lineage";
+const SUMMARY_FINGERPRINT: &str = "return reproducibility inputs and result fingerprint";
+const SUMMARY_EVIDENCE: &str = "return provenance and fidelity for one object";
+const SUMMARY_BUNDLE: &str =
+    "write a self-contained verifiable proof bundle for an object or region";
+const SUMMARY_REPLAY: &str = "verify a deterministic trace using its embedded document bytes";
+const SUMMARY_VERIFY: &str = "verify a self-contained proof bundle offline";
+const SUMMARY_COVERAGE: &str = "return per-dimension fidelity and reason codes";
+const SUMMARY_HIT: &str = "resolve a point or region to document objects";
+const SUMMARY_QUERY: &str = "run constrained structural and spatial DQL selectors in page points";
+const SUMMARY_OVERVIEW: &str =
+    "return bounded headings, tables and figures for document navigation";
+const SUMMARY_FOCUS: &str = "return a bounded semantic neighborhood around an object or page range";
+const SUMMARY_PEEK: &str =
+    "return a compact structural projection for a page, range, object or section";
+const SUMMARY_CONTEXT: &str =
+    "aggregate selected content, neighborhood, geometry, fidelity and provenance";
+const SUMMARY_RESOLVE: &str =
+    "rank deterministic descriptor matches with explainable component scores";
+
 const ALL_DOCUMENT_FORMATS: &[&str] = &["docx", "pdf"];
 const DOCX_PDF_FORMATS: &[&str] = &["docx", "pdf"];
 const NO_DOCUMENT_FORMATS: &[&str] = &[];
@@ -1280,8 +1407,14 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
     let result = AgentCapabilitiesResult {
         profile: "agent-first-v1",
         protocol: docsight_agent::AGENT_SCHEMA,
-        error_schema: "https://docsight.dev/schemas/v2/error-envelope.json",
+        error_schema: ERROR_ENVELOPE_SCHEMA,
         error_channel: "stderr",
+        errors: AgentErrorContract {
+            channel: "stderr",
+            schema: ERROR_ENVELOPE_SCHEMA,
+            success_exit_code: docsight_core::SUCCESS_EXIT_CODE,
+            codes: docsight_core::ERROR_CATALOG,
+        },
         invocation_prefix: "docsight --agent",
         sandbox: AgentSandboxCapability {
             flag: "--sandbox",
@@ -1307,7 +1440,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
         commands: vec![
             CommandCapability {
                 name: "capabilities",
-                summary: "discover the machine contract and command surface",
+                summary: SUMMARY_CAPABILITIES,
                 invocation: "capabilities",
                 formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
@@ -1318,7 +1451,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "inspect",
-                summary: "summarize format, counts, capabilities and fidelity",
+                summary: SUMMARY_INSPECT,
                 invocation: "inspect <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1329,7 +1462,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "outline",
-                summary: "return headings in reading order",
+                summary: SUMMARY_OUTLINE,
                 invocation: "outline <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1340,7 +1473,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "text",
-                summary: "return text blocks and deterministic continuation",
+                summary: SUMMARY_TEXT,
                 invocation: "text <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1351,7 +1484,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "tables",
-                summary: "list structural or inferred tables with confidence",
+                summary: SUMMARY_TABLES,
                 invocation: "tables <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1362,7 +1495,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "table",
-                summary: "export one table or return its machine record",
+                summary: SUMMARY_TABLE,
                 invocation: "table <path> <object> [--format json|markdown|csv|html|tsv]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1373,7 +1506,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "page",
-                summary: "return page geometry, spans and overlays",
+                summary: SUMMARY_PAGE,
                 invocation: "page <path> <page>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1384,7 +1517,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "images",
-                summary: "list figure resources and placements",
+                summary: SUMMARY_IMAGES,
                 invocation: "images <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1395,7 +1528,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "links",
-                summary: "list link metadata without fetching targets",
+                summary: SUMMARY_LINKS,
                 invocation: "links <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1406,7 +1539,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "render",
-                summary: "write a PNG artifact with provenance metadata and optional deterministic trace",
+                summary: SUMMARY_RENDER,
                 invocation: "render <path> --page <page> --out <png> [--dpi <dpi>] [--trace <dstrace>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1417,7 +1550,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "crop",
-                summary: "write a page or object crop with provenance metadata",
+                summary: SUMMARY_CROP,
                 invocation: "crop <path> (--object <id> | --page <page> --bbox <x0,y0,x1,y1>) --out <png> [--dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1428,7 +1561,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "diff",
-                summary: "compare changes with evidence-backed cross-version lineage",
+                summary: SUMMARY_DIFF,
                 invocation: "diff <before> <after> [--visual] [--dpi <dpi>] [--threshold <0..255>] [--out-dir <directory>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1445,7 +1578,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "fingerprint",
-                summary: "return reproducibility inputs and result fingerprint",
+                summary: SUMMARY_FINGERPRINT,
                 invocation: "fingerprint <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1456,7 +1589,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "evidence",
-                summary: "return provenance and fidelity for one object",
+                summary: SUMMARY_EVIDENCE,
                 invocation: "evidence <path> <object> [--render-dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1467,7 +1600,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "bundle",
-                summary: "write a self-contained verifiable proof bundle for an object or region",
+                summary: SUMMARY_BUNDLE,
                 invocation: "bundle <path> (--object <id> | --page <page> --bbox <x0,y0,x1,y1>) --out <dse> [--include-crop] [--dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1478,7 +1611,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "replay",
-                summary: "verify a deterministic trace using its embedded document bytes",
+                summary: SUMMARY_REPLAY,
                 invocation: "replay <dstrace> --verify",
                 formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
@@ -1489,7 +1622,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "verify",
-                summary: "verify a self-contained proof bundle offline",
+                summary: SUMMARY_VERIFY,
                 invocation: "verify <dse>",
                 formats: NO_DOCUMENT_FORMATS,
                 ndjson: true,
@@ -1500,7 +1633,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "coverage",
-                summary: "return per-dimension fidelity and reason codes",
+                summary: SUMMARY_COVERAGE,
                 invocation: "coverage <path> [--page <page>] [--regions]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1511,7 +1644,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "hit",
-                summary: "resolve a point or region to document objects",
+                summary: SUMMARY_HIT,
                 invocation: "hit <path> --page <page> (--point <x,y> | --bbox <x0,y0,x1,y1>)",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1522,7 +1655,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "query",
-                summary: "run constrained structural and spatial DQL selectors in page points",
+                summary: SUMMARY_QUERY,
                 invocation: "query <path> <expression>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1533,7 +1666,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "overview",
-                summary: "return bounded headings, tables and figures for document navigation",
+                summary: SUMMARY_OVERVIEW,
                 invocation: "overview <path>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1544,7 +1677,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "focus",
-                summary: "return a bounded semantic neighborhood around an object or page range",
+                summary: SUMMARY_FOCUS,
                 invocation: "focus <path> (<object> | --pages <start..end>) [--related]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1555,7 +1688,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "peek",
-                summary: "return a compact structural projection for a page, range, object or section",
+                summary: SUMMARY_PEEK,
                 invocation: "peek <path> (--page <page> | --pages <start..end> | --object <id> | --section <index>) [--related]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1566,7 +1699,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "context",
-                summary: "aggregate selected content, neighborhood, geometry, fidelity and provenance",
+                summary: SUMMARY_CONTEXT,
                 invocation: "context <path> (<object> | --find <text>) [--kind <kind>] [--include <classes>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1577,7 +1710,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             },
             CommandCapability {
                 name: "resolve",
-                summary: "rank deterministic descriptor matches with explainable component scores",
+                summary: SUMMARY_RESOLVE,
                 invocation: "resolve <path> --text <text> [--kind <kind>] [--pages <start..end>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
@@ -1766,43 +1899,17 @@ fn inspect_source(
             let tracked = (document.tracked_changes.insertions > 0
                 || document.tracked_changes.deletions > 0)
                 .then_some(document.tracked_changes);
+            let capability_details = InspectCapabilityDetails {
+                structure: CapabilityAssessment::exact_unless(!structure_complete),
+                text: CapabilityAssessment::exact_unless(!text_complete),
+                render: CapabilityAssessment::exact_unless(!render_complete),
+            };
             let result = InspectResult {
                 format: source.format(),
                 size_bytes: source.size_bytes(),
-                capabilities: InspectCapabilities {
-                    structure: structure_complete,
-                    text: text_complete,
-                    render: render_complete,
-                },
-                capability_details: InspectCapabilityDetails {
-                    structure: CapabilityAssessment {
-                        available: true,
-                        source_faithful: structure_complete,
-                        fidelity: if structure_complete {
-                            "exact"
-                        } else {
-                            "approximated"
-                        },
-                    },
-                    text: CapabilityAssessment {
-                        available: true,
-                        source_faithful: text_complete,
-                        fidelity: if text_complete {
-                            "exact"
-                        } else {
-                            "approximated"
-                        },
-                    },
-                    render: CapabilityAssessment {
-                        available: true,
-                        source_faithful: render_complete,
-                        fidelity: if render_complete {
-                            "exact"
-                        } else {
-                            "approximated"
-                        },
-                    },
-                },
+                capabilities: capability_details.available(),
+                source_faithful: capability_details.source_faithful(),
+                capability_details,
                 paragraphs: Some(paragraphs),
                 headings: Some(document.headings().count()),
                 tables: Some(document.tables().count()),
@@ -1824,31 +1931,17 @@ fn inspect_pdf_source(
     let unavailable = |pages: Option<u32>, error: DocsightError| {
         let mut diagnostic = error.diagnostic();
         diagnostic.severity = DiagnosticSeverity::Warning;
+        let capability_details = InspectCapabilityDetails {
+            structure: CapabilityAssessment::unsupported(),
+            text: CapabilityAssessment::unsupported(),
+            render: CapabilityAssessment::unsupported(),
+        };
         let result = InspectResult {
             format: DocumentFormat::Pdf,
             size_bytes: source.size_bytes(),
-            capabilities: InspectCapabilities {
-                structure: false,
-                text: false,
-                render: false,
-            },
-            capability_details: InspectCapabilityDetails {
-                structure: CapabilityAssessment {
-                    available: false,
-                    source_faithful: false,
-                    fidelity: "unsupported",
-                },
-                text: CapabilityAssessment {
-                    available: false,
-                    source_faithful: false,
-                    fidelity: "unsupported",
-                },
-                render: CapabilityAssessment {
-                    available: false,
-                    source_faithful: false,
-                    fidelity: "unsupported",
-                },
-            },
+            capabilities: capability_details.available(),
+            source_faithful: capability_details.source_faithful(),
+            capability_details,
             paragraphs: None,
             headings: None,
             tables: None,
@@ -1891,35 +1984,17 @@ fn inspect_pdf_source(
                 | "PDF_BLEND_MODE_UNSUPPORTED"
         )
     });
+    let capability_details = InspectCapabilityDetails {
+        structure: CapabilityAssessment::inferred(),
+        text: CapabilityAssessment::exact(),
+        render: CapabilityAssessment::exact_unless(!render_source_faithful),
+    };
     let result = InspectResult {
         format: DocumentFormat::Pdf,
         size_bytes: source.size_bytes(),
-        capabilities: InspectCapabilities {
-            structure: true,
-            text: true,
-            render: render_source_faithful,
-        },
-        capability_details: InspectCapabilityDetails {
-            structure: CapabilityAssessment {
-                available: true,
-                source_faithful: false,
-                fidelity: "inferred",
-            },
-            text: CapabilityAssessment {
-                available: true,
-                source_faithful: true,
-                fidelity: "exact",
-            },
-            render: CapabilityAssessment {
-                available: true,
-                source_faithful: render_source_faithful,
-                fidelity: if render_source_faithful {
-                    "exact"
-                } else {
-                    "approximated"
-                },
-            },
-        },
+        capabilities: capability_details.available(),
+        source_faithful: capability_details.source_faithful(),
+        capability_details,
         paragraphs: Some(document.paragraphs().count()),
         headings: Some(document.headings().count()),
         tables: Some(document.tables().count()),
@@ -2021,6 +2096,7 @@ fn page_command(
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: format!("page {number}"),
         })?;
+    let page_fidelity = docsight_core::page_fidelity(&document);
     let target_page_number = target_page.number;
     let target_page_width = target_page.width_pt;
     let target_page_height = target_page.height_pt;
@@ -2130,6 +2206,7 @@ fn page_command(
                     height_pt: target_page_height,
                     spans: bounded_spans,
                     overlays: bounded_overlays,
+                    page_fidelity: page_fidelity.clone(),
                 })
                 .map_err(output_serialization_error)
             },
@@ -2261,6 +2338,7 @@ fn tables(
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
     let document = load_document(&source)?;
+    let page_fidelity = docsight_core::page_fidelity(&document);
     let tables: Vec<TableSummary> = document
         .tables()
         .map(|(block, table)| {
@@ -2314,8 +2392,11 @@ fn tables(
             &source,
             document.warnings,
             |tbls| {
-                serde_json::to_value(TablesResult { tables: tbls })
-                    .map_err(output_serialization_error)
+                serde_json::to_value(TablesResult {
+                    tables: tbls,
+                    page_fidelity: page_fidelity.clone(),
+                })
+                .map_err(output_serialization_error)
             },
         )?;
         return write_envelope(&envelope);

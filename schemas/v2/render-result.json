@@ -15,28 +15,1084 @@
     "output_bytes"
   ],
   "properties": {
-    "page": { "type": "integer", "minimum": 1 },
-    "dpi": { "type": "integer", "minimum": 1 },
+    "page": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "dpi": {
+      "type": "integer",
+      "minimum": 1
+    },
     "bbox": {
       "type": "object",
-      "required": ["x0", "y0", "x1", "y1"],
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
       "properties": {
-        "x0": { "type": "number" },
-        "y0": { "type": "number" },
-        "x1": { "type": "number" },
-        "y1": { "type": "number" }
+        "x0": {
+          "type": "number"
+        },
+        "y0": {
+          "type": "number"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        }
       },
       "additionalProperties": false
     },
-    "width_px": { "type": "integer", "minimum": 1 },
-    "height_px": { "type": "integer", "minimum": 1 },
-    "media_type": { "const": "image/png" },
-    "output_path": { "type": "string", "minLength": 1 },
-    "output_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "output_bytes": { "type": "integer", "minimum": 1 },
+    "width_px": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "height_px": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "media_type": {
+      "const": "image/png"
+    },
+    "output_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "output_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
     "trace": {
-      "$ref": "trace-result.json"
+      "$ref": "#/$defs/trace_result"
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "trace_result": {
+      "type": "object",
+      "required": [
+        "output_path",
+        "output_sha256",
+        "output_bytes",
+        "trace_schema",
+        "target",
+        "display_list_sha256",
+        "raster_sha256",
+        "decision_coverage",
+        "resource_count",
+        "glyph_run_count",
+        "table_sizing_decision_count",
+        "pagination_decision_count",
+        "display_operation_count"
+      ],
+      "properties": {
+        "output_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "trace_schema": {
+          "const": "docsight.trace/v2"
+        },
+        "target": {
+          "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/target"
+        },
+        "display_list_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "raster_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "decision_coverage": {
+          "$ref": "#/$defs/trace_result/$defs/trace_manifest/properties/decision_coverage"
+        },
+        "resource_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "glyph_run_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "table_sizing_decision_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pagination_decision_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "display_operation_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "$defs": {
+        "trace_manifest": {
+          "type": "object",
+          "required": [
+            "schema",
+            "source",
+            "fingerprint",
+            "target",
+            "decision_coverage",
+            "resources",
+            "glyph_runs",
+            "table_sizing",
+            "pagination",
+            "display_list",
+            "raster",
+            "warnings"
+          ],
+          "properties": {
+            "schema": {
+              "const": "docsight.trace/v2"
+            },
+            "source": {
+              "type": "object",
+              "required": [
+                "document_id",
+                "document_sha256",
+                "format",
+                "bytes"
+              ],
+              "properties": {
+                "document_id": {
+                  "type": "string",
+                  "pattern": "^doc_[0-9a-f]{32}$"
+                },
+                "document_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "format": {
+                  "enum": [
+                    "docx",
+                    "pdf"
+                  ]
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "fingerprint": {
+              "type": "object",
+              "required": [
+                "engine",
+                "ooxml_engine",
+                "pdf_engine",
+                "raster_engine",
+                "fonts",
+                "layout_profile",
+                "result_fingerprint"
+              ],
+              "properties": {
+                "engine": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "ooxml_engine": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pdf_engine": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "raster_engine": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fonts": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "layout_profile": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "result_fingerprint": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "target": {
+              "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/target"
+            },
+            "decision_coverage": {
+              "type": "object",
+              "required": [
+                "resolved_resources",
+                "glyph_metrics",
+                "line_breaks",
+                "table_sizing",
+                "pagination",
+                "display_list_operations"
+              ],
+              "properties": {
+                "resolved_resources": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/decision_status"
+                },
+                "glyph_metrics": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/decision_status"
+                },
+                "line_breaks": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/decision_status"
+                },
+                "table_sizing": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/decision_status"
+                },
+                "pagination": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/decision_status"
+                },
+                "display_list_operations": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/decision_status"
+                }
+              },
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "kind",
+                  "name",
+                  "target",
+                  "content_sha256"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "enum": [
+                      "font",
+                      "image",
+                      "relationship",
+                      "embedded_object",
+                      "graphics_state",
+                      "x_object"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string"
+                  },
+                  "content_sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "glyph_runs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/glyph_run"
+              }
+            },
+            "table_sizing": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "object_id",
+                  "page",
+                  "bbox",
+                  "rows",
+                  "columns",
+                  "column_widths_pt",
+                  "detector"
+                ],
+                "properties": {
+                  "object_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "page": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bbox": {
+                    "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/nullable_bbox"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "columns": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "column_widths_pt": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "number"
+                    }
+                  },
+                  "detector": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "pagination": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "object_id",
+                  "kind",
+                  "page",
+                  "bbox",
+                  "reading_order"
+                ],
+                "properties": {
+                  "object_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "enum": [
+                      "paragraph",
+                      "heading",
+                      "list_item",
+                      "table",
+                      "figure",
+                      "shape",
+                      "note",
+                      "unknown"
+                    ]
+                  },
+                  "page": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bbox": {
+                    "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/nullable_bbox"
+                  },
+                  "reading_order": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "display_list": {
+              "type": "object",
+              "required": [
+                "page",
+                "page_bbox",
+                "operations",
+                "sha256"
+              ],
+              "properties": {
+                "page": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "page_bbox": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                },
+                "operations": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/display_operation"
+                  }
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "raster": {
+              "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/raster"
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/diagnostic"
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "decision_coverage": {
+                    "properties": {
+                      "table_sizing": {
+                        "const": "not_applicable"
+                      }
+                    },
+                    "required": [
+                      "table_sizing"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision_coverage"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "table_sizing": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "decision_coverage": {
+                    "properties": {
+                      "pagination": {
+                        "const": "not_applicable"
+                      }
+                    },
+                    "required": [
+                      "pagination"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision_coverage"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "pagination": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          ],
+          "additionalProperties": false,
+          "$defs": {
+            "diagnostic": {
+              "type": "object",
+              "required": [
+                "code",
+                "severity",
+                "message",
+                "effect"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "warning",
+                    "error"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "effect": {
+                  "type": "string"
+                },
+                "object": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "page": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "decision_status": {
+              "enum": [
+                "verified",
+                "not_applicable",
+                "unavailable"
+              ]
+            },
+            "bbox": {
+              "type": "object",
+              "required": [
+                "x0",
+                "y0",
+                "x1",
+                "y1"
+              ],
+              "properties": {
+                "x0": {
+                  "type": "number"
+                },
+                "y0": {
+                  "type": "number"
+                },
+                "x1": {
+                  "type": "number"
+                },
+                "y1": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "nullable_bbox": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "type": "object",
+              "required": [
+                "selector",
+                "page",
+                "bbox",
+                "dpi"
+              ],
+              "properties": {
+                "selector": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "page"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "page"
+                        },
+                        "page": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "page",
+                        "bbox"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "region"
+                        },
+                        "page": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "bbox": {
+                          "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "object"
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "page": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "bbox": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                },
+                "dpi": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "glyph_run": {
+              "type": "object",
+              "required": [
+                "text_sha256",
+                "bbox",
+                "font_size_pt",
+                "font_name",
+                "bold",
+                "color_argb"
+              ],
+              "properties": {
+                "text_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bbox": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                },
+                "font_size_pt": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "font_name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "bold": {
+                  "type": "boolean"
+                },
+                "color_argb": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "display_operation": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "text_sha256",
+                    "bbox",
+                    "font_size_pt",
+                    "font_name",
+                    "bold",
+                    "color_argb",
+                    "stroke_color_argb",
+                    "stroke_width_pt",
+                    "render_mode",
+                    "mirrored_x",
+                    "clips"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "text"
+                    },
+                    "text_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "bbox": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                    },
+                    "font_size_pt": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "font_name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "bold": {
+                      "type": "boolean"
+                    },
+                    "color_argb": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "stroke_color_argb": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "stroke_width_pt": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "render_mode": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 7
+                    },
+                    "mirrored_x": {
+                      "type": "boolean"
+                    },
+                    "clips": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/clips"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "bbox",
+                    "color_argb"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "border"
+                    },
+                    "bbox": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                    },
+                    "color_argb": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "path",
+                    "color_argb",
+                    "fill_rule",
+                    "clips"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "fill"
+                    },
+                    "path": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/path"
+                    },
+                    "color_argb": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "fill_rule": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/fill_rule"
+                    },
+                    "clips": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/clips"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "path",
+                    "color_argb",
+                    "width_pt",
+                    "line_cap",
+                    "line_join",
+                    "miter_limit",
+                    "dash_pattern_pt",
+                    "dash_phase_pt",
+                    "clips"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "stroke"
+                    },
+                    "path": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/path"
+                    },
+                    "color_argb": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "width_pt": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "line_cap": {
+                      "enum": [
+                        "butt",
+                        "round",
+                        "square"
+                      ]
+                    },
+                    "line_join": {
+                      "enum": [
+                        "miter",
+                        "round",
+                        "bevel"
+                      ]
+                    },
+                    "miter_limit": {
+                      "type": "number",
+                      "minimum": 1
+                    },
+                    "dash_pattern_pt": {
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "dash_phase_pt": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "clips": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/clips"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "bbox",
+                    "resource_name",
+                    "clips"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "figure"
+                    },
+                    "bbox": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                    },
+                    "resource_name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "clips": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/clips"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "point": {
+              "type": "object",
+              "required": [
+                "x",
+                "y"
+              ],
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/path_segment"
+              }
+            },
+            "path_segment": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "point"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "move"
+                    },
+                    "point": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/point"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "point"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "line"
+                    },
+                    "point": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/point"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "control_1",
+                    "control_2",
+                    "end"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "cubic"
+                    },
+                    "control_1": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/point"
+                    },
+                    "control_2": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/point"
+                    },
+                    "end": {
+                      "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/point"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "close"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "fill_rule": {
+              "enum": [
+                "nonzero",
+                "even_odd"
+              ]
+            },
+            "clips": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "polygons",
+                  "fill_rule"
+                ],
+                "properties": {
+                  "polygons": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/point"
+                      }
+                    }
+                  },
+                  "fill_rule": {
+                    "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/fill_rule"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "raster": {
+              "type": "object",
+              "required": [
+                "page",
+                "dpi",
+                "bbox",
+                "width_px",
+                "height_px",
+                "media_type",
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "page": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "dpi": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "bbox": {
+                  "$ref": "#/$defs/trace_result/$defs/trace_manifest/$defs/bbox"
+                },
+                "width_px": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "height_px": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "media_type": {
+                  "const": "image/png"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    }
+  }
 }

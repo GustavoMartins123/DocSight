@@ -221,6 +221,68 @@ impl DocsightError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ErrorCatalogEntry {
+    pub code: &'static str,
+    pub exit_code: u8,
+    pub meaning: &'static str,
+}
+
+pub const SUCCESS_EXIT_CODE: u8 = 0;
+
+pub const ERROR_CATALOG: &[ErrorCatalogEntry] = &[
+    ErrorCatalogEntry {
+        code: "USAGE",
+        exit_code: 2,
+        meaning: "the invocation or its arguments were rejected",
+    },
+    ErrorCatalogEntry {
+        code: "UNSUPPORTED_FORMAT",
+        exit_code: 10,
+        meaning: "the document format, or the requested operation for that format, is not supported",
+    },
+    ErrorCatalogEntry {
+        code: "MALFORMED_DOCUMENT",
+        exit_code: 11,
+        meaning: "the document was rejected during parsing",
+    },
+    ErrorCatalogEntry {
+        code: "VERIFICATION_FAILED",
+        exit_code: 11,
+        meaning: "an artifact did not reproduce its claimed evidence",
+    },
+    ErrorCatalogEntry {
+        code: "ENCRYPTED",
+        exit_code: 12,
+        meaning: "the document is encrypted and was rejected before inspection",
+    },
+    ErrorCatalogEntry {
+        code: "RESOURCE_LIMIT",
+        exit_code: 13,
+        meaning: "a declared resource limit was exceeded",
+    },
+    ErrorCatalogEntry {
+        code: "LAYOUT_PARTIAL",
+        exit_code: 20,
+        meaning: "the result requires layout or rendering behavior that is not supported",
+    },
+    ErrorCatalogEntry {
+        code: "OBJECT_NOT_FOUND",
+        exit_code: 21,
+        meaning: "the requested object id does not exist in the document",
+    },
+    ErrorCatalogEntry {
+        code: "BACKEND_FAILURE",
+        exit_code: 30,
+        meaning: "an internal backend could not complete the operation",
+    },
+    ErrorCatalogEntry {
+        code: "IO_ERROR",
+        exit_code: 40,
+        meaning: "the file could not be read",
+    },
+];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DocumentSource {
     bytes: Vec<u8>,
@@ -428,13 +490,125 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DocsightError, DocumentFormat, DocumentSource, Rect};
+    use super::{
+        DocsightError, DocumentFormat, DocumentSource, ERROR_CATALOG, ErrorLocation, Rect,
+    };
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
     fn docx_signature() -> Vec<u8> {
         let mut bytes = b"PK\x03\x04".to_vec();
         bytes.extend_from_slice(b"[Content_Types].xml");
         bytes.extend_from_slice(b"word/document.xml");
         bytes
+    }
+
+    fn variant_name(error: &DocsightError) -> &'static str {
+        match error {
+            DocsightError::InvalidArgument { .. } => "InvalidArgument",
+            DocsightError::Io { .. } => "Io",
+            DocsightError::UnsupportedFormat => "UnsupportedFormat",
+            DocsightError::ResourceLimit { .. } => "ResourceLimit",
+            DocsightError::MalformedDocument { .. } => "MalformedDocument",
+            DocsightError::MalformedDocumentAt { .. } => "MalformedDocumentAt",
+            DocsightError::VerificationFailed { .. } => "VerificationFailed",
+            DocsightError::EncryptedDocument => "EncryptedDocument",
+            DocsightError::EncryptedPackage => "EncryptedPackage",
+            DocsightError::BackendFailure { .. } => "BackendFailure",
+            DocsightError::UnsupportedOperation { .. } => "UnsupportedOperation",
+            DocsightError::UnsupportedFeature { .. } => "UnsupportedFeature",
+            DocsightError::ObjectNotFound { .. } => "ObjectNotFound",
+        }
+    }
+
+    fn every_error_variant() -> Vec<DocsightError> {
+        vec![
+            DocsightError::InvalidArgument {
+                message: "message".to_owned(),
+            },
+            DocsightError::Io {
+                path: PathBuf::from("document.pdf"),
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            },
+            DocsightError::UnsupportedFormat,
+            DocsightError::ResourceLimit {
+                resource: "bytes".to_owned(),
+                limit: 1,
+            },
+            DocsightError::MalformedDocument {
+                message: "message".to_owned(),
+            },
+            DocsightError::MalformedDocumentAt {
+                message: "message".to_owned(),
+                location: ErrorLocation::default(),
+            },
+            DocsightError::VerificationFailed {
+                message: "message".to_owned(),
+            },
+            DocsightError::EncryptedDocument,
+            DocsightError::EncryptedPackage,
+            DocsightError::BackendFailure {
+                backend: "backend".to_owned(),
+                message: "message".to_owned(),
+            },
+            DocsightError::UnsupportedOperation {
+                operation: "render".to_owned(),
+                format: DocumentFormat::Docx,
+            },
+            DocsightError::UnsupportedFeature {
+                feature: "feature".to_owned(),
+            },
+            DocsightError::ObjectNotFound {
+                object: "p_0".to_owned(),
+            },
+        ]
+    }
+
+    #[test]
+    fn error_catalog_is_complete() {
+        let samples = every_error_variant();
+        let covered = samples.iter().map(variant_name).collect::<BTreeSet<_>>();
+        assert_eq!(
+            covered.len(),
+            samples.len(),
+            "every_error_variant must list each variant exactly once"
+        );
+
+        let mut reached = BTreeSet::new();
+        let mut missing = Vec::new();
+        for error in &samples {
+            let diagnostic = error.diagnostic();
+            match ERROR_CATALOG
+                .iter()
+                .find(|entry| entry.code == diagnostic.code)
+            {
+                Some(entry) => {
+                    assert_eq!(
+                        entry.exit_code,
+                        error.exit_code(),
+                        "{} disagrees with ERROR_CATALOG on the exit code for {}",
+                        variant_name(error),
+                        diagnostic.code
+                    );
+                    reached.insert(entry.code);
+                }
+                None => missing.push(format!("{} -> {}", variant_name(error), diagnostic.code)),
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "ERROR_CATALOG is missing codes produced by: {}",
+            missing.join(", ")
+        );
+
+        let listed = ERROR_CATALOG
+            .iter()
+            .map(|entry| entry.code)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            listed, reached,
+            "ERROR_CATALOG lists codes that no DocsightError variant can produce"
+        );
     }
 
     #[test]

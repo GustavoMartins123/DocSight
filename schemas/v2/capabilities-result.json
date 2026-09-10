@@ -15,18 +15,34 @@
     "agent_defaults",
     "limits",
     "coordinate_system",
-    "commands"
+    "commands",
+    "errors"
   ],
   "properties": {
-    "profile": { "type": "string", "const": "agent-first-v1" },
-    "protocol": { "type": "string", "const": "docsight.agent/v2" },
-    "error_schema": { "type": "string", "format": "uri" },
+    "profile": {
+      "type": "string",
+      "const": "agent-first-v1"
+    },
+    "protocol": {
+      "type": "string",
+      "const": "docsight.agent/v2"
+    },
+    "error_schema": {
+      "type": "string",
+      "format": "uri"
+    },
     "error_channel": {
       "type": "string",
       "const": "stderr",
       "description": "failed agent requests emit the error envelope on stderr with no bytes on stdout"
     },
-    "invocation_prefix": { "type": "string", "const": "docsight --agent" },
+    "errors": {
+      "$ref": "#/$defs/error_contract"
+    },
+    "invocation_prefix": {
+      "type": "string",
+      "const": "docsight --agent"
+    },
     "sandbox": {
       "type": "object",
       "required": [
@@ -39,15 +55,35 @@
         "failure_mode"
       ],
       "properties": {
-        "flag": { "type": "string", "const": "--sandbox" },
-        "agent_default": { "type": "boolean", "const": false },
-        "recommended_for_untrusted_input": { "type": "boolean", "const": true },
+        "flag": {
+          "type": "string",
+          "const": "--sandbox"
+        },
+        "agent_default": {
+          "type": "boolean",
+          "const": false
+        },
+        "recommended_for_untrusted_input": {
+          "type": "boolean",
+          "const": true
+        },
         "supported_platforms": {
           "type": "array",
-          "items": { "type": "string", "enum": ["linux", "windows", "macos"] },
+          "items": {
+            "type": "string",
+            "enum": [
+              "linux",
+              "windows",
+              "macos"
+            ]
+          },
           "minItems": 1,
           "uniqueItems": true,
-          "const": ["linux", "macos", "windows"]
+          "const": [
+            "linux",
+            "macos",
+            "windows"
+          ]
         },
         "enforced_controls": {
           "type": "array",
@@ -65,27 +101,52 @@
           "minItems": 1,
           "uniqueItems": true
         },
-        "unsupported_platform_behavior": { "type": "string", "const": "reject" },
-        "failure_mode": { "type": "string", "const": "fail_closed" }
+        "unsupported_platform_behavior": {
+          "type": "string",
+          "const": "reject"
+        },
+        "failure_mode": {
+          "type": "string",
+          "const": "fail_closed"
+        }
       },
       "additionalProperties": false
     },
     "document_formats": {
       "type": "array",
-      "items": { "type": "string", "enum": ["docx", "pdf"] },
+      "items": {
+        "type": "string",
+        "enum": [
+          "docx",
+          "pdf"
+        ]
+      },
       "minItems": 1
     },
     "output_modes": {
       "type": "array",
-      "items": { "type": "string", "enum": ["json", "ndjson"] },
+      "items": {
+        "type": "string",
+        "enum": [
+          "json",
+          "ndjson"
+        ]
+      },
       "minItems": 1
     },
-    "agent_defaults": { "type": "string", "minLength": 1 },
+    "agent_defaults": {
+      "type": "string",
+      "minLength": 1
+    },
     "limits": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
-    "coordinate_system": { "type": "string" },
+    "coordinate_system": {
+      "type": "string"
+    },
     "commands": {
       "type": "array",
       "items": {
@@ -102,27 +163,48 @@
           "result_root"
         ],
         "properties": {
-          "name": { "type": "string" },
-          "summary": { "type": "string" },
-          "invocation": { "type": "string", "minLength": 1 },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "invocation": {
+            "type": "string",
+            "minLength": 1
+          },
           "formats": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "ndjson": { "type": "boolean" },
+          "ndjson": {
+            "type": "boolean"
+          },
           "ndjson_events": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "minItems": 1,
             "uniqueItems": true
           },
-          "bounded": { "type": "boolean" },
+          "bounded": {
+            "type": "boolean"
+          },
           "result_schema": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uri"
           },
           "result_root": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "name of the result field holding the primary payload; null when the result object itself is the payload"
           }
         },
@@ -130,5 +212,59 @@
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "error_contract": {
+      "type": "object",
+      "required": [
+        "channel",
+        "schema",
+        "success_exit_code",
+        "codes"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "stderr"
+          ]
+        },
+        "schema": {
+          "type": "string"
+        },
+        "success_exit_code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "codes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "exit_code",
+              "meaning"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "exit_code": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 255
+              },
+              "meaning": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

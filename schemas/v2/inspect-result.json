@@ -3,49 +3,149 @@
   "$id": "https://docsight.dev/schemas/v2/inspect-result.json",
   "title": "InspectResult",
   "type": "object",
-  "required": ["format", "size_bytes", "capabilities", "capability_details"],
+  "required": [
+    "format",
+    "size_bytes",
+    "capabilities",
+    "source_faithful",
+    "capability_details"
+  ],
   "properties": {
-    "format": { "type": "string", "enum": ["docx", "pdf"] },
-    "size_bytes": { "type": "integer", "minimum": 0 },
+    "format": {
+      "type": "string",
+      "enum": [
+        "docx",
+        "pdf"
+      ]
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
     "capabilities": {
-      "type": "object",
-      "required": ["structure", "text", "render"],
-      "properties": {
-        "structure": { "type": "boolean" },
-        "text": { "type": "boolean" },
-        "render": { "type": "boolean" }
-      },
-      "additionalProperties": false
+      "$ref": "#/$defs/capability_flags"
+    },
+    "source_faithful": {
+      "$ref": "#/$defs/capability_flags"
     },
     "capability_details": {
       "type": "object",
-      "required": ["structure", "text", "render"],
+      "required": [
+        "structure",
+        "text",
+        "render"
+      ],
       "properties": {
-        "structure": { "$ref": "#/$defs/capability" },
-        "text": { "$ref": "#/$defs/capability" },
-        "render": { "$ref": "#/$defs/capability" }
+        "structure": {
+          "$ref": "#/$defs/capability"
+        },
+        "text": {
+          "$ref": "#/$defs/capability"
+        },
+        "render": {
+          "$ref": "#/$defs/capability"
+        }
       },
       "additionalProperties": false
     },
-    "paragraphs": { "type": ["integer", "null"], "minimum": 0 },
-    "headings": { "type": ["integer", "null"], "minimum": 0 },
-    "tables": { "type": ["integer", "null"], "minimum": 0 },
-    "figures": { "type": ["integer", "null"], "minimum": 0 },
-    "comments": { "type": ["integer", "null"], "minimum": 0 },
-    "pages": { "type": ["integer", "null"], "minimum": 0 },
-    "engine": { "type": ["string", "null"] },
-    "tracked": { "type": ["object", "null"] }
+    "paragraphs": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "headings": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "tables": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "figures": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "comments": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "pages": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "engine": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tracked": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
   },
   "$defs": {
+    "capability_flags": {
+      "type": "object",
+      "required": [
+        "structure",
+        "text",
+        "render"
+      ],
+      "properties": {
+        "structure": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "boolean"
+        },
+        "render": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "capability": {
       "type": "object",
-      "required": ["available", "source_faithful", "fidelity"],
+      "required": [
+        "available",
+        "source_faithful",
+        "fidelity"
+      ],
       "properties": {
-        "available": { "type": "boolean" },
-        "source_faithful": { "type": "boolean" },
+        "available": {
+          "type": "boolean"
+        },
+        "source_faithful": {
+          "type": "boolean"
+        },
         "fidelity": {
           "type": "string",
-          "enum": ["exact", "inferred", "approximated", "unsupported"]
+          "enum": [
+            "exact",
+            "inferred",
+            "approximated",
+            "unsupported"
+          ]
         }
       },
       "additionalProperties": false

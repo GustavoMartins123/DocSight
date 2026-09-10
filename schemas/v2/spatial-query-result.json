@@ -10,30 +10,60 @@
     "matches"
   ],
   "properties": {
-    "query": { "type": "string" },
-    "total_matches": { "type": "integer", "minimum": 0 },
-    "geometry_unavailable_objects": { "type": "integer", "minimum": 0 },
+    "query": {
+      "type": "string"
+    },
+    "total_matches": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "geometry_unavailable_objects": {
+      "type": "integer",
+      "minimum": 0
+    },
     "matches": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["object"],
+        "required": [
+          "object"
+        ],
         "properties": {
-          "object": { "$ref": "semantic-object.json" },
+          "object": {
+            "$ref": "#/$defs/semantic_object"
+          },
           "relation": {
             "type": "object",
-            "required": ["kind", "anchor", "distance_pt", "matching_anchor_count"],
+            "required": [
+              "kind",
+              "anchor",
+              "distance_pt",
+              "matching_anchor_count"
+            ],
             "properties": {
               "kind": {
                 "type": "string",
-                "enum": ["above", "below", "inside", "overlaps", "nearest", "distance_to"]
+                "enum": [
+                  "above",
+                  "below",
+                  "inside",
+                  "overlaps",
+                  "nearest",
+                  "distance_to"
+                ]
               },
               "anchor": {
                 "type": "string",
                 "pattern": "^[a-z_]+_[0-9a-f]{32}$"
               },
-              "distance_pt": { "type": "number", "minimum": 0 },
-              "matching_anchor_count": { "type": "integer", "minimum": 1 }
+              "distance_pt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "matching_anchor_count": {
+                "type": "integer",
+                "minimum": 1
+              }
             },
             "additionalProperties": false
           }
@@ -42,5 +72,95 @@
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "semantic_object": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "z_index",
+        "reading_order",
+        "source",
+        "confidence",
+        "text_snippet",
+        "text_truncated"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "paragraph",
+            "heading",
+            "list_item",
+            "table",
+            "figure",
+            "shape",
+            "note",
+            "unknown",
+            "header",
+            "footer",
+            "watermark",
+            "comment_marker",
+            "annotation"
+          ]
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "type": "object",
+          "required": [
+            "x0",
+            "y0",
+            "x1",
+            "y1"
+          ],
+          "properties": {
+            "x0": {
+              "type": "number"
+            },
+            "y0": {
+              "type": "number"
+            },
+            "x1": {
+              "type": "number"
+            },
+            "y1": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "z_index": {
+          "type": "integer"
+        },
+        "reading_order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "text_snippet": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "text_truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

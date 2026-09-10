@@ -3,29 +3,106 @@
   "$id": "https://docsight.dev/schemas/v2/tables-result.json",
   "title": "TablesResult",
   "type": "object",
-  "required": ["tables"],
+  "required": [
+    "tables",
+    "page_fidelity"
+  ],
   "properties": {
     "tables": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "rows", "columns", "review", "source"],
+        "required": [
+          "id",
+          "rows",
+          "columns",
+          "review",
+          "source"
+        ],
         "properties": {
           "id": {
             "type": "string",
             "pattern": "^[a-z_]+_[0-9a-f]{32}$"
           },
-          "page": { "type": ["integer", "null"], "minimum": 1 },
-          "rows": { "type": "integer", "minimum": 0 },
-          "columns": { "type": "integer", "minimum": 0 },
-          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-          "detector": { "type": ["string", "null"] },
-          "review": { "type": "boolean" },
-          "source": { "type": "string" }
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "columns": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "detector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       }
+    },
+    "page_fidelity": {
+      "$ref": "#/$defs/page_fidelity"
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "page_fidelity": {
+      "type": "object",
+      "required": [
+        "pagination",
+        "authoritative",
+        "evidence_status",
+        "reason_codes"
+      ],
+      "properties": {
+        "pagination": {
+          "type": "string",
+          "enum": [
+            "native",
+            "computed"
+          ]
+        },
+        "authoritative": {
+          "type": "boolean"
+        },
+        "evidence_status": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "evidence_limited"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

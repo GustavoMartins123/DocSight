@@ -3,26 +3,153 @@
   "$id": "https://docsight.dev/schemas/v2/overview-result.json",
   "title": "OverviewResult",
   "type": "object",
-  "required": ["format", "page_count", "counts", "total_landmarks", "landmarks"],
+  "required": [
+    "format",
+    "page_count",
+    "counts",
+    "total_landmarks",
+    "landmarks"
+  ],
   "properties": {
-    "format": { "type": "string", "enum": ["docx", "pdf"] },
-    "page_count": { "type": "integer", "minimum": 0 },
+    "format": {
+      "type": "string",
+      "enum": [
+        "docx",
+        "pdf"
+      ]
+    },
+    "page_count": {
+      "type": "integer",
+      "minimum": 0
+    },
     "counts": {
       "type": "object",
-      "required": ["blocks", "headings", "tables", "figures"],
+      "required": [
+        "blocks",
+        "headings",
+        "tables",
+        "figures"
+      ],
       "properties": {
-        "blocks": { "type": "integer", "minimum": 0 },
-        "headings": { "type": "integer", "minimum": 0 },
-        "tables": { "type": "integer", "minimum": 0 },
-        "figures": { "type": "integer", "minimum": 0 }
+        "blocks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "headings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tables": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "figures": {
+          "type": "integer",
+          "minimum": 0
+        }
       },
       "additionalProperties": false
     },
-    "total_landmarks": { "type": "integer", "minimum": 0 },
+    "total_landmarks": {
+      "type": "integer",
+      "minimum": 0
+    },
     "landmarks": {
       "type": "array",
-      "items": { "$ref": "semantic-object.json" }
+      "items": {
+        "$ref": "#/$defs/semantic_object"
+      }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "semantic_object": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "z_index",
+        "reading_order",
+        "source",
+        "confidence",
+        "text_snippet",
+        "text_truncated"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "paragraph",
+            "heading",
+            "list_item",
+            "table",
+            "figure",
+            "shape",
+            "note",
+            "unknown",
+            "header",
+            "footer",
+            "watermark",
+            "comment_marker",
+            "annotation"
+          ]
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "type": "object",
+          "required": [
+            "x0",
+            "y0",
+            "x1",
+            "y1"
+          ],
+          "properties": {
+            "x0": {
+              "type": "number"
+            },
+            "y0": {
+              "type": "number"
+            },
+            "x1": {
+              "type": "number"
+            },
+            "y1": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "z_index": {
+          "type": "integer"
+        },
+        "reading_order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "text_snippet": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "text_truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

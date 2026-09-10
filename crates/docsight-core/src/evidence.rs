@@ -30,7 +30,69 @@ const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
     "PDF_BLEND_MODE_UNSUPPORTED",
 ];
 
+const PAGE_APPROXIMATION_CODES: &[&str] = &["DOCX_LAYOUT_PAGINATED"];
+
 const UNKNOWN_STRUCTURE_PENALTY: f32 = 1.000;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceStatus {
+    #[default]
+    Exact,
+    EvidenceLimited,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pagination {
+    #[default]
+    Native,
+    Computed,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PageFidelity {
+    pub pagination: Pagination,
+    pub authoritative: bool,
+    pub evidence_status: EvidenceStatus,
+    pub reason_codes: Vec<String>,
+}
+
+pub fn page_fidelity(document: &Document) -> PageFidelity {
+    let codes: BTreeSet<&str> = document
+        .warnings
+        .iter()
+        .map(|warning| warning.code.as_str())
+        .collect();
+    let pagination = if codes
+        .iter()
+        .any(|code| PAGE_APPROXIMATION_CODES.contains(code))
+    {
+        Pagination::Computed
+    } else {
+        Pagination::Native
+    };
+    let reason_codes: Vec<String> = codes
+        .into_iter()
+        .filter(|code| {
+            PAGE_APPROXIMATION_CODES.contains(code)
+                || GLOBAL_GEOMETRY_APPROXIMATION_CODES.contains(code)
+                || GEOMETRY_WARNING_CODES.contains(code)
+        })
+        .map(str::to_owned)
+        .collect();
+    let authoritative = reason_codes.is_empty();
+    PageFidelity {
+        pagination,
+        authoritative,
+        evidence_status: if authoritative {
+            EvidenceStatus::Exact
+        } else {
+            EvidenceStatus::EvidenceLimited
+        },
+        reason_codes,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FidelityProfile {
