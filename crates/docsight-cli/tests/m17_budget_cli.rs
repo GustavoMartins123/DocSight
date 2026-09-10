@@ -315,7 +315,7 @@ fn budget_envelopes_match_the_cross_platform_golden() -> Result<(), Box<dyn std:
         ]
     });
     let golden_path = workspace().join("fixtures/conformance/m17-budget-projections.json");
-    if std::env::var_os("DOCSIGHT_UPDATE_GOLDENS").is_some() {
+    if std::env::var("DOCSIGHT_UPDATE_GOLDENS").is_ok_and(|value| value == "1") {
         let mut bytes = serde_json::to_vec_pretty(&actual)?;
         bytes.push(b'\n');
         std::fs::write(&golden_path, bytes)?;

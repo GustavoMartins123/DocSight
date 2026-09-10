@@ -213,7 +213,10 @@ impl Canvas {
         }
         let advance = run.bbox.width() / character_count as f32;
         for (index, character) in run.text.chars().enumerate() {
-            if character.is_whitespace() || character == '\u{200b}' {
+            if character.is_whitespace()
+                || character == '\u{200b}'
+                || docsight_core::is_combining_mark(character)
+            {
                 continue;
             }
             let pattern = glyph(character).ok_or_else(|| DocsightError::UnsupportedFeature {
@@ -1044,7 +1047,25 @@ fn malformed_path(message: &str) -> DocsightError {
 }
 
 fn glyph(character: char) -> Option<[u8; 7]> {
+    if let Some(pattern) = base_glyph(character) {
+        return Some(pattern);
+    }
+    let (base, diacritic) = docsight_core::latin_decomposition(character)?;
+    let base = base_glyph(base)?;
+    Some(docsight_core::compose_glyph(
+        base,
+        diacritic,
+        character.is_uppercase(),
+    ))
+}
+
+fn base_glyph(character: char) -> Option<[u8; 7]> {
     let pattern = match character {
+        '¹' => [4, 12, 4, 14, 0, 0, 0],
+        '²' => [12, 2, 4, 14, 0, 0, 0],
+        '³' => [12, 2, 4, 2, 12, 0, 0],
+        '✓' => [0, 1, 2, 4, 20, 8, 0],
+        'ª' => [14, 1, 15, 17, 15, 0, 31],
         'A' => [14, 17, 17, 31, 17, 17, 17],
         'B' => [30, 17, 17, 30, 17, 17, 30],
         'C' => [14, 17, 16, 16, 16, 17, 14],

@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::posix::{apply_rlimits, parse_paths};
+use super::posix::{apply_cpu_limit, parse_paths};
 use super::sandbox_failure;
 use crate::{
     SANDBOX_READ_PATHS_ENV, SANDBOX_TEMP_PATH_ENV, SANDBOX_WRITE_PATHS_ENV, SandboxLimitsReport,
@@ -9,6 +9,9 @@ use crate::{
 use docsight_core::DocsightError;
 use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const MEMORY_WATCHDOG_INTERVAL: Duration = Duration::from_millis(20);
 
 const SYSTEM_READ_PATHS: [&str; 8] = [
     "/bin",
@@ -34,10 +37,10 @@ unsafe extern "C" {
 }
 
 pub fn apply_resource_limits(policy: &SandboxPolicy) -> Result<SandboxLimitsReport, DocsightError> {
-    let limits = apply_rlimits(policy);
+    let memory_enforced = arm_memory_watchdog(policy)?;
     let mut report = SandboxLimitsReport {
-        memory_enforced: limits.memory_enforced,
-        cpu_enforced: limits.cpu_enforced,
+        memory_enforced,
+        cpu_enforced: apply_cpu_limit(policy),
         network_isolated: false,
         filesystem_isolated: false,
     };
@@ -56,6 +59,41 @@ pub fn apply_resource_limits(policy: &SandboxPolicy) -> Result<SandboxLimitsRepo
         ));
     }
     Ok(report)
+}
+
+fn arm_memory_watchdog(policy: &SandboxPolicy) -> Result<bool, DocsightError> {
+    physical_footprint()?;
+    let limit = policy.max_memory_bytes;
+    Ok(std::thread::Builder::new()
+        .name("docsight-sandbox-memory-watchdog".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(MEMORY_WATCHDOG_INTERVAL);
+                match physical_footprint() {
+                    Ok(footprint) if footprint <= limit => {}
+                    _ => std::process::abort(),
+                }
+            }
+        })
+        .is_ok())
+}
+
+fn physical_footprint() -> Result<u64, DocsightError> {
+    let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    let status = unsafe {
+        libc::proc_pid_rusage(
+            std::process::id() as libc::c_int,
+            libc::RUSAGE_INFO_V4,
+            &mut info as *mut libc::rusage_info_v4 as libc::rusage_info_t,
+        )
+    };
+    if status != 0 {
+        return Err(sandbox_failure(format!(
+            "failed to measure the sandboxed worker memory footprint: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(info.ri_phys_footprint)
 }
 
 fn install_seatbelt_profile() -> Result<(), DocsightError> {

@@ -5,29 +5,21 @@ use crate::SandboxPolicy;
 use docsight_core::DocsightError;
 use std::process::{Command, Stdio};
 
-pub struct MemoryAndCpuLimits {
-    pub memory_enforced: bool,
-    pub cpu_enforced: bool,
+pub fn apply_address_space_limit(limit_bytes: u64) -> bool {
+    let limit = libc::rlimit {
+        rlim_cur: limit_bytes as libc::rlim_t,
+        rlim_max: limit_bytes as libc::rlim_t,
+    };
+    unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) == 0 }
 }
 
-pub fn apply_rlimits(policy: &SandboxPolicy) -> MemoryAndCpuLimits {
-    let memory_limit = libc::rlimit {
-        rlim_cur: policy.max_memory_bytes as libc::rlim_t,
-        rlim_max: policy.max_memory_bytes as libc::rlim_t,
-    };
-    let memory_enforced = unsafe { libc::setrlimit(libc::RLIMIT_AS, &memory_limit) } == 0;
-
+pub fn apply_cpu_limit(policy: &SandboxPolicy) -> bool {
     let cpu_hard = policy.cpu_timeout_secs.saturating_add(5);
     let cpu_limit = libc::rlimit {
         rlim_cur: policy.cpu_timeout_secs as libc::rlim_t,
         rlim_max: cpu_hard as libc::rlim_t,
     };
-    let cpu_enforced = unsafe { libc::setrlimit(libc::RLIMIT_CPU, &cpu_limit) } == 0;
-
-    MemoryAndCpuLimits {
-        memory_enforced,
-        cpu_enforced,
-    }
+    unsafe { libc::setrlimit(libc::RLIMIT_CPU, &cpu_limit) == 0 }
 }
 
 pub fn parse_paths(variable: &str) -> Result<Vec<String>, DocsightError> {

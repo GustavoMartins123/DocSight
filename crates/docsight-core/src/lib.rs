@@ -1,8 +1,10 @@
 pub mod evidence;
+mod glyph;
 pub mod ir;
 pub mod png;
 
 pub use evidence::*;
+pub use glyph::*;
 pub use ir::*;
 pub use png::*;
 use serde::{Deserialize, Serialize};
