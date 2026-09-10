@@ -1,4 +1,4 @@
-use docsight_core::{Diagnostic, DocsightError, DocumentSource};
+use docsight_core::{Diagnostic, DocsightError, DocumentSource, ErrorLocation};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -138,6 +138,8 @@ pub struct AgentErrorRecord {
     pub effect: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<ErrorLocation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -154,6 +156,7 @@ impl AgentErrorEnvelope {
             DocsightError::ObjectNotFound { object } => Some(object.clone()),
             _ => None,
         };
+        let location = error.error_location().cloned();
         Self {
             schema: AGENT_SCHEMA,
             engine: env!("CARGO_PKG_VERSION"),
@@ -163,6 +166,7 @@ impl AgentErrorEnvelope {
                 message: diag.message,
                 effect: diag.effect,
                 object,
+                location,
             },
         }
     }
@@ -1500,5 +1504,22 @@ mod tests {
         assert_eq!(envelope.error.exit_code, 21);
         assert_eq!(envelope.error.code, "OBJECT_NOT_FOUND");
         assert_eq!(envelope.error.object.as_deref(), Some("tbl_1"));
+        assert!(envelope.error.location.is_none());
+    }
+
+    #[test]
+    fn agent_error_envelope_preserves_typed_location() {
+        let err = DocsightError::MalformedDocumentAt {
+            message: "invalid operands".to_owned(),
+            location: ErrorLocation {
+                page: Some(2),
+                object: Some("7 0 R".to_owned()),
+                operator: Some("Td".to_owned()),
+                offset: Some(19),
+            },
+        };
+        let envelope = AgentErrorEnvelope::from_error(&err);
+        assert_eq!(envelope.error.exit_code, 11);
+        assert_eq!(envelope.error.location, err.error_location().cloned());
     }
 }

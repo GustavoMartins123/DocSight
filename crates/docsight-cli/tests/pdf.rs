@@ -116,6 +116,27 @@ fn invalid_crop_contract_returns_usage_error() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[test]
+fn agent_pdf_error_exposes_page_object_operator_and_offset()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("malformed-content.pdf");
+    let content = "BT /F1 10 Tf 20 Td (Hello) Tj ET";
+    fs::write(&path, pdf_fixture::build_pdf(content, "[0 0 200 100]", ""))?;
+    let result = docsight()
+        .args(["--agent", "page", path.to_str().ok_or("invalid path")?, "1"])
+        .output()?;
+    assert_eq!(result.status.code(), Some(11));
+    assert!(result.stdout.is_empty());
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stderr)?;
+    assert_eq!(envelope["error"]["code"], "MALFORMED_DOCUMENT");
+    assert_eq!(envelope["error"]["location"]["page"], 1);
+    assert_eq!(envelope["error"]["location"]["object"], "5 0 R");
+    assert_eq!(envelope["error"]["location"]["operator"], "Td");
+    assert_eq!(envelope["error"]["location"]["offset"], 16);
+    Ok(())
+}
+
 fn assert_png_dimensions(
     bytes: &[u8],
     width: u32,

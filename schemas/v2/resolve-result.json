@@ -16,7 +16,7 @@
   "$defs": {
     "status": {
       "type": "string",
-      "enum": ["resolved", "ambiguous", "no_match"]
+      "enum": ["resolved", "low_confidence", "ambiguous", "no_match"]
     },
     "semantic_kind": {
       "type": "string",

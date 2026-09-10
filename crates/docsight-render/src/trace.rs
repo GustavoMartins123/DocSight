@@ -142,6 +142,10 @@ pub enum TraceDisplayOperation {
         font_name: String,
         bold: bool,
         color_argb: u32,
+        stroke_color_argb: u32,
+        stroke_width_pt: f32,
+        render_mode: u8,
+        mirrored_x: bool,
         clips: Vec<PdfTraceClip>,
     },
     Border {
@@ -744,6 +748,10 @@ impl TraceMaterial {
                             font_name: "docsight-proportional-reference".to_owned(),
                             bold: run.bold,
                             color_argb: run.color_argb,
+                            stroke_color_argb: run.color_argb,
+                            stroke_width_pt: 1.0,
+                            render_mode: 0,
+                            mirrored_x: false,
                             clips: Vec::new(),
                         });
                     }
@@ -815,6 +823,10 @@ fn trace_pdf_operation(operation: &PdfTraceDisplayOperation) -> TraceDisplayOper
             font_name,
             bold,
             color_argb,
+            stroke_color_argb,
+            stroke_width_pt,
+            render_mode,
+            mirrored_x,
             clips,
         } => TraceDisplayOperation::Text {
             text_sha256: sha256_hex(text.as_bytes()),
@@ -823,6 +835,10 @@ fn trace_pdf_operation(operation: &PdfTraceDisplayOperation) -> TraceDisplayOper
             font_name: font_name.clone(),
             bold: *bold,
             color_argb: *color_argb,
+            stroke_color_argb: *stroke_color_argb,
+            stroke_width_pt: *stroke_width_pt,
+            render_mode: *render_mode,
+            mirrored_x: *mirrored_x,
             clips: clips.clone(),
         },
         PdfTraceDisplayOperation::Fill {

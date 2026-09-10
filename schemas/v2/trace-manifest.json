@@ -220,7 +220,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "text_sha256", "bbox", "font_size_pt", "font_name", "bold", "color_argb", "clips"],
+          "required": ["kind", "text_sha256", "bbox", "font_size_pt", "font_name", "bold", "color_argb", "stroke_color_argb", "stroke_width_pt", "render_mode", "mirrored_x", "clips"],
           "properties": {
             "kind": { "const": "text" },
             "text_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -229,6 +229,10 @@
             "font_name": { "type": "string", "minLength": 1 },
             "bold": { "type": "boolean" },
             "color_argb": { "type": "integer", "minimum": 0 },
+            "stroke_color_argb": { "type": "integer", "minimum": 0 },
+            "stroke_width_pt": { "type": "number", "minimum": 0 },
+            "render_mode": { "type": "integer", "minimum": 0, "maximum": 7 },
+            "mirrored_x": { "type": "boolean" },
             "clips": { "$ref": "#/$defs/clips" }
           },
           "additionalProperties": false

@@ -1,6 +1,6 @@
 use crate::font::{FontProgram, GlyphOutline};
 use crate::syntax::{Value, malformed};
-use docsight_core::{DocsightError, Rect};
+use docsight_core::{DocsightError, ErrorLocation, Rect};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -63,6 +63,21 @@ pub(crate) struct ExtGraphicsState {
     pub line_join: Option<LineJoin>,
     pub miter_limit: Option<f32>,
     pub dash: Option<(Vec<f32>, f32)>,
+    pub font: Option<(FontInfo, f32)>,
+    pub ignored_keys: BTreeSet<String>,
+    pub blend_modes: Option<Vec<String>>,
+    pub soft_mask: Option<bool>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum VisualIssue {
+    ExtGraphicsState(String),
+    SoftMask,
+    BlendMode(String),
+    ColorSpace(String),
+    Pattern(String),
+    TextClip,
+    NegativeFontSize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,10 +103,15 @@ pub(crate) struct TextRun {
     pub font_name: String,
     pub bold: bool,
     pub argb: u32,
+    pub stroke_argb: u32,
+    pub stroke_style: StrokeStyle,
+    pub render_mode: u8,
+    pub mirrored_x: bool,
     pub source_offset: u64,
     pub source_length: u64,
     pub clips: Vec<ClipRegion>,
     pub glyphs: Vec<GlyphOutline>,
+    pub visual_issues: Vec<VisualIssue>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,18 +121,21 @@ pub(crate) enum DisplayCommand {
         bbox: Rect,
         resource_name: String,
         clips: Vec<ClipRegion>,
+        visual_issues: Vec<VisualIssue>,
     },
     Fill {
         path: Vec<PathSegment>,
         paint: Paint,
         even_odd: bool,
         clips: Vec<ClipRegion>,
+        visual_issues: Vec<VisualIssue>,
     },
     Stroke {
         path: Vec<PathSegment>,
         paint: Paint,
         style: StrokeStyle,
         clips: Vec<ClipRegion>,
+        visual_issues: Vec<VisualIssue>,
     },
 }
 
@@ -150,10 +173,6 @@ pub(crate) struct ParsedContent {
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
     pub omitted_xobjects: bool,
-    pub clip_text: bool,
-    pub negative_font_size: bool,
-    pub unsupported_color_spaces: Vec<String>,
-    pub pattern_paints: Vec<String>,
 }
 
 pub(crate) fn parse_content(
@@ -163,6 +182,29 @@ pub(crate) fn parse_content(
     fonts: &BTreeMap<String, FontInfo>,
     xobjects: &BTreeSet<String>,
     ext_graphics_states: &BTreeMap<String, ExtGraphicsState>,
+) -> Result<ParsedContent, DocsightError> {
+    let mut error_location = ErrorLocation::default();
+    parse_content_inner(
+        bytes,
+        page_left,
+        page_height,
+        fonts,
+        xobjects,
+        ext_graphics_states,
+        &mut error_location,
+    )
+    .map_err(|error| error.with_error_location(error_location))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_content_inner(
+    bytes: &[u8],
+    page_left: f32,
+    page_height: f32,
+    fonts: &BTreeMap<String, FontInfo>,
+    xobjects: &BTreeSet<String>,
+    ext_graphics_states: &BTreeMap<String, ExtGraphicsState>,
+    error_location: &mut ErrorLocation,
 ) -> Result<ParsedContent, DocsightError> {
     let mut lexer = ContentLexer::new(bytes);
     let mut operands = Vec::new();
@@ -176,12 +218,14 @@ pub(crate) fn parse_content(
     let mut operations = 0usize;
     let mut approximated_font = false;
     let mut omitted_xobjects = false;
-    let mut clip_text = false;
-    let mut negative_font_size = false;
-    let mut unsupported_color_spaces: Vec<String> = Vec::new();
-    let mut pattern_paints: Vec<String> = Vec::new();
     let mut inline_image = false;
-    while let Some(token) = lexer.next_token()? {
+    loop {
+        let token_offset = lexer.cursor as u64;
+        error_location.operator = None;
+        error_location.offset = Some(token_offset);
+        let Some(token) = lexer.next_token()? else {
+            break;
+        };
         match token {
             ContentToken::Operand(value) => {
                 if operands.len() >= MAX_OPERANDS {
@@ -202,6 +246,8 @@ pub(crate) fn parse_content(
                 }
                 let anchor_offset = token_start as u64;
                 let anchor_length = (token_end - token_start) as u64;
+                error_location.operator = Some(operator.clone());
+                error_location.offset = Some(anchor_offset);
                 match operator.as_str() {
                     "BX" | "EX" => {
                         require_empty(&operands, &operator)?;
@@ -221,6 +267,7 @@ pub(crate) fn parse_content(
                             bbox: transformed_unit_bbox(&state.ctm, page_left, page_height)?,
                             resource_name: "<inline-image>".to_owned(),
                             clips: state.clips.clone(),
+                            visual_issues: state.visual_issues(PaintScope::Common),
                         });
                         operands.clear();
                         lexer.skip_inline_image()?;
@@ -264,31 +311,37 @@ pub(crate) fn parse_content(
                         let values = numbers(&operands, 3, &operator)?;
                         state.fill_color_space = ColorSpace::Rgb;
                         state.fill_color = rgb(values[0], values[1], values[2])?;
+                        state.fill_pattern = None;
                     }
                     "RG" => {
                         let values = numbers(&operands, 3, &operator)?;
                         state.stroke_color_space = ColorSpace::Rgb;
                         state.stroke_color = rgb(values[0], values[1], values[2])?;
+                        state.stroke_pattern = None;
                     }
                     "g" => {
                         let values = numbers(&operands, 1, &operator)?;
                         state.fill_color_space = ColorSpace::Gray;
                         state.fill_color = rgb(values[0], values[0], values[0])?;
+                        state.fill_pattern = None;
                     }
                     "G" => {
                         let values = numbers(&operands, 1, &operator)?;
                         state.stroke_color_space = ColorSpace::Gray;
                         state.stroke_color = rgb(values[0], values[0], values[0])?;
+                        state.stroke_pattern = None;
                     }
                     "k" => {
                         let values = numbers(&operands, 4, &operator)?;
                         state.fill_color_space = ColorSpace::Cmyk;
                         state.fill_color = cmyk(values[0], values[1], values[2], values[3])?;
+                        state.fill_pattern = None;
                     }
                     "K" => {
                         let values = numbers(&operands, 4, &operator)?;
                         state.stroke_color_space = ColorSpace::Cmyk;
                         state.stroke_color = cmyk(values[0], values[1], values[2], values[3])?;
+                        state.stroke_pattern = None;
                     }
                     "cs" | "CS" => {
                         if operands.len() != 1 {
@@ -297,16 +350,12 @@ pub(crate) fn parse_content(
                             )));
                         }
                         let color_space = ColorSpace::parse(name(&operands[0], &operator)?);
-                        if color_space == ColorSpace::Other {
-                            let space = name(&operands[0], &operator)?.to_owned();
-                            if !unsupported_color_spaces.contains(&space) {
-                                unsupported_color_spaces.push(space);
-                            }
-                        }
                         if operator == "cs" {
                             state.fill_color_space = color_space;
+                            state.fill_pattern = None;
                         } else {
                             state.stroke_color_space = color_space;
+                            state.stroke_pattern = None;
                         }
                     }
                     "sc" | "SC" | "scn" | "SCN" => {
@@ -319,8 +368,10 @@ pub(crate) fn parse_content(
                             .collect();
                         if !patterns.is_empty() {
                             for pattern in patterns {
-                                if !pattern_paints.contains(&pattern) {
-                                    pattern_paints.push(pattern);
+                                if matches!(operator.as_str(), "sc" | "scn") {
+                                    state.fill_pattern = Some(pattern);
+                                } else {
+                                    state.stroke_pattern = Some(pattern);
                                 }
                             }
                         } else {
@@ -329,15 +380,17 @@ pub(crate) fn parse_content(
                                 .map(|value| number(value, &operator))
                                 .collect::<Result<Vec<_>, _>>()?;
                             let color_space = if matches!(operator.as_str(), "sc" | "scn") {
-                                state.fill_color_space
+                                &state.fill_color_space
                             } else {
-                                state.stroke_color_space
+                                &state.stroke_color_space
                             };
                             let color = color_space.color(&values, &operator)?;
                             if matches!(operator.as_str(), "sc" | "scn") {
                                 state.fill_color = color;
+                                state.fill_pattern = None;
                             } else {
                                 state.stroke_color = color;
+                                state.stroke_pattern = None;
                             }
                         }
                     }
@@ -421,8 +474,13 @@ pub(crate) fn parse_content(
                     }
                     "h" => {
                         require_empty(&operands, &operator)?;
-                        require_open_subpath(&path, &operator)?;
-                        path.push(PathSegment::Close);
+                        if path.is_empty() {
+                            return Err(malformed("h requires a current subpath"));
+                        }
+                        if !matches!(path.last(), Some(PathSegment::Close)) {
+                            require_open_subpath(&path, &operator)?;
+                            path.push(PathSegment::Close);
+                        }
                     }
                     "S" | "s" => {
                         require_empty(&operands, &operator)?;
@@ -439,6 +497,7 @@ pub(crate) fn parse_content(
                             paint: state.stroke_paint(),
                             style: state.stroke_style(width, state.ctm.stroke_scale()?),
                             clips: state.clips.clone(),
+                            visual_issues: state.visual_issues(PaintScope::Stroke),
                         });
                     }
                     "f" | "F" | "f*" => {
@@ -452,6 +511,7 @@ pub(crate) fn parse_content(
                             paint: state.fill_paint(),
                             even_odd: operator == "f*",
                             clips: state.clips.clone(),
+                            visual_issues: state.visual_issues(PaintScope::Fill),
                         });
                     }
                     "B" | "B*" | "b" | "b*" => {
@@ -469,18 +529,19 @@ pub(crate) fn parse_content(
                         let stroke_path = path.clone();
                         let width = state.ctm.stroke_width(state.line_width)?;
                         commands.push(DisplayCommand::Fill {
-                            path,
+                            path: std::mem::take(&mut path),
                             paint: state.fill_paint(),
                             even_odd,
                             clips: state.clips.clone(),
+                            visual_issues: state.visual_issues(PaintScope::Fill),
                         });
                         commands.push(DisplayCommand::Stroke {
                             path: stroke_path,
                             paint: state.stroke_paint(),
                             style: state.stroke_style(width, state.ctm.stroke_scale()?),
                             clips: state.clips.clone(),
+                            visual_issues: state.visual_issues(PaintScope::Stroke),
                         });
-                        path = Vec::new();
                     }
                     "n" => {
                         require_empty(&operands, &operator)?;
@@ -509,9 +570,6 @@ pub(crate) fn parse_content(
                         }
                         let name = name(&operands[0], &operator)?;
                         let size = number(&operands[1], &operator)?;
-                        if size < 0.0 {
-                            negative_font_size = true;
-                        }
                         let font = fonts
                             .get(name)
                             .ok_or_else(|| malformed("Tf references an unknown font resource"))?;
@@ -582,9 +640,7 @@ pub(crate) fn parse_content(
                         if value.fract() != 0.0 || !(0.0..=7.0).contains(&value) {
                             return Err(malformed("text rendering mode must be between 0 and 7"));
                         }
-                        if value as u8 >= 4 {
-                            clip_text = true;
-                        }
+                        state.text.render_mode = value as u8;
                     }
                     "Tj" => {
                         require_text(in_text, &operator)?;
@@ -623,7 +679,9 @@ pub(crate) fn parse_content(
                                         .ok_or_else(|| malformed("TJ used before Tf"))?;
                                     state.text.matrix.e -= adjustment / 1000.0 * font.size;
                                 }
-                                _ => return Err(malformed("TJ array contains an invalid item")),
+                                _ => {
+                                    return Err(malformed("TJ array contains an invalid item"));
+                                }
                             }
                         }
                     }
@@ -758,6 +816,7 @@ pub(crate) fn parse_content(
                             bbox,
                             resource_name,
                             clips: state.clips.clone(),
+                            visual_issues: state.visual_issues(PaintScope::Common),
                         });
                         omitted_xobjects = true;
                     }
@@ -771,6 +830,9 @@ pub(crate) fn parse_content(
                                 malformed("gs references an unknown ExtGState resource")
                             })?;
                         state.apply_ext_graphics_state(ext_state)?;
+                        if let Some((font, _)) = &ext_state.font {
+                            approximated_font |= font.outline.is_none();
+                        }
                     }
                     "sh" => {
                         if operands.len() != 1 {
@@ -804,6 +866,8 @@ pub(crate) fn parse_content(
             }
         }
     }
+    error_location.operator = None;
+    error_location.offset = Some(bytes.len() as u64);
     if !operands.is_empty() {
         return Err(malformed("PDF content stream ends with unused operands"));
     }
@@ -824,10 +888,6 @@ pub(crate) fn parse_content(
         text_runs,
         approximated_font,
         omitted_xobjects,
-        clip_text,
-        negative_font_size,
-        unsupported_color_spaces,
-        pattern_paints,
     })
 }
 
@@ -875,6 +935,7 @@ fn append_text(
     let combined = state.text.matrix.concat(state.ctm);
     validate_text_matrix(&combined)?;
     let baseline = combined.transform(0.0, state.text.rise);
+    let endpoint = combined.transform(width, state.text.rise);
     let baseline_y = page_height - baseline.y;
     let text_y0 = state.text.rise - font.size * 0.2;
     let text_y1 = state.text.rise + font.size * 0.8;
@@ -916,6 +977,13 @@ fn append_text(
         | u32::from(state.fill_color.red) << 16
         | u32::from(state.fill_color.green) << 8
         | u32::from(state.fill_color.blue);
+    let stroke_alpha = (state.stroke_alpha * 255.0).round() as u32;
+    let stroke_argb = stroke_alpha << 24
+        | u32::from(state.stroke_color.red) << 16
+        | u32::from(state.stroke_color.green) << 8
+        | u32::from(state.stroke_color.blue);
+    let stroke_scale = state.ctm.stroke_scale()?;
+    let stroke_width = state.ctm.stroke_width(state.line_width)?;
     let run = TextRun {
         text,
         bbox,
@@ -924,10 +992,15 @@ fn append_text(
         font_name: font.font_name.clone(),
         bold: font.bold,
         argb,
+        stroke_argb,
+        stroke_style: state.stroke_style(stroke_width, stroke_scale),
+        render_mode: state.text.render_mode,
+        mirrored_x: endpoint.x < baseline.x,
         source_offset: anchor_offset,
         source_length: anchor_length,
         clips: state.clips.clone(),
         glyphs,
+        visual_issues: state.text_visual_issues(font.size),
     };
     commands.push(DisplayCommand::Text(run.clone()));
     text_runs.push(run);
@@ -1063,12 +1136,13 @@ fn cmyk(cyan: f32, magenta: f32, yellow: f32, black: f32) -> Result<Color, Docsi
     })
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum ColorSpace {
     Gray,
     Rgb,
     Cmyk,
-    Other,
+    Pattern,
+    Other(String),
 }
 
 impl ColorSpace {
@@ -1077,16 +1151,17 @@ impl ColorSpace {
             "DeviceGray" | "G" => Self::Gray,
             "DeviceRGB" | "RGB" => Self::Rgb,
             "DeviceCMYK" | "CMYK" => Self::Cmyk,
-            _ => Self::Other,
+            "Pattern" => Self::Pattern,
+            _ => Self::Other(name.to_owned()),
         }
     }
 
-    fn color(self, values: &[f32], operator: &str) -> Result<Color, DocsightError> {
+    fn color(&self, values: &[f32], operator: &str) -> Result<Color, DocsightError> {
         match (self, values) {
             (Self::Gray, [gray]) => rgb(*gray, *gray, *gray),
             (Self::Rgb, [red, green, blue]) => rgb(*red, *green, *blue),
             (Self::Cmyk, [cyan, magenta, yellow, black]) => cmyk(*cyan, *magenta, *yellow, *black),
-            (Self::Other, values) if values.iter().all(|value| value.is_finite()) => Ok(Color {
+            (Self::Other(_), values) if values.iter().all(|value| value.is_finite()) => Ok(Color {
                 red: 0,
                 green: 0,
                 blue: 0,
@@ -1265,6 +1340,11 @@ struct GraphicsState {
     text: TextState,
     clips: Vec<ClipRegion>,
     pending_clip: Option<ClipRegion>,
+    fill_pattern: Option<String>,
+    stroke_pattern: Option<String>,
+    ignored_ext_keys: BTreeSet<String>,
+    blend_modes: Vec<String>,
+    soft_mask: bool,
 }
 
 impl Default for GraphicsState {
@@ -1294,11 +1374,71 @@ impl Default for GraphicsState {
             text: TextState::default(),
             clips: Vec::new(),
             pending_clip: None,
+            fill_pattern: None,
+            stroke_pattern: None,
+            ignored_ext_keys: BTreeSet::new(),
+            blend_modes: Vec::new(),
+            soft_mask: false,
         }
     }
 }
 
 impl GraphicsState {
+    fn visual_issues(&self, scope: PaintScope) -> Vec<VisualIssue> {
+        let mut issues = self
+            .ignored_ext_keys
+            .iter()
+            .cloned()
+            .map(VisualIssue::ExtGraphicsState)
+            .collect::<BTreeSet<_>>();
+        if self.soft_mask {
+            issues.insert(VisualIssue::SoftMask);
+        }
+        issues.extend(self.blend_modes.iter().cloned().map(VisualIssue::BlendMode));
+        if matches!(scope, PaintScope::Fill) {
+            if let ColorSpace::Other(name) = &self.fill_color_space {
+                issues.insert(VisualIssue::ColorSpace(name.clone()));
+            }
+            if let Some(pattern) = &self.fill_pattern {
+                issues.insert(VisualIssue::Pattern(pattern.clone()));
+            }
+        }
+        if matches!(scope, PaintScope::Stroke) {
+            if let ColorSpace::Other(name) = &self.stroke_color_space {
+                issues.insert(VisualIssue::ColorSpace(name.clone()));
+            }
+            if let Some(pattern) = &self.stroke_pattern {
+                issues.insert(VisualIssue::Pattern(pattern.clone()));
+            }
+        }
+        issues.into_iter().collect()
+    }
+
+    fn text_visual_issues(&self, font_size: f32) -> Vec<VisualIssue> {
+        let paints_fill = matches!(self.text.render_mode, 0 | 2 | 4 | 6);
+        let paints_stroke = matches!(self.text.render_mode, 1 | 2 | 5 | 6);
+        let mut issues = if paints_fill || paints_stroke {
+            self.visual_issues(PaintScope::Common)
+        } else {
+            Vec::new()
+        };
+        if paints_fill {
+            issues.extend(self.visual_issues(PaintScope::Fill));
+        }
+        if paints_stroke {
+            issues.extend(self.visual_issues(PaintScope::Stroke));
+        }
+        if self.text.render_mode >= 4 {
+            issues.push(VisualIssue::TextClip);
+        }
+        if font_size.is_sign_negative() && self.text.render_mode != 3 {
+            issues.push(VisualIssue::NegativeFontSize);
+        }
+        issues.sort();
+        issues.dedup();
+        issues
+    }
+
     fn fill_paint(&self) -> Paint {
         Paint {
             color: self.fill_color,
@@ -1347,8 +1487,36 @@ impl GraphicsState {
             self.dash.clone_from(dash);
             self.dash_phase = *phase;
         }
+        if let Some((font, size)) = &state.font {
+            self.text.font = Some(FontSelection {
+                size: *size,
+                bold: font.bold,
+                font_name: font.base_font.clone(),
+                decoder: font.decoder.clone(),
+                cid_widths: font.cid_widths.clone(),
+                outline: font.outline.clone(),
+                cid_identity: font.cid_identity,
+            });
+        }
+        if !state.ignored_keys.is_empty() {
+            self.ignored_ext_keys
+                .extend(state.ignored_keys.iter().cloned());
+        }
+        if let Some(blend_modes) = &state.blend_modes {
+            self.blend_modes.clone_from(blend_modes);
+        }
+        if let Some(soft_mask) = state.soft_mask {
+            self.soft_mask = soft_mask;
+        }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+enum PaintScope {
+    Common,
+    Fill,
+    Stroke,
 }
 
 #[derive(Clone)]
@@ -1361,6 +1529,7 @@ struct TextState {
     word_spacing: f32,
     horizontal_scale: f32,
     rise: f32,
+    render_mode: u8,
 }
 
 impl Default for TextState {
@@ -1374,6 +1543,7 @@ impl Default for TextState {
             word_spacing: 0.0,
             horizontal_scale: 1.0,
             rise: 0.0,
+            render_mode: 0,
         }
     }
 }
@@ -2081,19 +2251,16 @@ pub(crate) fn fonts_from_resources(
 
 pub(crate) struct ExtGraphicsStates {
     pub states: BTreeMap<String, ExtGraphicsState>,
-    pub ignored_keys: Vec<String>,
-    pub blend_modes: Vec<String>,
 }
 
 pub(crate) fn ext_graphics_states_from_resources(
     resources: &BTreeMap<String, Value>,
     resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
+    decode_stream_value: impl Fn(&Value) -> Result<Vec<u8>, DocsightError>,
 ) -> Result<ExtGraphicsStates, DocsightError> {
     let Some(resource_value) = resources.get("ExtGState") else {
         return Ok(ExtGraphicsStates {
             states: BTreeMap::new(),
-            ignored_keys: Vec::new(),
-            blend_modes: Vec::new(),
         });
     };
     let resource_dict = match resolve(resource_value)? {
@@ -2101,8 +2268,6 @@ pub(crate) fn ext_graphics_states_from_resources(
         _ => return Err(malformed("ExtGState resource must resolve to a dictionary")),
     };
     let mut result = BTreeMap::new();
-    let mut ignored: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut unsupported_blend_modes: Vec<String> = Vec::new();
     for (name, value) in resource_dict {
         let dict = match resolve(&value)? {
             Value::Dict(dict) => dict,
@@ -2140,6 +2305,31 @@ pub(crate) fn ext_graphics_states_from_resources(
                     state.miter_limit = Some(limit);
                 }
                 "D" => state.dash = Some(ext_dash(&resolve(&value)?, &resolve)?),
+                "Font" => {
+                    let Value::Array(values) = resolve(&value)? else {
+                        return Err(malformed("ExtGState Font must be an array"));
+                    };
+                    if values.len() != 2 {
+                        return Err(malformed("ExtGState Font must contain a font and size"));
+                    }
+                    let size = ext_number(&resolve(&values[1])?)?;
+                    let font_resources = BTreeMap::from([(
+                        "Font".to_owned(),
+                        Value::Dict(BTreeMap::from([(
+                            "ExtGStateFont".to_owned(),
+                            values[0].clone(),
+                        )])),
+                    )]);
+                    let mut fonts = fonts_from_resources(
+                        &font_resources,
+                        |font_value| resolve(font_value),
+                        |font_value| decode_stream_value(font_value),
+                    )?;
+                    let font = fonts
+                        .remove("ExtGStateFont")
+                        .ok_or_else(|| malformed("ExtGState Font could not be resolved"))?;
+                    state.font = Some((font, size));
+                }
                 "RI" => match resolve(&value)? {
                     Value::Name(intent) => validate_rendering_intent(&intent)?,
                     _ => return Err(malformed("ExtGState RI must be a name")),
@@ -2150,34 +2340,32 @@ pub(crate) fn ext_graphics_states_from_resources(
                         return Err(malformed("ExtGState FL must be between zero and 100"));
                     }
                 }
-                "SA" => match resolve(&value)? {
+                "SA" | "TK" => match resolve(&value)? {
                     Value::Bool(_) => {
-                        ignored.insert(key);
+                        state.ignored_keys.insert(key);
                     }
-                    _ => return Err(malformed("ExtGState SA must be boolean")),
+                    _ => {
+                        return Err(malformed(format!("ExtGState {key} must be boolean")));
+                    }
                 },
                 "SM" => {
                     let smoothness = ext_number(&resolve(&value)?)?;
                     if !(0.0..=1.0).contains(&smoothness) {
                         return Err(malformed("ExtGState SM must be between zero and one"));
                     }
-                    ignored.insert(key);
+                    state.ignored_keys.insert(key);
                 }
                 "HT" | "TR" | "TR2" | "BG" | "BG2" | "UCR" | "UCR2" | "FLT" => {
                     let _ = resolve(&value)?;
-                    ignored.insert(key);
+                    state.ignored_keys.insert(key);
                 }
                 "BM" => {
-                    for mode in non_normal_blend_modes(&resolve(&value)?)? {
-                        if !unsupported_blend_modes.contains(&mode) {
-                            unsupported_blend_modes.push(mode);
-                        }
-                    }
+                    state.blend_modes = Some(non_normal_blend_modes(&resolve(&value)?)?);
                 }
                 "SMask" => match resolve(&value)? {
-                    Value::Name(value) if value == "None" => {}
+                    Value::Name(value) if value == "None" => state.soft_mask = Some(false),
                     _ => {
-                        ignored.insert(key);
+                        state.soft_mask = Some(true);
                     }
                 },
                 "AIS" => match resolve(&value)? {
@@ -2203,18 +2391,15 @@ pub(crate) fn ext_graphics_states_from_resources(
                     _ => return Err(malformed("ExtGState OPM must be zero or one")),
                 },
                 _ => {
-                    let _ = resolve(&value)?;
-                    ignored.insert(key);
+                    return Err(DocsightError::UnsupportedFeature {
+                        feature: format!("PDF ExtGState entry {key}"),
+                    });
                 }
             }
         }
         result.insert(name, state);
     }
-    Ok(ExtGraphicsStates {
-        states: result,
-        ignored_keys: ignored.into_iter().collect(),
-        blend_modes: unsupported_blend_modes,
-    })
+    Ok(ExtGraphicsStates { states: result })
 }
 
 fn ext_number(value: &Value) -> Result<f32, DocsightError> {
@@ -2693,19 +2878,15 @@ fn tokenize_cmap(bytes: &[u8]) -> Result<Vec<CMapToken>, DocsightError> {
 }
 
 fn decode_hex_digits(digits: &[u8]) -> Result<Vec<u8>, DocsightError> {
-    if digits.is_empty() || !digits.len().is_multiple_of(2) {
-        return Err(malformed(
-            "ToUnicode hex string must contain complete bytes",
-        ));
+    let mut bytes = Vec::with_capacity(digits.len().div_ceil(2));
+    let mut pairs = digits.chunks_exact(2);
+    for pair in &mut pairs {
+        bytes.push(hex_digit(pair[0])? << 4 | hex_digit(pair[1])?);
     }
-    digits
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = hex_digit(pair[0])?;
-            let low = hex_digit(pair[1])?;
-            Ok(high << 4 | low)
-        })
-        .collect()
+    if let Some(high) = pairs.remainder().first() {
+        bytes.push(hex_digit(*high)? << 4);
+    }
+    Ok(bytes)
 }
 
 fn hex_digit(byte: u8) -> Result<u8, DocsightError> {
@@ -2736,7 +2917,12 @@ fn cmap_hex(tokens: &[CMapToken], cursor: usize) -> Result<&[u8], DocsightError>
 }
 
 fn decode_utf16be(bytes: &[u8]) -> Result<String, DocsightError> {
-    if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
+    if bytes.is_empty() {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: "empty PDF ToUnicode mapping".to_owned(),
+        });
+    }
+    if !bytes.len().is_multiple_of(2) {
         return Err(malformed("ToUnicode target must be UTF-16BE"));
     }
     let units = bytes
