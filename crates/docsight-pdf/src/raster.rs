@@ -1061,6 +1061,28 @@ fn glyph(character: char) -> Option<[u8; 7]> {
 
 fn base_glyph(character: char) -> Option<[u8; 7]> {
     let pattern = match character {
+        '<' => [2, 4, 8, 16, 8, 4, 2],
+        '>' => [8, 4, 2, 1, 2, 4, 8],
+        '{' => [6, 8, 8, 16, 8, 8, 6],
+        '}' => [24, 4, 4, 2, 4, 4, 24],
+        '~' => [0, 0, 13, 18, 0, 0, 0],
+        '\u{a1}' => [4, 0, 4, 4, 4, 4, 4],
+        '×' => [0, 17, 10, 4, 10, 17, 0],
+        '•' => [0, 0, 0, 0, 12, 12, 0],
+        '…' => [0, 0, 0, 0, 0, 21, 21],
+        '→' => [0, 4, 2, 31, 2, 4, 0],
+        '─' => [0, 0, 0, 31, 0, 0, 0],
+        '│' => [4, 4, 4, 4, 4, 4, 4],
+        '└' => [4, 4, 4, 4, 4, 4, 31],
+        '├' => [4, 4, 4, 4, 4, 4, 31],
+        '\u{f0b7}' => [0, 0, 0, 0, 12, 12, 0],
+        '´' => [4, 2, 0, 0, 0, 0, 0],
+        '`' => [2, 4, 0, 0, 0, 0, 0],
+        '¨' => [10, 0, 0, 0, 0, 0, 0],
+        'ˆ' => [4, 10, 0, 0, 0, 0, 0],
+        '˜' => [10, 0, 0, 0, 0, 0, 0],
+        '¸' => [0, 0, 0, 0, 0, 4, 8],
+        '^' => [4, 10, 17, 0, 0, 0, 0],
         '¹' => [4, 12, 4, 14, 0, 0, 0],
         '²' => [12, 2, 4, 14, 0, 0, 0],
         '³' => [12, 2, 4, 2, 12, 0, 0],
@@ -1205,6 +1227,30 @@ pub fn glyph_coverage(text: &str) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn required_repertoire_is_supported() {
+        let required = [
+            "abcdefghijklmnopqrstuvwxyz",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "0123456789",
+            ".,-_:;!?/\\()[]<>{}+=#%&@|$~*^`",
+            "\u{a1}\u{a7}\u{aa}\u{b0}\u{b2}\u{b3}\u{b9}\u{ba}\u{b4}\u{a8}\u{b8}\u{d7}",
+            "\u{2013}\u{2014}\u{2018}\u{2019}\u{201c}\u{201d}\u{2022}\u{2026}",
+            "\u{c0}\u{c1}\u{c2}\u{c3}\u{c7}\u{c9}\u{ca}\u{cd}\u{d1}\u{d3}\u{d4}\u{d5}\u{da}\u{dc}",
+            "\u{e0}\u{e1}\u{e2}\u{e3}\u{e7}\u{e9}\u{ea}\u{ed}\u{f1}\u{f3}\u{f4}\u{f5}\u{fa}\u{fc}",
+        ];
+        let missing: Vec<char> = required
+            .iter()
+            .flat_map(|group| group.chars())
+            .filter(|character| super::glyph(*character).is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the PDF raster font is missing characters it must draw: {missing:?}"
+        );
+    }
+
     use super::*;
     use crate::font::FontPoint;
 

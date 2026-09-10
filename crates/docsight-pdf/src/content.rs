@@ -1586,10 +1586,10 @@ fn clip_region_from_path(
     path: &[PathSegment],
     even_odd: bool,
 ) -> Result<ClipRegion, DocsightError> {
-    let polygons = flatten_clip_path(path)?;
-    if polygons.is_empty() || polygons.iter().any(|polygon| polygon.len() < 3) {
-        return Err(malformed("clipping path has no closed area"));
-    }
+    let polygons = flatten_clip_path(path)?
+        .into_iter()
+        .filter(|polygon| polygon.len() >= 3)
+        .collect::<Vec<_>>();
     Ok(ClipRegion { polygons, even_odd })
 }
 
@@ -2166,6 +2166,10 @@ pub(crate) fn fonts_from_resources(
                 });
             }
         };
+        let encoding = match dict.get("Encoding") {
+            Some(value) => Some(resolve(value)?),
+            None => None,
+        };
         let decoder = match dict.get("ToUnicode").or_else(|| {
             descendant
                 .as_ref()
@@ -2188,12 +2192,11 @@ pub(crate) fn fonts_from_resources(
                     feature: "Type3 PDF font without ToUnicode or an explicit encoding".to_owned(),
                 });
             }
-            None => decoder_from_encoding(dict.get("Encoding"))?,
+            None => decoder_from_encoding(encoding.as_ref())?,
         };
         let cid_identity = match &descendant {
             Some(descendant) => {
-                if !matches!(dict.get("Encoding"), Some(Value::Name(name)) if name == "Identity-H")
-                {
+                if !matches!(encoding.as_ref(), Some(Value::Name(name)) if name == "Identity-H") {
                     return Err(DocsightError::UnsupportedFeature {
                         feature: "CID metrics require Identity-H font encoding".to_owned(),
                     });

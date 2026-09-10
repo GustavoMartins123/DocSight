@@ -1,4 +1,5 @@
 mod content;
+mod filters;
 mod font;
 mod raster;
 mod reconstruction;
@@ -13,11 +14,13 @@ use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
     DocumentSource, ErrorLocation, ObjectId, Page, Rect, SourceSpan,
 };
+use filters::decode_stream;
 use raster::{MAX_DPI, MIN_DPI};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Take};
-use syntax::{ObjectRef, StreamValue, Value, Xref, malformed, parse_object, parse_xref};
+use std::rc::Rc;
+use syntax::{ObjectRef, Value, Xref, XrefEntry, malformed, parse_object, parse_xref};
 
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -228,6 +231,7 @@ impl<'a> PdfDocument<'a> {
         let store = ObjectStore {
             bytes: source.bytes(),
             xref,
+            object_streams: RefCell::new(BTreeMap::new()),
         };
         let mut pages = Vec::new();
         let mut active = BTreeSet::new();
@@ -803,20 +807,108 @@ fn paint_argb(paint: Paint) -> u32 {
         | u32::from(paint.color.blue)
 }
 
+struct ObjectStreamIndex {
+    data: Vec<u8>,
+    entries: Vec<(u32, usize)>,
+}
+
 struct ObjectStore<'a> {
     bytes: &'a [u8],
     xref: Xref,
+    object_streams: RefCell<BTreeMap<u32, Rc<ObjectStreamIndex>>>,
 }
 
 impl ObjectStore<'_> {
     fn object(&self, reference: ObjectRef) -> Result<Value, DocsightError> {
-        let offset = self.xref.entries.get(&reference).copied().ok_or_else(|| {
+        let entry = self.xref.entries.get(&reference).copied().ok_or_else(|| {
             malformed(format!(
                 "missing xref entry for object {}",
                 reference.number
             ))
         })?;
-        parse_object(self.bytes, offset, reference, &self.xref.entries)
+        match entry {
+            XrefEntry::Offset(offset) => {
+                parse_object(self.bytes, offset, reference, &self.xref.entries)
+            }
+            XrefEntry::Compressed { stream, index } => {
+                self.compressed_object(reference, stream, index)
+            }
+        }
+    }
+
+    fn compressed_object(
+        &self,
+        reference: ObjectRef,
+        container: u32,
+        index: u32,
+    ) -> Result<Value, DocsightError> {
+        let stream = self.object_stream(container)?;
+        let index =
+            usize::try_from(index).map_err(|_| malformed("object stream index is out of range"))?;
+        let (number, offset) =
+            stream.entries.get(index).copied().ok_or_else(|| {
+                malformed(format!("object stream {container} has no entry {index}"))
+            })?;
+        if number != reference.number {
+            return Err(malformed(format!(
+                "object stream {container} entry {index} holds object {number}, not {}",
+                reference.number
+            )));
+        }
+        syntax::parse_object_stream_value(&stream.data, offset)
+    }
+
+    fn object_stream(&self, container: u32) -> Result<Rc<ObjectStreamIndex>, DocsightError> {
+        if let Some(cached) = self.object_streams.borrow().get(&container) {
+            return Ok(Rc::clone(cached));
+        }
+        let reference = ObjectRef {
+            number: container,
+            generation: 0,
+        };
+        let offset = match self.xref.entries.get(&reference).copied() {
+            Some(XrefEntry::Offset(offset)) => offset,
+            Some(XrefEntry::Compressed { .. }) => {
+                return Err(malformed(
+                    "an object stream must not live inside another object stream",
+                ));
+            }
+            None => {
+                return Err(malformed(format!(
+                    "missing xref entry for object stream {container}"
+                )));
+            }
+        };
+        let value = parse_object(self.bytes, offset, reference, &self.xref.entries)?;
+        let Value::Stream(stream) = value else {
+            return Err(malformed(format!("object {container} is not a stream")));
+        };
+        if !matches!(stream.dict.get("Type"), Some(Value::Name(name)) if name == "ObjStm") {
+            return Err(malformed(format!(
+                "object {container} is not an object stream"
+            )));
+        }
+        let count = match stream.dict.get("N") {
+            Some(Value::Int(count)) if *count >= 0 => {
+                usize::try_from(*count).map_err(|_| malformed("object stream N is out of range"))?
+            }
+            _ => return Err(malformed("object stream has no valid N")),
+        };
+        let first = match stream.dict.get("First") {
+            Some(Value::Int(first)) if *first >= 0 => usize::try_from(*first)
+                .map_err(|_| malformed("object stream First is out of range"))?,
+            _ => return Err(malformed("object stream has no valid First")),
+        };
+        let data = decode_stream(&stream)?;
+        if first > data.len() {
+            return Err(malformed("object stream First is past the decoded stream"));
+        }
+        let entries = syntax::parse_object_stream_index(&data, count, first)?;
+        let indexed = Rc::new(ObjectStreamIndex { data, entries });
+        self.object_streams
+            .borrow_mut()
+            .insert(container, Rc::clone(&indexed));
+        Ok(indexed)
     }
 
     fn resolve(&self, value: &Value) -> Result<Value, DocsightError> {
@@ -974,56 +1066,6 @@ fn pdf_number(value: &Value) -> Result<f32, DocsightError> {
         Value::Real(value) => Ok(*value),
         _ => Err(malformed("page box coordinate must be numeric")),
     }
-}
-
-const MAX_FLATE_OUTPUT_BYTES: u64 = docsight_core::MAX_INSPECT_BYTES;
-
-fn decode_stream(stream: &StreamValue) -> Result<Vec<u8>, DocsightError> {
-    if stream
-        .dict
-        .get("DecodeParms")
-        .is_some_and(|value| !matches!(value, Value::Null))
-    {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "PDF stream DecodeParms predictors".to_owned(),
-        });
-    }
-    let Some(filter) = stream.dict.get("Filter") else {
-        return Ok(stream.data.clone());
-    };
-    match filter {
-        Value::Name(name) if name == "FlateDecode" => inflate_zlib(&stream.data),
-        Value::Array(values) if values.len() == 1 => match &values[0] {
-            Value::Name(name) if name == "FlateDecode" => inflate_zlib(&stream.data),
-            Value::Name(name) => Err(DocsightError::UnsupportedFeature {
-                feature: format!("PDF stream filter {name}"),
-            }),
-            _ => Err(malformed("stream Filter array must contain a name")),
-        },
-        Value::Array(_) => Err(DocsightError::UnsupportedFeature {
-            feature: "PDF stream filter chains".to_owned(),
-        }),
-        Value::Name(name) => Err(DocsightError::UnsupportedFeature {
-            feature: format!("PDF stream filter {name}"),
-        }),
-        _ => Err(malformed("stream Filter must be a name")),
-    }
-}
-
-fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, DocsightError> {
-    let bounded: Take<flate2::read::ZlibDecoder<&[u8]>> =
-        flate2::read::ZlibDecoder::new(data).take(MAX_FLATE_OUTPUT_BYTES + 1);
-    let mut decoder = bounded;
-    let mut output = Vec::new();
-    decoder
-        .read_to_end(&mut output)
-        .map_err(|error| DocsightError::MalformedDocument {
-            message: format!("FlateDecode stream is invalid: {error}"),
-        })?;
-    if output.len() as u64 > MAX_FLATE_OUTPUT_BYTES {
-        return Err(content_limit());
-    }
-    Ok(output)
 }
 
 fn font_approximation_warning(page: u32) -> Diagnostic {
