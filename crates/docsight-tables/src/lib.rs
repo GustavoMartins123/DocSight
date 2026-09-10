@@ -373,7 +373,7 @@ fn build_ruled_table(
                         < span.bbox.height().min(previous.bbox.height()) * 0.5;
                     if !same_line {
                         cell_text.push('\n');
-                    } else if span.bbox.x0 - previous.bbox.x1 > span.bbox.height() * 0.15
+                    } else if span.bbox.x0 - previous.bbox.x1 >= 2.0
                         && !cell_text.ends_with(char::is_whitespace)
                         && !span.text.starts_with(char::is_whitespace)
                     {
@@ -560,25 +560,40 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
         let mut cells = Vec::new();
         for (r_idx, line) in run.iter().enumerate() {
             let row_idx = r_idx as u32;
-            for (c_idx, col_x) in col_lefts.iter().enumerate() {
+            let mut columns: Vec<Vec<&TextSpanItem>> =
+                col_lefts.iter().map(|_| Vec::new()).collect();
+            for span in &line.spans {
+                let mut best = 0_usize;
+                let mut best_distance = f32::INFINITY;
+                for (c_idx, col_x) in col_lefts.iter().enumerate() {
+                    let distance = (span.bbox.x0 - *col_x).abs();
+                    if distance < best_distance {
+                        best_distance = distance;
+                        best = c_idx;
+                    }
+                }
+                columns[best].push(span);
+            }
+            for (c_idx, cell_spans) in columns.iter().enumerate() {
                 let col_idx = c_idx as u32;
-                let next_col_x = col_lefts.get(c_idx + 1).copied().unwrap_or(table_x1 + 10.0);
-
-                let cell_spans: Vec<&TextSpanItem> = line
-                    .spans
-                    .iter()
-                    .filter(|s| {
-                        let cx = s.bbox.x0;
-                        cx >= col_x - 10.0 && cx < next_col_x - 5.0
-                    })
-                    .collect();
-
-                let text = cell_spans
-                    .iter()
-                    .map(|s| s.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-
+                let mut text = String::new();
+                let mut previous: Option<&TextSpanItem> = None;
+                for span in cell_spans {
+                    if let Some(previous) = previous {
+                        let same_line = (span.bbox.y0 - previous.bbox.y0).abs()
+                            < span.bbox.height().min(previous.bbox.height()) * 0.5;
+                        if !same_line {
+                            text.push('\n');
+                        } else if span.bbox.x0 - previous.bbox.x1 >= 2.0
+                            && !text.ends_with(char::is_whitespace)
+                            && !span.text.starts_with(char::is_whitespace)
+                        {
+                            text.push(' ');
+                        }
+                    }
+                    text.push_str(&span.text);
+                    previous = Some(*span);
+                }
                 let cell_bbox = if let Some(first_span) = cell_spans.first() {
                     let mut b_x0 = first_span.bbox.x0;
                     let mut b_y0 = first_span.bbox.y0;
@@ -611,13 +626,44 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
             continue;
         }
 
-        let confidence = if num_rows >= 3 && num_cols >= 3 {
+        let base_confidence: f32 = if num_rows >= 3 && num_cols >= 3 {
             0.934
         } else if num_rows >= 2 && num_cols >= 2 {
             0.850
         } else {
             0.612
         };
+        let mut col_widths = Vec::with_capacity(col_lefts.len());
+        for (index, left) in col_lefts.iter().enumerate() {
+            let right = col_lefts.get(index + 1).copied().unwrap_or(table_x1);
+            col_widths.push(right - *left);
+        }
+        let min_width = col_widths.iter().copied().fold(f32::INFINITY, f32::min);
+        let total_cells = (num_rows * num_cols) as usize;
+        let empty_fraction = 1.0 - non_empty as f32 / total_cells as f32;
+        let mut max_column_empty_fraction = 0.0_f32;
+        for c_idx in 0..num_cols {
+            let column_cells = cells.iter().filter(|cell| cell.column == c_idx).count();
+            let column_empty = cells
+                .iter()
+                .filter(|cell| cell.column == c_idx && cell.text.trim().is_empty())
+                .count();
+            if column_cells > 0 {
+                max_column_empty_fraction =
+                    max_column_empty_fraction.max(column_empty as f32 / column_cells as f32);
+            }
+        }
+        let mut confidence = base_confidence;
+        if num_cols > num_rows * 4 || num_cols >= 12 {
+            confidence -= 0.15_f32;
+        }
+        if min_width < 20.0 {
+            confidence -= 0.10_f32;
+        }
+        if max_column_empty_fraction >= 0.9 || empty_fraction > 0.5 {
+            confidence -= 0.10_f32;
+        }
+        confidence = confidence.max(0.35_f32);
 
         tables.push(InferredTable {
             page,
@@ -797,6 +843,191 @@ mod tests {
         let block = tables[0].to_table_block("test_digest");
         let csv = table_to_csv(&block)?;
         assert!(csv.contains("Apples,10,$5.00"));
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_joins_contiguous_glyphs_without_spaces() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let spans = vec![
+            TextSpanItem {
+                text: "Q".into(),
+                bbox: Rect::new(100.0, 50.0, 108.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "t".into(),
+                bbox: Rect::new(108.0, 50.0, 113.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "y".into(),
+                bbox: Rect::new(113.0, 50.0, 121.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Item".into(),
+                bbox: Rect::new(30.0, 50.0, 60.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Apples".into(),
+                bbox: Rect::new(30.0, 70.0, 70.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "Q".into(),
+                bbox: Rect::new(100.0, 70.0, 108.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "t".into(),
+                bbox: Rect::new(108.0, 70.0, 113.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "y".into(),
+                bbox: Rect::new(113.0, 70.0, 121.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        let qty_texts: Vec<&str> = tables[0]
+            .cells
+            .iter()
+            .filter(|cell| cell.row == 0 && cell.column == 1)
+            .map(|cell| cell.text.as_str())
+            .collect();
+        assert_eq!(qty_texts, vec!["Qty"]);
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_assigns_straddling_run_to_a_single_column()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let spans = vec![
+            TextSpanItem {
+                text: "Description".into(),
+                bbox: Rect::new(30.0, 50.0, 95.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Amount".into(),
+                bbox: Rect::new(90.0, 50.0, 140.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Widget".into(),
+                bbox: Rect::new(30.0, 70.0, 80.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "$9.00".into(),
+                bbox: Rect::new(100.0, 70.0, 140.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        let occurrences = tables[0]
+            .cells
+            .iter()
+            .filter(|cell| cell.text.contains("Amount"))
+            .count();
+        assert_eq!(occurrences, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn ruled_cell_join_uses_paragraph_gap_threshold() -> Result<(), Box<dyn std::error::Error>> {
+        let rulings = vec![
+            RulingSegment {
+                x0: 20.0,
+                y0: 50.0,
+                x1: 200.0,
+                y1: 50.0,
+            },
+            RulingSegment {
+                x0: 20.0,
+                y0: 110.0,
+                x1: 200.0,
+                y1: 110.0,
+            },
+            RulingSegment {
+                x0: 20.0,
+                y0: 50.0,
+                x1: 20.0,
+                y1: 110.0,
+            },
+            RulingSegment {
+                x0: 200.0,
+                y0: 50.0,
+                x1: 200.0,
+                y1: 110.0,
+            },
+        ];
+        let spans = vec![
+            TextSpanItem {
+                text: "AB".into(),
+                bbox: Rect::new(25.0, 60.0, 45.0, 72.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "CD".into(),
+                bbox: Rect::new(46.0, 60.0, 66.0, 72.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "EF".into(),
+                bbox: Rect::new(70.0, 60.0, 90.0, 72.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &rulings, 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].cells[0].text, "ABCD EF");
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_penalizes_implausible_column_counts() -> Result<(), Box<dyn std::error::Error>> {
+        let mut spans = Vec::new();
+        for row in 0..3_u32 {
+            let y0 = 50.0 + row as f32 * 20.0;
+            for column in 0..22_u32 {
+                let x0 = 10.0 + column as f32 * 15.0;
+                spans.push(TextSpanItem {
+                    text: format!("c{column}"),
+                    bbox: Rect::new(x0, y0, x0 + 10.0, y0 + 12.0)?,
+                    font_size: 10.0,
+                    bold: false,
+                });
+            }
+        }
+        let tables = detect_tables(1, &spans, &[], 500.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!((tables[0].rows, tables[0].columns), (3, 22));
+        assert!(
+            tables[0].confidence < 0.70,
+            "over-segmented table must not present as reliable: {}",
+            tables[0].confidence
+        );
         Ok(())
     }
 }

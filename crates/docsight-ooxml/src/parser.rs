@@ -117,6 +117,7 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut figure_index,
                 &mut resources,
                 &parts.binary_part_digests,
+                &mut warnings,
             )?;
             extract_hyperlinks(
                 child,
@@ -403,8 +404,24 @@ fn parse_section(
 }
 
 fn normalize_internal_target(target: &str) -> Option<String> {
-    if target.starts_with('/') || target.contains("://") || target.contains('\\') {
+    if target.contains("://") || target.contains('\\') || target.contains(':') {
         return None;
+    }
+    if target.starts_with('/') {
+        let mut segments: Vec<&str> = Vec::new();
+        for segment in target.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    segments.pop()?;
+                }
+                other => segments.push(other),
+            }
+        }
+        if segments.is_empty() {
+            return None;
+        }
+        return Some(segments.join("/"));
     }
     let source_dir = "word";
     let mut segments: Vec<&str> = source_dir.split('/').collect();
@@ -504,6 +521,7 @@ fn extract_part_texts(parts: &[(String, String)]) -> Result<Vec<(String, String)
     Ok(results)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_figures(
     node: Node<'_, '_>,
     source: &DocumentSource,
@@ -512,6 +530,7 @@ fn extract_figures(
     figure_index: &mut u32,
     resources: &mut Vec<Resource>,
     binary_part_digests: &BTreeMap<String, String>,
+    warnings: &mut Vec<Diagnostic>,
 ) -> Result<Vec<Block>, DocsightError> {
     let mut figures = Vec::new();
     for drawing in node
@@ -553,31 +572,134 @@ fn extract_figures(
                 .attribute((R_NS, "embed"))
                 .or_else(|| blip.attribute("r:embed"))
         {
-            resource_id = Some(embed.to_owned());
-            let (relationship_type, target) =
-                rels.get(embed)
-                    .ok_or_else(|| DocsightError::MalformedDocument {
-                        message: format!("drawing references missing relationship {embed}"),
-                    })?;
-            if !relationship_type.ends_with("/image") {
-                return Err(DocsightError::MalformedDocument {
-                    message: format!("drawing relationship {embed} is not an image"),
-                });
+            let unresolved = |reason: String| {
+                Diagnostic {
+                code: "DOCX_IMAGE_UNRESOLVED".to_owned(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("image relationship {embed} is unresolved: {reason}"),
+                effect: "text and structure remain exact; the figure is a placeholder without image pixels"
+                    .to_owned(),
+                object: None,
+                page: None,
             }
-            let normalized_target = normalize_internal_target(target).ok_or_else(|| {
-                DocsightError::MalformedDocument {
-                    message: format!("invalid internal image relationship target: {target}"),
+            };
+            let Some((relationship_type, target)) = rels.get(embed) else {
+                warnings.push(unresolved(format!(
+                    "drawing references missing relationship {embed}"
+                )));
+                let source_path = format!("/word/document.xml::figure[{figure_index}]");
+                let figure_id = source.object_id("fig", &source_path);
+                if let Some(last) = warnings.last_mut() {
+                    last.object = Some(figure_id.clone());
                 }
-            })?;
+                figures.push(Block {
+                    id: figure_id,
+                    kind: BlockKind::Figure,
+                    page: None,
+                    bbox: None,
+                    z_index: 0,
+                    reading_order: *reading_order,
+                    source: SourceSpan::new(&source_path),
+                    confidence: 1.0,
+                    flags: LayoutFlags::default(),
+                    content: BlockContent::Figure(FigureBlock {
+                        alt_text: alt_text.clone(),
+                        caption: None,
+                        resource_id: Some(embed.to_owned()),
+                        width_pt,
+                        height_pt,
+                    }),
+                });
+                continue;
+            };
+            if !relationship_type.ends_with("/image") {
+                warnings.push(unresolved(format!(
+                    "drawing relationship {embed} is not an image"
+                )));
+                let source_path = format!("/word/document.xml::figure[{figure_index}]");
+                let figure_id = source.object_id("fig", &source_path);
+                if let Some(last) = warnings.last_mut() {
+                    last.object = Some(figure_id.clone());
+                }
+                figures.push(Block {
+                    id: figure_id,
+                    kind: BlockKind::Figure,
+                    page: None,
+                    bbox: None,
+                    z_index: 0,
+                    reading_order: *reading_order,
+                    source: SourceSpan::new(&source_path),
+                    confidence: 1.0,
+                    flags: LayoutFlags::default(),
+                    content: BlockContent::Figure(FigureBlock {
+                        alt_text: alt_text.clone(),
+                        caption: None,
+                        resource_id: Some(embed.to_owned()),
+                        width_pt,
+                        height_pt,
+                    }),
+                });
+                continue;
+            }
+            let Some(normalized_target) = normalize_internal_target(target) else {
+                warnings.push(unresolved(format!(
+                    "invalid internal image relationship target: {target}"
+                )));
+                let source_path = format!("/word/document.xml::figure[{figure_index}]");
+                let figure_id = source.object_id("fig", &source_path);
+                if let Some(last) = warnings.last_mut() {
+                    last.object = Some(figure_id.clone());
+                }
+                figures.push(Block {
+                    id: figure_id,
+                    kind: BlockKind::Figure,
+                    page: None,
+                    bbox: None,
+                    z_index: 0,
+                    reading_order: *reading_order,
+                    source: SourceSpan::new(&source_path),
+                    confidence: 1.0,
+                    flags: LayoutFlags::default(),
+                    content: BlockContent::Figure(FigureBlock {
+                        alt_text: alt_text.clone(),
+                        caption: None,
+                        resource_id: Some(embed.to_owned()),
+                        width_pt,
+                        height_pt,
+                    }),
+                });
+                continue;
+            };
             let resource_target = normalized_target.as_str();
-            let content_sha256 = binary_part_digests
-                .get(resource_target)
-                .ok_or_else(|| DocsightError::MalformedDocument {
-                    message: format!(
-                        "image relationship {embed} targets missing part {resource_target}"
-                    ),
-                })?
-                .clone();
+            let Some(content_sha256) = binary_part_digests.get(resource_target).cloned() else {
+                warnings.push(unresolved(format!(
+                    "image relationship {embed} targets missing part {resource_target}"
+                )));
+                let source_path = format!("/word/document.xml::figure[{figure_index}]");
+                let figure_id = source.object_id("fig", &source_path);
+                if let Some(last) = warnings.last_mut() {
+                    last.object = Some(figure_id.clone());
+                }
+                figures.push(Block {
+                    id: figure_id,
+                    kind: BlockKind::Figure,
+                    page: None,
+                    bbox: None,
+                    z_index: 0,
+                    reading_order: *reading_order,
+                    source: SourceSpan::new(&source_path),
+                    confidence: 1.0,
+                    flags: LayoutFlags::default(),
+                    content: BlockContent::Figure(FigureBlock {
+                        alt_text: alt_text.clone(),
+                        caption: None,
+                        resource_id: Some(embed.to_owned()),
+                        width_pt,
+                        height_pt,
+                    }),
+                });
+                continue;
+            };
             let res_id = source.object_id("res", resource_target);
             if !resources.iter().any(|r| r.id == res_id) {
                 resources.push(Resource {
@@ -589,6 +711,7 @@ fn extract_figures(
                     content_sha256: Some(content_sha256),
                 });
             }
+            resource_id = Some(embed.to_owned());
         }
 
         let source_path = format!("/word/document.xml::figure[{figure_index}]");

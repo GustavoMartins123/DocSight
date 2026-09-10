@@ -565,3 +565,110 @@ fn exposes_inline_images_as_explicit_figure_placeholders() -> Result<(), Docsigh
     );
     Ok(())
 }
+
+#[test]
+fn ignores_empty_text_shows_without_invalid_geometry() -> Result<(), DocsightError> {
+    let content = "BT /F1 10 Tf 20 70 Td () Tj (Hi) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(page.spans.len(), 1);
+    assert_eq!(page.spans[0].text, "Hi");
+    let content = "BT /F1 10 Tf 20 70 Td [() (A)] TJ ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(
+        page.spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>(),
+        "A"
+    );
+    Ok(())
+}
+
+#[test]
+fn accepts_negative_and_zero_horizontal_scale() -> Result<(), DocsightError> {
+    let content = "BT /F1 10 Tf -100 Tz 20 70 Td (Mirror) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert_eq!(page.spans.len(), 1);
+    assert_eq!(page.spans[0].text, "Mirror");
+    assert!(page.spans[0].bbox.x1 > page.spans[0].bbox.x0);
+    let content = "BT /F1 10 Tf 0 Tz 20 70 Td (Hi) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert!(page.spans.is_empty());
+    Ok(())
+}
+
+#[test]
+fn accepts_invisible_text_rendering_modes_for_extraction() -> Result<(), DocsightError> {
+    for mode in [0, 1, 2, 3] {
+        let content = format!("BT /F1 10 Tf {mode} Tr 20 70 Td (OCR) Tj ET");
+        let source = DocumentSource::from_bytes(build_pdf(&content, "[0 0 200 100]", ""))?;
+        let document = PdfDocument::open(&source)?.to_document()?;
+        assert_eq!(document.paragraphs().count(), 1, "mode {mode}");
+        assert!(
+            !document
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "PDF_CLIP_TEXT_VISUAL"),
+            "mode {mode} must not emit a clip warning"
+        );
+    }
+    let content = "BT /F1 10 Tf 5 Tr 20 70 Td (Clip) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_CLIP_TEXT_VISUAL" && warning.page == Some(1))
+    );
+    Ok(())
+}
+
+#[test]
+fn accepts_raster_only_extgstate_entries_with_visual_warning() -> Result<(), DocsightError> {
+    let content = "q /GS0 gs BT /F1 10 Tf 20 70 Td (Hello) Tj ET Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /ExtGState /SA true >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(document.warnings.iter().any(|warning| {
+        warning.code == "PDF_EXTGSTATE_IGNORED"
+            && warning.page == Some(1)
+            && warning.message.contains("SA")
+    }));
+    Ok(())
+}
+
+#[test]
+fn accepts_unknown_extgstate_entries_with_visual_warning() -> Result<(), DocsightError> {
+    let content = "q /GS0 gs BT /F1 10 Tf 20 70 Td (Hello) Tj ET Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /ExtGState /FutureKey 42 >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(document.warnings.iter().any(|warning| {
+        warning.code == "PDF_EXTGSTATE_IGNORED"
+            && warning.page == Some(1)
+            && warning.message.contains("FutureKey")
+    }));
+    Ok(())
+}

@@ -308,6 +308,12 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
+        if !parsed.ignored_ext_keys.is_empty() {
+            warnings.push(ext_state_ignored_warning(number, &parsed.ignored_ext_keys));
+        }
+        if parsed.clip_text {
+            warnings.push(clip_text_warning(number));
+        }
         let page = self.page_record(number)?;
         Ok(PdfTracePage {
             number,
@@ -350,6 +356,15 @@ impl<'a> PdfDocument<'a> {
             }
             if parsed.omitted_xobjects {
                 all_warnings.push(xobject_placeholder_warning(page_num));
+            }
+            if !parsed.ignored_ext_keys.is_empty() {
+                all_warnings.push(ext_state_ignored_warning(
+                    page_num,
+                    &parsed.ignored_ext_keys,
+                ));
+            }
+            if parsed.clip_text {
+                all_warnings.push(clip_text_warning(page_num));
             }
 
             let reconstructed = reconstruction::reconstruct_page_semantics(
@@ -420,6 +435,12 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
+        if !parsed.ignored_ext_keys.is_empty() {
+            warnings.push(ext_state_ignored_warning(number, &parsed.ignored_ext_keys));
+        }
+        if parsed.clip_text {
+            warnings.push(clip_text_warning(number));
+        }
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
             page: number,
@@ -459,7 +480,7 @@ impl<'a> PdfDocument<'a> {
             Some(value) => self.store.resolve_dict(value)?.into_keys().collect(),
             None => BTreeSet::new(),
         };
-        let ext_graphics_states =
+        let (ext_graphics_states, ignored_ext_keys) =
             ext_graphics_states_from_resources(&resources, |value| self.store.resolve(value))?;
         let trace_resources = trace_resources(&fonts, &xobjects, &ext_graphics_states);
         let content = self.read_content_streams(&page.contents)?;
@@ -476,6 +497,8 @@ impl<'a> PdfDocument<'a> {
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
             omitted_xobjects: parsed.omitted_xobjects,
+            clip_text: parsed.clip_text,
+            ignored_ext_keys,
             trace_resources,
         })
     }
@@ -554,6 +577,8 @@ struct ParsedPage {
     text_runs: Vec<TextRun>,
     approximated_font: bool,
     omitted_xobjects: bool,
+    clip_text: bool,
+    ignored_ext_keys: Vec<String>,
     trace_resources: Vec<PdfTraceResource>,
 }
 
@@ -940,6 +965,32 @@ fn xobject_placeholder_warning(page: u32) -> Diagnostic {
             "page {page} contains XObject content represented as a figure placeholder"
         ),
         effect: "embedded image or form pixels are not decoded by the initial renderer".to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn ext_state_ignored_warning(page: u32, keys: &[String]) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_EXTGSTATE_IGNORED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "page {page} uses PDF ExtGState entries {} that do not affect text extraction",
+            keys.join(", ")
+        ),
+        effect: "text and structure remain exact; visual rendering does not reproduce these raster-only graphics state entries"
+            .to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn clip_text_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_CLIP_TEXT_VISUAL".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("page {page} uses PDF text rendering modes 4-7 (clipping text)"),
+        effect: "text was extracted; visual rendering does not clip text to its outline".to_owned(),
         object: None,
         page: Some(page),
     }

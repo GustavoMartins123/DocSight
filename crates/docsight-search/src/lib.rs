@@ -1776,8 +1776,11 @@ pub fn resolve(
     });
     let status = match ranked.as_slice() {
         [] => ResolveStatus::NoMatch,
-        [first, ..] if first.score < RESOLVE_THRESHOLD => ResolveStatus::Ambiguous,
-        [first, second, ..] if first.score - second.score <= RESOLVE_AMBIGUITY_MARGIN => {
+        [_] => ResolveStatus::Resolved,
+        [first, second, ..]
+            if first.score < RESOLVE_THRESHOLD
+                || first.score - second.score <= RESOLVE_AMBIGUITY_MARGIN =>
+        {
             ResolveStatus::Ambiguous
         }
         _ => ResolveStatus::Resolved,
@@ -2087,7 +2090,7 @@ mod tests {
     use super::*;
     use docsight_core::{
         Block, DocumentMetadata, HeadingBlock, LayoutFlags, Overlay, Page, ParagraphBlock,
-        SourceSpan, TableBlock, TrackedChanges,
+        SourceSpan, TableBlock, TableCell, TrackedChanges,
     };
 
     fn source(path: &str) -> SourceSpan {
@@ -2402,6 +2405,76 @@ mod tests {
         )?;
         assert_eq!(absent.status, ResolveStatus::NoMatch);
         assert!(absent.candidates.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_single_candidate_is_never_ambiguous() -> Result<(), Box<dyn std::error::Error>> {
+        let paragraph = block(
+            "p_due",
+            BlockKind::Paragraph,
+            1,
+            Rect::new(10.0, 24.0, 100.0, 34.0)?,
+            2,
+            BlockContent::Paragraph(ParagraphBlock {
+                text: "Date of issue January 1, 2026 Date due".to_owned(),
+                style_id: None,
+            }),
+        );
+        let mut document = document()?;
+        document.blocks = vec![paragraph.clone()];
+        document.pages[0].block_ids = vec![paragraph.id.clone()];
+        let result = resolve(&document, "Amount due", None, None)?;
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.status, ResolveStatus::Resolved);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_full_phrase_outranks_partial_word_match() -> Result<(), Box<dyn std::error::Error>> {
+        let paragraph = block(
+            "p_due",
+            BlockKind::Paragraph,
+            1,
+            Rect::new(10.0, 24.0, 100.0, 34.0)?,
+            2,
+            BlockContent::Paragraph(ParagraphBlock {
+                text: "Date of issue January 1, 2026 Date due".to_owned(),
+                style_id: None,
+            }),
+        );
+        let table = block(
+            "tbl_due",
+            BlockKind::Table,
+            1,
+            Rect::new(10.0, 40.0, 100.0, 80.0)?,
+            3,
+            BlockContent::Table(TableBlock {
+                rows: 1,
+                columns: 1,
+                header_rows: 0,
+                cells: vec![TableCell {
+                    id: ObjectId::from_raw("cell_due"),
+                    row: 0,
+                    column: 0,
+                    row_span: 1,
+                    column_span: 1,
+                    bbox: None,
+                    text: "Amount due".to_owned(),
+                    blocks: Vec::new(),
+                    source: source("pdf::page[1]::table::cell[0,0]"),
+                }],
+                column_widths_pt: None,
+                detector: Some("ruled".to_owned()),
+            }),
+        );
+        let mut document = document()?;
+        document.blocks = vec![paragraph, table];
+        document.pages[0].block_ids =
+            vec![ObjectId::from_raw("p_due"), ObjectId::from_raw("tbl_due")];
+        let result = resolve(&document, "Amount due", None, None)?;
+        assert_eq!(result.status, ResolveStatus::Resolved);
+        assert_eq!(result.candidates[0].object.id.as_str(), "tbl_due");
         Ok(())
     }
 

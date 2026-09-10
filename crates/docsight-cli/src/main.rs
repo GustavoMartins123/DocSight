@@ -1846,7 +1846,10 @@ fn inspect_pdf_source(
     let render_source_faithful = !warnings.iter().any(|warning| {
         matches!(
             warning.code.as_str(),
-            "APPROXIMATED_PDF_FONT" | "PDF_XOBJECT_PLACEHOLDER"
+            "APPROXIMATED_PDF_FONT"
+                | "PDF_XOBJECT_PLACEHOLDER"
+                | "PDF_EXTGSTATE_IGNORED"
+                | "PDF_CLIP_TEXT_VISUAL"
         )
     });
     let result = InspectResult {

@@ -75,7 +75,7 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(zip_error)?;
         if !file.is_dir() {
-            if file.name().starts_with("word/media/") {
+            if file.name().starts_with("word/media/") || file.name().starts_with("media/") {
                 binary_names.push(file.name().to_owned());
             }
             if is_inert_part(file.name()) {

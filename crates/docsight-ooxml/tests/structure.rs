@@ -601,3 +601,76 @@ fn header_without_reference_is_not_assigned() -> Result<(), Box<dyn std::error::
 
     Ok(())
 }
+
+#[test]
+fn resolves_package_absolute_image_targets() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body>
+        <w:p><w:r><w:drawing><a:graphic><a:graphicData><a:blip r:embed="rIdImg"/></a:graphicData></a:graphic></w:drawing></w:r></w:p>
+        </w:body></w:document>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="/media/image.png"/>
+    </Relationships>"#;
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    writer.start_file("word/_rels/document.xml.rels", options)?;
+    writer.write_all(rels.as_bytes())?;
+    writer.start_file("media/image.png", options)?;
+    writer.write_all(b"root image bytes")?;
+    let bytes = writer.finish()?.into_inner();
+
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+    assert_eq!(doc.figures().count(), 1);
+    assert_eq!(doc.resources.len(), 1);
+    assert_eq!(doc.resources[0].target, "media/image.png");
+    assert!(
+        !doc.warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_IMAGE_UNRESOLVED")
+    );
+    Ok(())
+}
+
+#[test]
+fn preserves_document_with_unresolved_image_as_warning() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body>
+        <w:p><w:r><w:t>Text survives</w:t></w:r></w:p>
+        <w:p><w:r><w:drawing><a:graphic><a:graphicData><a:blip r:embed="rIdMissing"/></a:graphicData></a:graphic></w:drawing></w:r></w:p>
+        </w:body></w:document>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rIdMissing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/missing.png"/>
+    </Relationships>"#;
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    writer.start_file("word/_rels/document.xml.rels", options)?;
+    writer.write_all(rels.as_bytes())?;
+    let bytes = writer.finish()?.into_inner();
+
+    let source = DocumentSource::from_bytes(bytes)?;
+    let doc = parse_docx(&source)?;
+    assert!(
+        doc.paragraphs()
+            .any(|(_, block)| block.text == "Text survives")
+    );
+    assert_eq!(doc.figures().count(), 1);
+    assert!(
+        doc.warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_IMAGE_UNRESOLVED")
+    );
+    Ok(())
+}

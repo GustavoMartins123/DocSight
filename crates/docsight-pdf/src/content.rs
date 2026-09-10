@@ -150,6 +150,7 @@ pub(crate) struct ParsedContent {
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
     pub omitted_xobjects: bool,
+    pub clip_text: bool,
 }
 
 pub(crate) fn parse_content(
@@ -172,6 +173,7 @@ pub(crate) fn parse_content(
     let mut operations = 0usize;
     let mut approximated_font = false;
     let mut omitted_xobjects = false;
+    let mut clip_text = false;
     let mut inline_image = false;
     while let Some(token) = lexer.next_token()? {
         match token {
@@ -548,8 +550,8 @@ pub(crate) fn parse_content(
                     }
                     "Tz" => {
                         let value = numbers(&operands, 1, &operator)?[0];
-                        if value <= 0.0 {
-                            return Err(malformed("text horizontal scale must be positive"));
+                        if !value.is_finite() {
+                            return Err(malformed("text horizontal scale must be finite"));
                         }
                         state.text.horizontal_scale = value / 100.0;
                     }
@@ -561,10 +563,8 @@ pub(crate) fn parse_content(
                         if value.fract() != 0.0 || !(0.0..=7.0).contains(&value) {
                             return Err(malformed("text rendering mode must be between 0 and 7"));
                         }
-                        if value != 0.0 {
-                            return Err(DocsightError::UnsupportedFeature {
-                                feature: format!("PDF text rendering mode {}", value as u8),
-                            });
+                        if value as u8 >= 4 {
+                            clip_text = true;
                         }
                     }
                     "Tj" => {
@@ -805,6 +805,7 @@ pub(crate) fn parse_content(
         text_runs,
         approximated_font,
         omitted_xobjects,
+        clip_text,
     })
 }
 
@@ -845,6 +846,10 @@ fn append_text(
     };
     let width = advance + code_count * state.text.char_spacing + spaces * state.text.word_spacing;
     let width = width * state.text.horizontal_scale;
+    if text.is_empty() || width.abs() <= f32::EPSILON {
+        state.text.matrix = state.text.matrix.translated(width, 0.0);
+        return Ok(());
+    }
     let combined = state.text.matrix.concat(state.ctm);
     validate_text_matrix(&combined)?;
     let baseline = combined.transform(0.0, state.text.rise);
@@ -879,7 +884,11 @@ fn append_text(
         max_x - page_left,
         page_height - min_y,
     )
-    .map_err(|_| malformed("text operator produced invalid geometry"))?;
+    .map_err(|_| {
+        malformed(format!(
+            "text operator at content offset {anchor_offset} produced invalid geometry"
+        ))
+    })?;
     let alpha = (state.fill_alpha * 255.0).round() as u32;
     let argb = alpha << 24
         | u32::from(state.fill_color.red) << 16
@@ -2037,15 +2046,16 @@ pub(crate) fn fonts_from_resources(
 pub(crate) fn ext_graphics_states_from_resources(
     resources: &BTreeMap<String, Value>,
     resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
-) -> Result<BTreeMap<String, ExtGraphicsState>, DocsightError> {
+) -> Result<(BTreeMap<String, ExtGraphicsState>, Vec<String>), DocsightError> {
     let Some(resource_value) = resources.get("ExtGState") else {
-        return Ok(BTreeMap::new());
+        return Ok((BTreeMap::new(), Vec::new()));
     };
     let resource_dict = match resolve(resource_value)? {
         Value::Dict(dict) => dict,
         _ => return Err(malformed("ExtGState resource must resolve to a dictionary")),
     };
     let mut result = BTreeMap::new();
+    let mut ignored: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (name, value) in resource_dict {
         let dict = match resolve(&value)? {
             Value::Dict(dict) => dict,
@@ -2093,6 +2103,23 @@ pub(crate) fn ext_graphics_states_from_resources(
                         return Err(malformed("ExtGState FL must be between zero and 100"));
                     }
                 }
+                "SA" => match resolve(&value)? {
+                    Value::Bool(_) => {
+                        ignored.insert(key);
+                    }
+                    _ => return Err(malformed("ExtGState SA must be boolean")),
+                },
+                "SM" => {
+                    let smoothness = ext_number(&resolve(&value)?)?;
+                    if !(0.0..=1.0).contains(&smoothness) {
+                        return Err(malformed("ExtGState SM must be between zero and one"));
+                    }
+                    ignored.insert(key);
+                }
+                "HT" | "TR" | "TR2" | "BG" | "BG2" | "UCR" | "UCR2" | "FLT" => {
+                    let _ = resolve(&value)?;
+                    ignored.insert(key);
+                }
                 "BM" => validate_normal_blend_mode(&resolve(&value)?)?,
                 "SMask" => match resolve(&value)? {
                     Value::Name(value) if value == "None" => {}
@@ -2125,15 +2152,14 @@ pub(crate) fn ext_graphics_states_from_resources(
                     _ => return Err(malformed("ExtGState OPM must be zero or one")),
                 },
                 _ => {
-                    return Err(DocsightError::UnsupportedFeature {
-                        feature: format!("PDF ExtGState entry {key}"),
-                    });
+                    let _ = resolve(&value)?;
+                    ignored.insert(key);
                 }
             }
         }
         result.insert(name, state);
     }
-    Ok(result)
+    Ok((result, ignored.into_iter().collect()))
 }
 
 fn ext_number(value: &Value) -> Result<f32, DocsightError> {
