@@ -1850,6 +1850,7 @@ fn inspect_pdf_source(
                 | "PDF_XOBJECT_PLACEHOLDER"
                 | "PDF_EXTGSTATE_IGNORED"
                 | "PDF_CLIP_TEXT_VISUAL"
+                | "PDF_NEGATIVE_FONT_SIZE_VISUAL"
         )
     });
     let result = InspectResult {

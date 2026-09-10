@@ -314,6 +314,9 @@ impl<'a> PdfDocument<'a> {
         if parsed.clip_text {
             warnings.push(clip_text_warning(number));
         }
+        if parsed.negative_font_size {
+            warnings.push(negative_font_size_warning(number));
+        }
         let page = self.page_record(number)?;
         Ok(PdfTracePage {
             number,
@@ -365,6 +368,9 @@ impl<'a> PdfDocument<'a> {
             }
             if parsed.clip_text {
                 all_warnings.push(clip_text_warning(page_num));
+            }
+            if parsed.negative_font_size {
+                all_warnings.push(negative_font_size_warning(page_num));
             }
 
             let reconstructed = reconstruction::reconstruct_page_semantics(
@@ -441,6 +447,9 @@ impl<'a> PdfDocument<'a> {
         if parsed.clip_text {
             warnings.push(clip_text_warning(number));
         }
+        if parsed.negative_font_size {
+            warnings.push(negative_font_size_warning(number));
+        }
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
             page: number,
@@ -498,6 +507,7 @@ impl<'a> PdfDocument<'a> {
             approximated_font: parsed.approximated_font,
             omitted_xobjects: parsed.omitted_xobjects,
             clip_text: parsed.clip_text,
+            negative_font_size: parsed.negative_font_size,
             ignored_ext_keys,
             trace_resources,
         })
@@ -578,6 +588,7 @@ struct ParsedPage {
     approximated_font: bool,
     omitted_xobjects: bool,
     clip_text: bool,
+    negative_font_size: bool,
     ignored_ext_keys: Vec<String>,
     trace_resources: Vec<PdfTraceResource>,
 }
@@ -991,6 +1002,18 @@ fn clip_text_warning(page: u32) -> Diagnostic {
         severity: DiagnosticSeverity::Warning,
         message: format!("page {page} uses PDF text rendering modes 4-7 (clipping text)"),
         effect: "text was extracted; visual rendering does not clip text to its outline".to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn negative_font_size_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_NEGATIVE_FONT_SIZE_VISUAL".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("page {page} uses a negative PDF font size"),
+        effect: "text was extracted with mirrored geometry; visual rendering paints upright glyphs instead of mirrored ones"
+            .to_owned(),
         object: None,
         page: Some(page),
     }

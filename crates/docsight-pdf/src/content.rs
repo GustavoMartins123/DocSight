@@ -151,6 +151,7 @@ pub(crate) struct ParsedContent {
     pub approximated_font: bool,
     pub omitted_xobjects: bool,
     pub clip_text: bool,
+    pub negative_font_size: bool,
 }
 
 pub(crate) fn parse_content(
@@ -174,6 +175,7 @@ pub(crate) fn parse_content(
     let mut approximated_font = false;
     let mut omitted_xobjects = false;
     let mut clip_text = false;
+    let mut negative_font_size = false;
     let mut inline_image = false;
     while let Some(token) = lexer.next_token()? {
         match token {
@@ -490,8 +492,8 @@ pub(crate) fn parse_content(
                         }
                         let name = name(&operands[0], &operator)?;
                         let size = number(&operands[1], &operator)?;
-                        if size <= 0.0 || !size.is_finite() {
-                            return Err(malformed("font size must be positive and finite"));
+                        if size < 0.0 {
+                            negative_font_size = true;
                         }
                         let font = fonts
                             .get(name)
@@ -806,6 +808,7 @@ pub(crate) fn parse_content(
         approximated_font,
         omitted_xobjects,
         clip_text,
+        negative_font_size,
     })
 }
 
@@ -898,7 +901,7 @@ fn append_text(
         text,
         bbox,
         baseline_y,
-        font_size: font.size,
+        font_size: font.size.abs(),
         font_name: font.font_name.clone(),
         bold: font.bold,
         argb,

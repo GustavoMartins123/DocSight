@@ -587,6 +587,22 @@ fn ignores_empty_text_shows_without_invalid_geometry() -> Result<(), DocsightErr
 }
 
 #[test]
+fn accepts_negative_and_zero_font_size() -> Result<(), DocsightError> {
+    let content = "BT /F1 -10 Tf 20 70 Td (Mirror) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(document.warnings.iter().any(|warning| {
+        warning.code == "PDF_NEGATIVE_FONT_SIZE_VISUAL" && warning.page == Some(1)
+    }));
+    let content = "BT /F1 0 Tf 20 70 Td (Invisible) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    assert!(page.spans.is_empty());
+    Ok(())
+}
+
+#[test]
 fn accepts_negative_and_zero_horizontal_scale() -> Result<(), DocsightError> {
     let content = "BT /F1 10 Tf -100 Tz 20 70 Td (Mirror) Tj ET";
     let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
