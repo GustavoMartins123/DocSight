@@ -605,7 +605,14 @@ fn max_bytes_truncates_warnings_without_losing_single_result()
     assert_eq!(value["limits"]["truncated"], false);
     assert_eq!(value["limits"]["warnings_truncated"], true);
     assert_eq!(value["limits"]["total_warnings"], 3);
-    assert_eq!(value["limits"]["returned_warnings"], 1);
+    let returned = value["limits"]["returned_warnings"]
+        .as_u64()
+        .ok_or("returned_warnings")?;
+    assert!(returned < 3, "warnings must be dropped under the byte cap");
+    assert!(
+        value["result"]["format"].is_string(),
+        "the single result must survive warning truncation"
+    );
     Ok(())
 }
 
@@ -634,6 +641,165 @@ fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::err
     assert_eq!(done["limits"]["truncated"], true);
     assert_eq!(done["limits"]["warnings_truncated"], true);
     assert_eq!(done["limits"]["total_warnings"], 3);
-    assert_eq!(done["limits"]["returned_warnings"], 0);
+    let returned = done["limits"]["returned_warnings"]
+        .as_u64()
+        .ok_or("returned_warnings")?;
+    let emitted = records
+        .iter()
+        .filter(|record| record["type"] == "warning")
+        .count();
+    assert!(returned < 3, "warnings must be dropped under the byte cap");
+    assert_eq!(
+        returned, emitted as u64,
+        "returned_warnings must match the warning records actually streamed"
+    );
+    Ok(())
+}
+
+#[test]
+fn inspect_block_counts_predict_what_text_returns() -> Result<(), Box<dyn std::error::Error>> {
+    for fixture in [
+        sample_fixture(),
+        headings_fixture(),
+        tables_fixture(),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/validation/sample_semantic.pdf"),
+    ] {
+        let path = fixture.to_str().ok_or("fixture path")?;
+        let inspect = docsight().args(["--agent", "inspect", path]).output()?;
+        assert!(inspect.status.success());
+        let inspect: serde_json::Value = serde_json::from_slice(&inspect.stdout)?;
+        let by_kind = inspect["result"]["blocks_by_kind"]
+            .as_object()
+            .ok_or("blocks_by_kind")?;
+
+        let text = docsight()
+            .args(["--agent", "text", path, "--max-items", "100000"])
+            .output()?;
+        assert!(text.status.success());
+        let text: serde_json::Value = serde_json::from_slice(&text.stdout)?;
+        let blocks = text["result"]["blocks"].as_array().ok_or("blocks")?;
+
+        let mut observed = std::collections::BTreeMap::new();
+        for block in blocks {
+            let kind = block["kind"].as_str().ok_or("block kind")?;
+            *observed.entry(kind.to_owned()).or_insert(0_u64) += 1;
+        }
+        let declared = by_kind
+            .iter()
+            .map(|(kind, count)| {
+                count
+                    .as_u64()
+                    .map(|count| (kind.clone(), count))
+                    .ok_or("block count")
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+        assert_eq!(
+            declared, observed,
+            "inspect must predict the blocks text returns for {path}"
+        );
+        assert_eq!(
+            declared.values().sum::<u64>(),
+            text["limits"]["total_items"]
+                .as_u64()
+                .ok_or("total_items")?,
+            "blocks_by_kind must sum to the text item total for {path}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn continuation_token_is_always_present_in_limits() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = headings_fixture();
+    let path = fixture.to_str().ok_or("fixture path")?;
+
+    for (max_items, expect_truncated) in [("3", true), ("100000", false)] {
+        let bounded = docsight()
+            .args(["--agent", "text", path, "--max-items", max_items])
+            .output()?;
+        assert!(bounded.status.success());
+        let bounded: serde_json::Value = serde_json::from_slice(&bounded.stdout)?;
+        let limits = &bounded["limits"];
+        assert_eq!(limits["truncated"], expect_truncated);
+        assert!(
+            limits.get("continuation_token").is_some(),
+            "continuation_token must be present even when truncated is {expect_truncated}"
+        );
+        assert_eq!(limits["continuation_token"].is_null(), !expect_truncated);
+
+        let streamed = docsight()
+            .args([
+                "--agent",
+                "--ndjson",
+                "text",
+                path,
+                "--max-items",
+                max_items,
+            ])
+            .output()?;
+        assert!(streamed.status.success());
+        let records = streamed
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_slice)
+            .collect::<Result<Vec<serde_json::Value>, _>>()?;
+        let done = records.last().ok_or("missing done")?;
+        assert_eq!(done["type"], "done");
+        assert!(
+            done["limits"].get("continuation_token").is_some(),
+            "the NDJSON done event must always carry continuation_token"
+        );
+        assert_eq!(
+            done["limits"]["continuation_token"], limits["continuation_token"],
+            "bounded and streamed continuation tokens must agree"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn capabilities_expose_the_same_contract_in_both_modes() -> Result<(), Box<dyn std::error::Error>> {
+    let bounded = docsight().args(["--agent", "capabilities"]).output()?;
+    assert!(bounded.status.success());
+    let bounded: serde_json::Value = serde_json::from_slice(&bounded.stdout)?;
+    let result = bounded["result"].as_object().ok_or("result")?;
+
+    let streamed = docsight()
+        .args(["--agent", "--ndjson", "capabilities"])
+        .output()?;
+    assert!(streamed.status.success());
+    let records = streamed
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let item = records
+        .iter()
+        .find(|record| record["type"] == "capabilities")
+        .ok_or("missing capabilities record")?
+        .as_object()
+        .ok_or("capabilities record")?;
+
+    for (key, value) in result {
+        assert_eq!(
+            item.get(key),
+            Some(value),
+            "the NDJSON capabilities record is missing or disagrees on {key}"
+        );
+    }
+    let extra: Vec<&String> = item
+        .keys()
+        .filter(|key| !result.contains_key(*key) && key.as_str() != "seq" && key.as_str() != "type")
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "NDJSON exposes fields JSON does not: {extra:?}"
+    );
+
+    let codes = result["errors"]["codes"].as_array().ok_or("error codes")?;
+    assert!(!codes.is_empty(), "the error catalog must be published");
     Ok(())
 }

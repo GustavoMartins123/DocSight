@@ -86,7 +86,10 @@ pub(crate) fn rasterize_docx_page(
         let cell_height = run.bbox.height() / 7.0;
 
         for (index, character) in run.text.chars().enumerate() {
-            if character == ' ' {
+            if character.is_whitespace()
+                || character == '\u{200b}'
+                || docsight_core::is_combining_mark(character)
+            {
                 continue;
             }
             let pattern = glyph(character).ok_or_else(|| DocsightError::UnsupportedFeature {
@@ -205,7 +208,7 @@ pub fn glyph_coverage(text: &str) -> f32 {
     let mut total = 0_usize;
     let mut covered = 0_usize;
     for character in text.chars() {
-        if character.is_whitespace() {
+        if character.is_whitespace() || docsight_core::is_combining_mark(character) {
             continue;
         }
         total += 1;
@@ -221,7 +224,28 @@ pub fn glyph_coverage(text: &str) -> f32 {
 }
 
 fn glyph(character: char) -> Option<[u8; 7]> {
+    if let Some(pattern) = base_glyph(character) {
+        return Some(pattern);
+    }
+    let (base, diacritic) = docsight_core::latin_decomposition(character)?;
+    let base = base_glyph(base)?;
+    Some(docsight_core::compose_glyph(
+        base,
+        diacritic,
+        character.is_uppercase(),
+    ))
+}
+
+fn base_glyph(character: char) -> Option<[u8; 7]> {
     let pattern = match character {
+        '¹' => [4, 12, 4, 14, 0, 0, 0],
+        '²' => [12, 2, 4, 14, 0, 0, 0],
+        '³' => [12, 2, 4, 2, 12, 0, 0],
+        '✓' => [0, 1, 2, 4, 20, 8, 0],
+        'ª' => [14, 1, 15, 17, 15, 0, 31],
+        'º' => [6, 9, 9, 6, 0, 15, 0],
+        '●' => [0, 14, 31, 31, 31, 14, 0],
+        '°' => [6, 9, 6, 0, 0, 0, 0],
         'A' => [14, 17, 17, 31, 17, 17, 17],
         'É' => [4, 8, 31, 16, 30, 16, 31],
         'B' => [30, 17, 17, 30, 17, 17, 30],
@@ -346,6 +370,49 @@ mod tests {
     use super::rasterize_docx_page;
     use docsight_core::{DocsightError, Rect};
     use docsight_layout::{LaidOutPage, TextRunLayout};
+
+    #[test]
+    fn western_european_text_renders_without_missing_glyphs() -> Result<(), DocsightError> {
+        let alphabets = [
+            "Ú\u{c1}\u{c0}\u{c2}\u{c3}\u{c7}\u{c9}\u{ca}\u{cd}\u{d3}\u{d4}\u{d5}\u{da}\u{dc}\u{d1}",
+            "\u{e1}\u{e0}\u{e2}\u{e3}\u{e7}\u{e9}\u{ea}\u{ed}\u{f3}\u{f4}\u{f5}\u{fa}\u{fc}\u{f1}",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "abcdefghijklmnopqrstuvwxyz",
+            "0123456789 \u{ba}\u{aa}\u{b2}\u{b3}\u{b9}\u{b0}",
+            "linha\tcom\ttabs\ne quebra",
+        ];
+        for text in alphabets {
+            let page = LaidOutPage {
+                number: 1,
+                width_pt: 720.0,
+                height_pt: 72.0,
+                runs: vec![TextRunLayout {
+                    text: text.to_owned(),
+                    font_size: 12.0,
+                    bold: false,
+                    bbox: Rect::new(0.0, 0.0, 700.0, 12.0)?,
+                    color_argb: 0xff00_0000,
+                }],
+                borders: Vec::new(),
+            };
+            let rendered = rasterize_docx_page(&page, 72, None, Vec::new());
+            assert!(
+                rendered.is_ok(),
+                "{text:?} must rasterize, got {:?}",
+                rendered.err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn composed_accents_keep_the_base_letter_shape() {
+        let base = super::base_glyph('U').unwrap_or_default();
+        let acute = super::glyph('\u{da}').unwrap_or_default();
+        assert_eq!(acute[2..], [base[0], base[2], base[3], base[5], base[6]]);
+        assert_ne!(acute[0..2], [0, 0]);
+        assert_eq!(super::glyph('\u{c9}'), super::base_glyph('\u{c9}'));
+    }
 
     #[test]
     fn unsupported_glyph_is_rejected() -> Result<(), DocsightError> {

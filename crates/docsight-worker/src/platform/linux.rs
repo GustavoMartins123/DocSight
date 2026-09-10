@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::posix::{apply_rlimits, parse_paths};
+use super::posix::{apply_address_space_limit, apply_cpu_limit, parse_paths};
 use super::sandbox_failure;
 use crate::{
     SANDBOX_READ_PATHS_ENV, SANDBOX_TEMP_PATH_ENV, SANDBOX_WRITE_PATHS_ENV, SandboxLimitsReport,
@@ -11,10 +11,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 pub fn apply_resource_limits(policy: &SandboxPolicy) -> Result<SandboxLimitsReport, DocsightError> {
-    let limits = apply_rlimits(policy);
     let mut report = SandboxLimitsReport {
-        memory_enforced: limits.memory_enforced,
-        cpu_enforced: limits.cpu_enforced,
+        memory_enforced: apply_address_space_limit(policy.max_memory_bytes),
+        cpu_enforced: apply_cpu_limit(policy),
         network_isolated: false,
         filesystem_isolated: false,
     };

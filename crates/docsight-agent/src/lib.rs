@@ -63,7 +63,6 @@ pub struct OutputLimits {
     pub text_truncated: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub warnings_truncated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub continuation_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_items: Option<usize>,
@@ -75,6 +74,8 @@ pub struct OutputLimits {
     pub returned_warnings: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projection: Option<ProjectionSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_fields: Option<Vec<String>>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -361,14 +362,35 @@ pub fn validate_projection(
         .collect();
     if !unknown.is_empty() {
         let names: Vec<String> = unknown.iter().map(|key| key.to_string()).collect();
+        let mut available = BTreeSet::new();
+        collect_selectable_keys(val, &mut available);
+        let available: Vec<&str> = available.into_iter().collect();
         return Err(DocsightError::InvalidArgument {
             message: format!(
-                "--select fields do not exist in the result: {}",
-                names.join(", ")
+                "--select fields do not exist in the result: {}; selectable fields here are: {}",
+                names.join(", "),
+                available.join(", ")
             ),
         });
     }
     Ok(())
+}
+
+fn collect_selectable_keys<'a>(val: &'a serde_json::Value, out: &mut BTreeSet<&'a str>) {
+    match val {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                out.insert(key.as_str());
+                collect_selectable_keys(value, out);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_selectable_keys(item, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn value_contains_key(val: &serde_json::Value, key: &str) -> bool {
@@ -729,6 +751,7 @@ pub fn apply_collection_limits<T: Clone>(
                 total_warnings: None,
                 returned_warnings: None,
                 projection: None,
+                selected_fields: limits.select.clone(),
             },
         ));
     }
@@ -758,6 +781,7 @@ pub fn apply_collection_limits<T: Clone>(
             continuation_token,
             total_items: Some(total_items),
             returned_items: Some(count),
+            selected_fields: limits.select.clone(),
             total_warnings: None,
             returned_warnings: None,
             projection: None,
@@ -833,6 +857,7 @@ where
                 total_warnings: warnings_truncated.then_some(total_warnings),
                 returned_warnings: warnings_truncated.then_some(selected_warnings.len()),
                 projection: None,
+                selected_fields: limits.select.clone(),
             };
             let Some(envelope) = try_adaptive_agent_envelope(
                 source,
@@ -969,6 +994,7 @@ impl<W: Write> NdjsonWriter<W> {
             total_warnings: None,
             returned_warnings: None,
             projection: None,
+            selected_fields: self.limits.select.clone(),
         };
         let line = serde_json::json!({
             "seq": u64::MAX,
@@ -985,6 +1011,7 @@ impl<W: Write> NdjsonWriter<W> {
             total_warnings: Some(self.warnings_seen),
             returned_warnings: Some(self.warnings_emitted),
             projection: None,
+            selected_fields: self.limits.select.clone(),
         };
         let warning_line = serde_json::json!({
             "seq": u64::MAX,
@@ -1214,6 +1241,7 @@ impl<W: Write> NdjsonWriter<W> {
             returned_warnings: (self.warnings_emitted < self.warnings_seen)
                 .then_some(self.warnings_emitted),
             projection: None,
+            selected_fields: self.limits.select.clone(),
         };
         let line = serde_json::json!({
             "seq": self.seq,
@@ -1264,7 +1292,7 @@ mod tests {
         let envelope = AgentEnvelope::complete(&source, ResultValue { pages: 1 });
         let json = serde_json::to_string(&envelope)?;
         assert!(json.starts_with(&format!("{{\"schema\":\"{AGENT_SCHEMA}\",\"engine\":")));
-        assert!(json.contains("\"limits\":{\"truncated\":false}"));
+        assert!(json.contains("\"limits\":{\"truncated\":false,\"continuation_token\":null}"));
         Ok(())
     }
 

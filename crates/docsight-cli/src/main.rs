@@ -29,7 +29,7 @@ use docsight_search::{
 };
 use serde::Serialize;
 use sha2::Digest;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -538,6 +538,7 @@ struct InspectResult {
     capabilities: InspectCapabilities,
     source_faithful: InspectCapabilities,
     capability_details: InspectCapabilityDetails,
+    blocks_by_kind: BTreeMap<&'static str, usize>,
     paragraphs: Option<usize>,
     headings: Option<usize>,
     tables: Option<usize>,
@@ -1732,21 +1733,14 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             "engine": env!("CARGO_PKG_VERSION"),
             "scope": "capabilities",
         });
-        let item = serde_json::json!({
-            "seq": 2,
-            "type": "capabilities",
-            "profile": result.profile,
-            "protocol": result.protocol,
-            "error_schema": result.error_schema,
-            "invocation_prefix": result.invocation_prefix,
-            "sandbox": result.sandbox,
-            "document_formats": result.document_formats,
-            "output_modes": result.output_modes,
-            "agent_defaults": result.agent_defaults,
-            "limits": result.limits,
-            "coordinate_system": result.coordinate_system,
-            "commands": result.commands,
-        });
+        let mut item = serde_json::to_value(&result).map_err(output_serialization_error)?;
+        let fields = item.as_object_mut().ok_or_else(|| {
+            output_serialization_error(serde_json::Error::io(io::Error::other(
+                "capabilities result must serialize to an object",
+            )))
+        })?;
+        fields.insert("seq".to_owned(), serde_json::json!(2));
+        fields.insert("type".to_owned(), serde_json::json!("capabilities"));
         let done = serde_json::json!({
             "seq": 3,
             "type": "done",
@@ -1910,6 +1904,7 @@ fn inspect_source(
                 capabilities: capability_details.available(),
                 source_faithful: capability_details.source_faithful(),
                 capability_details,
+                blocks_by_kind: text_blocks_by_kind(&document),
                 paragraphs: Some(paragraphs),
                 headings: Some(document.headings().count()),
                 tables: Some(document.tables().count()),
@@ -1942,6 +1937,7 @@ fn inspect_pdf_source(
             capabilities: capability_details.available(),
             source_faithful: capability_details.source_faithful(),
             capability_details,
+            blocks_by_kind: BTreeMap::new(),
             paragraphs: None,
             headings: None,
             tables: None,
@@ -1995,6 +1991,7 @@ fn inspect_pdf_source(
         capabilities: capability_details.available(),
         source_faithful: capability_details.source_faithful(),
         capability_details,
+        blocks_by_kind: text_blocks_by_kind(&document),
         paragraphs: Some(document.paragraphs().count()),
         headings: Some(document.headings().count()),
         tables: Some(document.tables().count()),
@@ -2249,17 +2246,8 @@ fn page_command(
     emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn document_text(
-    path: &PathBuf,
-    json: bool,
-    ndjson: bool,
-    limits: &QueryLimits,
-    quiet: bool,
-    json_errors: bool,
-) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
-    let blocks: Vec<TextRecord> = document
+fn text_records(document: &Document) -> Vec<TextRecord> {
+    document
         .blocks
         .iter()
         .map(|block| {
@@ -2286,7 +2274,28 @@ fn document_text(
             }
         })
         .filter(|record| !record.text.trim().is_empty())
-        .collect();
+        .collect()
+}
+
+fn text_blocks_by_kind(document: &Document) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    for record in text_records(document) {
+        *counts.entry(record.kind).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn document_text(
+    path: &PathBuf,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(path)?;
+    let document = load_document(&source)?;
+    let blocks = text_records(&document);
 
     if ndjson {
         let stdout = io::stdout();

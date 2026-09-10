@@ -8,7 +8,8 @@
     "size_bytes",
     "capabilities",
     "source_faithful",
-    "capability_details"
+    "capability_details",
+    "blocks_by_kind"
   ],
   "properties": {
     "format": {
@@ -47,6 +48,26 @@
         }
       },
       "additionalProperties": false
+    },
+    "blocks_by_kind": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "enum": [
+          "heading",
+          "list_item",
+          "paragraph",
+          "table",
+          "figure",
+          "shape",
+          "note",
+          "unknown"
+        ]
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
     },
     "paragraphs": {
       "type": [
