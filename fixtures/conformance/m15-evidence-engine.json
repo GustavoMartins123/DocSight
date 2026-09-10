@@ -619,7 +619,7 @@
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "b5100df44231be7de8e03395d76287bfa4d2e4f130f8120246934bb6e5fe65a2"
+      "sha256": "7841d9d57dc3febd4f6018c0e39704e8c21b34e34b5b245b064fb3ac067ee802"
     },
     {
       "file": "context-result.json",

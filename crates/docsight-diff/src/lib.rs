@@ -382,10 +382,10 @@ pub fn diff_documents(
             .iter()
             .filter_map(lineage_ambiguity_warning),
     );
-    if let Some(visual) = &visual {
-        if !visual.authoritative {
-            combined_warnings.push(visual_diff_evidence_warning(&visual.reason_codes));
-        }
+    if let Some(visual) = &visual
+        && !visual.authoritative
+    {
+        combined_warnings.push(visual_diff_evidence_warning(&visual.reason_codes));
     }
 
     let summary_warnings: Vec<String> = combined_warnings
@@ -1757,15 +1757,14 @@ fn calculate_largest_drift(before: &Document, after: &Document) -> (Option<f32>,
     for (b_text, b_page, b_bbox) in &b_blocks {
         if let (Some(b_p), Some(b_box)) = (b_page, b_bbox) {
             for (a_text, a_page, a_bbox) in &a_blocks {
-                if b_text == a_text {
-                    if let (Some(a_p), Some(a_box)) = (a_page, a_bbox) {
-                        if b_p == a_p {
-                            let drift = (a_box.y0 - b_box.y0).abs();
-                            if drift > max_drift {
-                                max_drift = drift;
-                                drift_page = Some(*b_p);
-                            }
-                        }
+                if b_text == a_text
+                    && let (Some(a_p), Some(a_box)) = (a_page, a_bbox)
+                    && b_p == a_p
+                {
+                    let drift = (a_box.y0 - b_box.y0).abs();
+                    if drift > max_drift {
+                        max_drift = drift;
+                        drift_page = Some(*b_p);
                     }
                 }
             }

@@ -367,31 +367,23 @@ fn parse_section(
             let r_id = child
                 .attribute((R_NS, "id"))
                 .or_else(|| child.attribute("r:id"));
-            if let Some(r_id) = r_id {
-                if let Some((_, target)) = rels.get(r_id) {
-                    if let Some(normalized) = normalize_internal_target(target) {
-                        if let Some((_, text)) =
-                            header_texts.iter().find(|(name, _)| *name == normalized)
-                        {
-                            header_text = Some(text.clone());
-                        }
-                    }
-                }
+            if let Some(r_id) = r_id
+                && let Some((_, target)) = rels.get(r_id)
+                && let Some(normalized) = normalize_internal_target(target)
+                && let Some((_, text)) = header_texts.iter().find(|(name, _)| *name == normalized)
+            {
+                header_text = Some(text.clone());
             }
         } else if child.has_tag_name((W_NS, "footerReference")) {
             let r_id = child
                 .attribute((R_NS, "id"))
                 .or_else(|| child.attribute("r:id"));
-            if let Some(r_id) = r_id {
-                if let Some((_, target)) = rels.get(r_id) {
-                    if let Some(normalized) = normalize_internal_target(target) {
-                        if let Some((_, text)) =
-                            footer_texts.iter().find(|(name, _)| *name == normalized)
-                        {
-                            footer_text = Some(text.clone());
-                        }
-                    }
-                }
+            if let Some(r_id) = r_id
+                && let Some((_, target)) = rels.get(r_id)
+                && let Some(normalized) = normalize_internal_target(target)
+                && let Some((_, text)) = footer_texts.iter().find(|(name, _)| *name == normalized)
+            {
+                footer_text = Some(text.clone());
             }
         }
     }
@@ -557,47 +549,45 @@ fn extract_figures(
         if let Some(blip) = drawing
             .descendants()
             .find(|n| n.tag_name().name() == "blip")
-        {
-            if let Some(embed) = blip
+            && let Some(embed) = blip
                 .attribute((R_NS, "embed"))
                 .or_else(|| blip.attribute("r:embed"))
-            {
-                resource_id = Some(embed.to_owned());
-                let (relationship_type, target) =
-                    rels.get(embed)
-                        .ok_or_else(|| DocsightError::MalformedDocument {
-                            message: format!("drawing references missing relationship {embed}"),
-                        })?;
-                if !relationship_type.ends_with("/image") {
-                    return Err(DocsightError::MalformedDocument {
-                        message: format!("drawing relationship {embed} is not an image"),
-                    });
-                }
-                let normalized_target = normalize_internal_target(target).ok_or_else(|| {
-                    DocsightError::MalformedDocument {
-                        message: format!("invalid internal image relationship target: {target}"),
-                    }
-                })?;
-                let resource_target = normalized_target.as_str();
-                let content_sha256 = binary_part_digests
-                    .get(resource_target)
+        {
+            resource_id = Some(embed.to_owned());
+            let (relationship_type, target) =
+                rels.get(embed)
                     .ok_or_else(|| DocsightError::MalformedDocument {
-                        message: format!(
-                            "image relationship {embed} targets missing part {resource_target}"
-                        ),
-                    })?
-                    .clone();
-                let res_id = source.object_id("res", resource_target);
-                if !resources.iter().any(|r| r.id == res_id) {
-                    resources.push(Resource {
-                        id: res_id,
-                        kind: ResourceKind::Image,
-                        name: embed.to_owned(),
-                        target: resource_target.to_owned(),
-                        mime_type: guess_mime_type(target),
-                        content_sha256: Some(content_sha256),
-                    });
+                        message: format!("drawing references missing relationship {embed}"),
+                    })?;
+            if !relationship_type.ends_with("/image") {
+                return Err(DocsightError::MalformedDocument {
+                    message: format!("drawing relationship {embed} is not an image"),
+                });
+            }
+            let normalized_target = normalize_internal_target(target).ok_or_else(|| {
+                DocsightError::MalformedDocument {
+                    message: format!("invalid internal image relationship target: {target}"),
                 }
+            })?;
+            let resource_target = normalized_target.as_str();
+            let content_sha256 = binary_part_digests
+                .get(resource_target)
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: format!(
+                        "image relationship {embed} targets missing part {resource_target}"
+                    ),
+                })?
+                .clone();
+            let res_id = source.object_id("res", resource_target);
+            if !resources.iter().any(|r| r.id == res_id) {
+                resources.push(Resource {
+                    id: res_id,
+                    kind: ResourceKind::Image,
+                    name: embed.to_owned(),
+                    target: resource_target.to_owned(),
+                    mime_type: guess_mime_type(target),
+                    content_sha256: Some(content_sha256),
+                });
             }
         }
 
@@ -1008,18 +998,16 @@ fn paragraph_segments(node: Node<'_, '_>) -> ParagraphSegments {
                 (attribute.name() == "instr" || attribute.name().ends_with(":instr"))
                     && attribute.value().to_uppercase().contains("PAGE")
             });
-            if is_page {
-                if let Some(last) = texts.last_mut() {
-                    last.push_str("[PAGE]");
-                }
+            if is_page && let Some(last) = texts.last_mut() {
+                last.push_str("[PAGE]");
             }
             continue;
         }
         if descendant.has_tag_name((W_NS, "t")) {
-            if let Some(value) = descendant.text() {
-                if let Some(last) = texts.last_mut() {
-                    last.push_str(value);
-                }
+            if let Some(value) = descendant.text()
+                && let Some(last) = texts.last_mut()
+            {
+                last.push_str(value);
             }
         } else if descendant.has_tag_name((W_NS, "tab")) {
             if let Some(last) = texts.last_mut() {

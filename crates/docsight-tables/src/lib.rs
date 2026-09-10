@@ -287,22 +287,22 @@ fn build_ruled_table(
 
     let mut clustered_y: Vec<f32> = Vec::new();
     for (y, _, _) in &h_lines {
-        if let Some(last) = clustered_y.last_mut() {
-            if (*y - *last).abs() <= 2.5 {
-                *last = (*last + *y) * 0.5;
-                continue;
-            }
+        if let Some(last) = clustered_y.last_mut()
+            && (*y - *last).abs() <= 2.5
+        {
+            *last = (*last + *y) * 0.5;
+            continue;
         }
         clustered_y.push(*y);
     }
 
     let mut clustered_x: Vec<f32> = Vec::new();
     for (x, _, _) in &v_lines {
-        if let Some(last) = clustered_x.last_mut() {
-            if (*x - *last).abs() <= 2.5 {
-                *last = (*last + *x) * 0.5;
-                continue;
-            }
+        if let Some(last) = clustered_x.last_mut()
+            && (*x - *last).abs() <= 2.5
+        {
+            *last = (*last + *x) * 0.5;
+            continue;
         }
         clustered_x.push(*x);
     }
@@ -525,11 +525,11 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
 
         let mut col_lefts: Vec<f32> = Vec::new();
         for x in x_starts {
-            if let Some(last) = col_lefts.last_mut() {
-                if (x - *last).abs() <= 12.0 {
-                    *last = (*last + x) * 0.5;
-                    continue;
-                }
+            if let Some(last) = col_lefts.last_mut()
+                && (x - *last).abs() <= 12.0
+            {
+                *last = (*last + x) * 0.5;
+                continue;
             }
             col_lefts.push(x);
         }

@@ -1129,12 +1129,12 @@ fn validate_proof_manifest(manifest: &ProofBundleManifest) -> Result<(), Docsigh
             message: "proof bundle evidence does not match its selected target".to_owned(),
         });
     }
-    if let Some(crop) = &manifest.crop {
-        if crop.media_type != "image/png" || crop.sha256.len() != 64 {
-            return Err(DocsightError::MalformedDocument {
-                message: "proof crop metadata is invalid".to_owned(),
-            });
-        }
+    if let Some(crop) = &manifest.crop
+        && (crop.media_type != "image/png" || crop.sha256.len() != 64)
+    {
+        return Err(DocsightError::MalformedDocument {
+            message: "proof crop metadata is invalid".to_owned(),
+        });
     }
     Ok(())
 }

@@ -189,7 +189,7 @@ impl ContinuationToken {
         expected_command: &str,
         expected_sha256: &str,
     ) -> Result<usize, DocsightError> {
-        if token.is_empty() || token.len() % 2 != 0 {
+        if token.is_empty() || !token.len().is_multiple_of(2) {
             return Err(DocsightError::InvalidArgument {
                 message: "continuation token format is invalid".to_owned(),
             });
@@ -254,11 +254,11 @@ pub struct QueryLimits {
 }
 
 pub fn apply_text_limit(text: &str, limit: Option<usize>) -> (String, bool) {
-    if let Some(max) = limit {
-        if text.chars().count() > max {
-            let truncated: String = text.chars().take(max).collect();
-            return (truncated, true);
-        }
+    if let Some(max) = limit
+        && text.chars().count() > max
+    {
+        let truncated: String = text.chars().take(max).collect();
+        return (truncated, true);
     }
     (text.to_owned(), false)
 }
@@ -1121,11 +1121,11 @@ impl<W: Write> NdjsonWriter<W> {
             return Ok(false);
         }
 
-        if let Some(max_items) = self.limits.max_items {
-            if self.items_emitted >= max_items {
-                self.truncated = true;
-                return Ok(false);
-            }
+        if let Some(max_items) = self.limits.max_items
+            && self.items_emitted >= max_items
+        {
+            self.truncated = true;
+            return Ok(false);
         }
 
         let mut projected = if let Some(ref fields) = self.limits.select {

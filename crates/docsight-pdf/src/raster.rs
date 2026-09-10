@@ -288,10 +288,10 @@ impl Canvas {
         let polygons = polygons
             .into_iter()
             .map(|mut polygon| {
-                if polygon.first() != polygon.last() {
-                    if let Some(first) = polygon.first().copied() {
-                        polygon.push(first);
-                    }
+                if polygon.first() != polygon.last()
+                    && let Some(first) = polygon.first().copied()
+                {
+                    polygon.push(first);
                 }
                 polygon
             })
@@ -576,7 +576,7 @@ fn scanline_spans(polygons: &[Vec<Point>], y: f32, even_odd: bool) -> Vec<(f32, 
             cursor += 1;
         }
         winding -= delta;
-        if count % 2 != 0 {
+        if !count.is_multiple_of(2) {
             parity = !parity;
         }
         previous = Some(x);
@@ -619,7 +619,7 @@ fn dashed_pieces(points: &[Point], pattern: &[f32], phase: f32) -> Vec<StrokePie
         pattern_index = (pattern_index + 1) % effective.len();
     }
     let mut remaining = effective[pattern_index] - offset;
-    let mut on = pattern_index % 2 == 0;
+    let mut on = pattern_index.is_multiple_of(2);
     let mut current = Vec::new();
     let mut result = Vec::new();
     for pair in points.windows(2) {
@@ -639,7 +639,7 @@ fn dashed_pieces(points: &[Point], pattern: &[f32], phase: f32) -> Vec<StrokePie
                     });
                 }
                 pattern_index = (pattern_index + 1) % effective.len();
-                on = pattern_index % 2 == 0;
+                on = pattern_index.is_multiple_of(2);
                 remaining = effective[pattern_index];
             }
             let consumed = remaining.min(length - traversed);
@@ -883,10 +883,10 @@ fn flatten_subpaths(
                 cursor = Some(*end);
             }
             PathSegment::Close => {
-                if let Some(first) = current.first().copied() {
-                    if current.last().copied() != Some(first) {
-                        current.push(first);
-                    }
+                if let Some(first) = current.first().copied()
+                    && current.last().copied() != Some(first)
+                {
+                    current.push(first);
                 }
             }
         }

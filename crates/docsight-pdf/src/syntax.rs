@@ -299,12 +299,11 @@ impl<'a> Parser<'a> {
         let first = self.read_number_word()?;
         if let Ok(number) = first.parse::<u32>() {
             let saved = self.cursor;
-            if let Ok(generation_word) = self.read_number_word() {
-                if let Ok(generation) = generation_word.parse::<u16>() {
-                    if self.consume_keyword(b"R") {
-                        return Ok(Value::Ref(ObjectRef { number, generation }));
-                    }
-                }
+            if let Ok(generation_word) = self.read_number_word()
+                && let Ok(generation) = generation_word.parse::<u16>()
+                && self.consume_keyword(b"R")
+            {
+                return Ok(Value::Ref(ObjectRef { number, generation }));
             }
             self.cursor = saved;
         }

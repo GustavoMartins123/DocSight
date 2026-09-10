@@ -41,7 +41,7 @@
           "items": { "type": "string", "enum": ["linux", "windows", "macos"] },
           "minItems": 1,
           "uniqueItems": true,
-          "const": ["linux"]
+          "const": ["linux", "macos", "windows"]
         },
         "enforced_controls": {
           "type": "array",

@@ -115,20 +115,41 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(target_os = "linux")]
+const NETWORK_PROBE_ENDPOINT_ENV: &str = "DOCSIGHT_NETWORK_PROBE_ENDPOINT";
+
 fn network_probe_exit_code() -> ExitCode {
-    match std::net::TcpStream::connect("127.0.0.1:9") {
-        Err(error) if error.raw_os_error() == Some(libc::EPERM) => ExitCode::SUCCESS,
+    let Some(endpoint) = std::env::var_os(NETWORK_PROBE_ENDPOINT_ENV) else {
+        return ExitCode::from(30);
+    };
+    let Some(endpoint) = endpoint.to_str() else {
+        return ExitCode::from(30);
+    };
+    let Ok(address) = endpoint.parse::<std::net::SocketAddr>() else {
+        return ExitCode::from(30);
+    };
+    match std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_secs(2)) {
+        Err(error) if network_access_denied(&error) => ExitCode::SUCCESS,
         _ => ExitCode::from(30),
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn network_probe_exit_code() -> ExitCode {
-    ExitCode::from(30)
+#[cfg(unix)]
+fn network_access_denied(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EPERM)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "windows")]
+fn network_access_denied(error: &io::Error) -> bool {
+    const WSAEACCES: i32 = 10013;
+    error.kind() == io::ErrorKind::TimedOut || error.raw_os_error() == Some(WSAEACCES)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn network_access_denied(_error: &io::Error) -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn filesystem_probe_exit_code() -> ExitCode {
     let Some(path) = std::env::var_os("DOCSIGHT_FILESYSTEM_PROBE_PATH") else {
         return ExitCode::from(30);
@@ -141,7 +162,19 @@ fn filesystem_probe_exit_code() -> ExitCode {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn filesystem_probe_exit_code() -> ExitCode {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    let Some(path) = std::env::var_os("DOCSIGHT_FILESYSTEM_PROBE_PATH") else {
+        return ExitCode::from(30);
+    };
+    match std::fs::read(path) {
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED) => ExitCode::SUCCESS,
+        _ => ExitCode::from(30),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn filesystem_probe_exit_code() -> ExitCode {
     ExitCode::from(30)
 }

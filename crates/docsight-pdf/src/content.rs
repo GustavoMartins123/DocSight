@@ -1199,7 +1199,7 @@ fn array_operand<'a>(
 }
 
 fn validate_inline_image_dictionary(operands: &[ContentValue]) -> Result<(), DocsightError> {
-    if operands.is_empty() || operands.len() % 2 != 0 {
+    if operands.is_empty() || !operands.len().is_multiple_of(2) {
         return Err(malformed(
             "inline PDF image dictionary requires key-value pairs",
         ));
@@ -2261,7 +2261,7 @@ impl CidWidths {
     }
 
     fn advance(&self, bytes: &[u8]) -> Result<f32, DocsightError> {
-        if bytes.len() % 2 != 0 {
+        if !bytes.len().is_multiple_of(2) {
             return Err(malformed(
                 "Identity-H text requires two-byte character codes",
             ));
@@ -2601,7 +2601,7 @@ fn tokenize_cmap(bytes: &[u8]) -> Result<Vec<CMapToken>, DocsightError> {
 }
 
 fn decode_hex_digits(digits: &[u8]) -> Result<Vec<u8>, DocsightError> {
-    if digits.is_empty() || digits.len() % 2 != 0 {
+    if digits.is_empty() || !digits.len().is_multiple_of(2) {
         return Err(malformed(
             "ToUnicode hex string must contain complete bytes",
         ));
@@ -2644,7 +2644,7 @@ fn cmap_hex(tokens: &[CMapToken], cursor: usize) -> Result<&[u8], DocsightError>
 }
 
 fn decode_utf16be(bytes: &[u8]) -> Result<String, DocsightError> {
-    if bytes.is_empty() || bytes.len() % 2 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
         return Err(malformed("ToUnicode target must be UTF-16BE"));
     }
     let units = bytes

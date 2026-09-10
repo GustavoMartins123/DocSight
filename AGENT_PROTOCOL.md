@@ -10,6 +10,8 @@ docsight --agent capabilities
 
 The result declares the `docsight --agent` invocation prefix and a structured sandbox policy. The policy lists the platforms on which isolation is implemented, the enforced controls, and the explicit behavior on unsupported platforms. Each command capability includes its canonical `invocation` grammar, supported document formats, bounded-output support, emitted `ndjson_events`, and its `result_schema` when a dedicated public schema exists. An agent does not need to parse human help text to plan a supported call. For untrusted input, insert the declared sandbox flag after the invocation prefix only when the current platform appears in `supported_platforms`; otherwise stop because unavailable enforcement fails closed rather than silently running without isolation.
 
+Isolation is implemented per platform with the same declared controls. Linux confines the worker with `setrlimit`, a seccomp network filter and a Landlock filesystem ruleset. macOS confines it with `setrlimit` and a deny-by-default Seatbelt profile that denies every network operation. Windows runs it inside a per-run AppContainer without capabilities, which blocks network access through the platform filtering engine, plus a job object that caps process memory, CPU time and process count. On Windows the declared read and write paths receive a temporary access control entry for that AppContainer identity, revoked when the worker exits; a path whose access control list cannot be updated fails closed with a typed `BACKEND_FAILURE`.
+
 Inspect a document before requesting detailed objects:
 
 ```text

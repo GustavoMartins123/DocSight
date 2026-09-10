@@ -1284,7 +1284,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             flag: "--sandbox",
             agent_default: false,
             recommended_for_untrusted_input: true,
-            supported_platforms: &["linux"],
+            supported_platforms: &["linux", "macos", "windows"],
             enforced_controls: &[
                 "memory",
                 "cpu",
@@ -1681,15 +1681,15 @@ fn inspect(
     if let Some(tables) = result.tables {
         writeln!(writer, "Tables      {tables}").map_err(stdout_error)?;
     }
-    if let Some(figures) = result.figures {
-        if figures > 0 {
-            writeln!(writer, "Figures     {figures}").map_err(stdout_error)?;
-        }
+    if let Some(figures) = result.figures
+        && figures > 0
+    {
+        writeln!(writer, "Figures     {figures}").map_err(stdout_error)?;
     }
-    if let Some(comments) = result.comments {
-        if comments > 0 {
-            writeln!(writer, "Comments    {comments}").map_err(stdout_error)?;
-        }
+    if let Some(comments) = result.comments
+        && comments > 0
+    {
+        writeln!(writer, "Comments    {comments}").map_err(stdout_error)?;
     }
     if let Some(tracked) = result.tracked {
         writeln!(

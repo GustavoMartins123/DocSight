@@ -97,10 +97,10 @@ impl FontProgram {
             if value as usize > glyf_len {
                 return Err(malformed("TrueType loca entry exceeds glyf table"));
             }
-            if let Some(previous) = loca.last() {
-                if value < *previous {
-                    return Err(malformed("TrueType loca entries are not ordered"));
-                }
+            if let Some(previous) = loca.last()
+                && value < *previous
+            {
+                return Err(malformed("TrueType loca entries are not ordered"));
             }
             loca.push(value);
         }
@@ -163,7 +163,7 @@ impl FontProgram {
         &self,
         bytes: &[u8],
     ) -> Result<Vec<GlyphOutline>, DocsightError> {
-        if bytes.len() % 2 != 0 {
+        if !bytes.len().is_multiple_of(2) {
             return Err(malformed(
                 "Identity-H text requires two-byte character codes",
             ));

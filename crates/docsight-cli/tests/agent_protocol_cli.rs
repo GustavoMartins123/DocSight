@@ -372,7 +372,7 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
     );
     assert_eq!(
         value["result"]["sandbox"]["supported_platforms"],
-        serde_json::json!(["linux"])
+        serde_json::json!(["linux", "macos", "windows"])
     );
     assert_eq!(
         value["result"]["sandbox"]["enforced_controls"],

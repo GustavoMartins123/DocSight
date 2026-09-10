@@ -4,7 +4,25 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  RUSTFLAGS: "-D warnings"
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features
+
   evidence-engine:
     strategy:
       fail-fast: false
@@ -13,9 +31,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.0
+          toolchain: "1.96.0"
           components: rustfmt, clippy
-      - run: cargo test -p docsight-search
-      - run: cargo test -p docsight-cli --test m15_conformance_cli --test m16_interaction_cli --test m17_budget_cli --test m18_interaction_economy_cli
+      - run: cargo test --workspace --all-features
