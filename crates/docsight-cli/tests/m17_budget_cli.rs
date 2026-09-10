@@ -278,8 +278,9 @@ fn budget_contract_is_discoverable_schema_bound_and_sandbox_safe()
     )?)?;
     assert_eq!(
         envelope_schema["properties"]["limits"]["properties"]["projection"]["$ref"],
-        "projection-selection.json"
+        "#/$defs/projection_selection"
     );
+    assert!(envelope_schema["$defs"]["projection_selection"].is_object());
     Ok(())
 }
 

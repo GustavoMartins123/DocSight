@@ -24,7 +24,12 @@ fn cli_renders_docx_page_and_crops_object_to_png() -> Result<(), Box<dyn std::er
     let inspect_out = docsight().args(["inspect", path_str, "--json"]).output()?;
     assert_eq!(inspect_out.status.code(), Some(0));
     let inspect_json: serde_json::Value = serde_json::from_slice(&inspect_out.stdout)?;
-    assert_eq!(inspect_json["result"]["capabilities"]["render"], false);
+    assert_eq!(inspect_json["result"]["capabilities"]["render"], true);
+    assert_eq!(inspect_json["result"]["source_faithful"]["render"], false);
+    assert_eq!(
+        inspect_json["result"]["capability_details"]["render"]["fidelity"],
+        "approximated"
+    );
     assert!(inspect_json["result"]["pages"].as_u64().unwrap_or(0) >= 1);
 
     let outline_out = docsight().args(["outline", path_str, "--json"]).output()?;

@@ -12,6 +12,7 @@ const MAX_SPATIAL_COMPARISONS: usize = 1_000_000;
 const MAX_VIEWPORT_PAGES: usize = 32;
 const MAX_PEEK_PAGES: usize = 8;
 const MAX_RESOLVE_TEXT_BYTES: usize = 4 * 1024;
+const RESOLVE_MATCHING: &str = "normalized_lexical";
 const RESOLVE_THRESHOLD: f64 = 0.35;
 const RESOLVE_AMBIGUITY_MARGIN: f64 = 0.03;
 
@@ -1706,6 +1707,9 @@ pub struct ResolveCandidate {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResolveQuery {
     pub text: String,
+    pub normalized_text: String,
+    pub tokens: Vec<String>,
+    pub matching: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<SemanticKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1786,6 +1790,12 @@ pub fn resolve(
     Ok(ResolveResult {
         query: ResolveQuery {
             text: text.to_owned(),
+            tokens: normalized_query
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
+            normalized_text: normalized_query,
+            matching: RESOLVE_MATCHING.to_owned(),
             kind,
             pages,
         },
@@ -1960,10 +1970,42 @@ fn lexical_relation_score(query: &str, text: &str) -> f64 {
     }
 }
 
+fn fold_diacritic(character: char) -> Option<char> {
+    if matches!(character, '\u{0300}'..='\u{036f}') {
+        return None;
+    }
+    Some(match character {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
+        'ď' | 'đ' | 'ð' => 'd',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
+        'ĥ' | 'ħ' => 'h',
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => 'i',
+        'ĵ' => 'j',
+        'ķ' | 'ĸ' => 'k',
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => 'l',
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'ŉ' | 'ŋ' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => 'o',
+        'ŕ' | 'ŗ' | 'ř' => 'r',
+        'ś' | 'ŝ' | 'ş' | 'š' => 's',
+        'ţ' | 'ť' | 'ŧ' => 't',
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => 'u',
+        'ŵ' => 'w',
+        'ý' | 'ÿ' | 'ŷ' => 'y',
+        'ź' | 'ż' | 'ž' => 'z',
+        other => other,
+    })
+}
+
 fn normalize_lexical(value: &str) -> String {
     let mut normalized = String::new();
     let mut pending_space = false;
-    for character in value.chars().flat_map(char::to_lowercase) {
+    for character in value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter_map(fold_diacritic)
+    {
         if character.is_alphanumeric() {
             if pending_space && !normalized.is_empty() {
                 normalized.push(' ');
@@ -2042,7 +2084,7 @@ fn normalized_chars_with_map(value: &str) -> (Vec<char>, Vec<usize>) {
     let mut source_indices = Vec::new();
     let mut pending_space = false;
     for (index, character) in value.chars().enumerate() {
-        for lowered in character.to_lowercase() {
+        for lowered in character.to_lowercase().filter_map(fold_diacritic) {
             if lowered.is_alphanumeric() {
                 if pending_space && !normalized.is_empty() {
                     normalized.push(' ');

@@ -56,6 +56,130 @@ fn error_record(name: &str, args: &[&str]) -> Result<Value, Box<dyn std::error::
     }))
 }
 
+fn rebase_local_refs(node: &Value, base: &str) -> Value {
+    match node {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, value) in map {
+                match (key.as_str(), value.as_str()) {
+                    ("$ref", Some(target)) if target.starts_with('#') => {
+                        out.insert(key.clone(), Value::from(format!("{base}{}", &target[1..])));
+                    }
+                    _ => {
+                        out.insert(key.clone(), rebase_local_refs(value, base));
+                    }
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| rebase_local_refs(item, base))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+#[test]
+fn inlined_schema_definitions_match_their_published_files() -> Result<(), Box<dyn std::error::Error>>
+{
+    let schema_root = workspace().join("schemas").join("v2");
+    let mut paths = std::fs::read_dir(&schema_root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+
+    let mut compared = 0_usize;
+    for path in &paths {
+        let schema: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        let Some(defs) = schema["$defs"].as_object() else {
+            continue;
+        };
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("schema filename")?;
+        for (name, inlined) in defs {
+            let published = schema_root.join(format!("{}.json", name.replace('_', "-")));
+            if !published.exists() {
+                continue;
+            }
+            let mut expected: Value = serde_json::from_slice(&std::fs::read(&published)?)?;
+            if let Some(map) = expected.as_object_mut() {
+                map.remove("$schema");
+                map.remove("$id");
+                map.remove("title");
+            }
+            let expected = rebase_local_refs(&expected, &format!("#/$defs/{name}"));
+            assert_eq!(
+                inlined,
+                &expected,
+                "{file} inlines a stale copy of {}.json",
+                name.replace('_', "-")
+            );
+            compared += 1;
+        }
+    }
+    assert!(
+        compared > 0,
+        "no inlined schema definition was compared against its published file"
+    );
+    Ok(())
+}
+
+fn collect_non_local_refs(node: &Value, found: &mut Vec<String>) {
+    match node {
+        Value::Object(map) => {
+            for (key, value) in map {
+                match (key.as_str(), value.as_str()) {
+                    ("$ref", Some(target)) if !target.starts_with('#') => {
+                        found.push(target.to_owned());
+                    }
+                    _ => collect_non_local_refs(value, found),
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_non_local_refs(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn published_schemas_are_self_contained() -> Result<(), Box<dyn std::error::Error>> {
+    let schema_root = workspace().join("schemas").join("v2");
+    let mut paths = std::fs::read_dir(schema_root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    assert!(!paths.is_empty(), "no published schemas were found");
+
+    let mut offenders = Vec::new();
+    for path in &paths {
+        let schema: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        let mut found = Vec::new();
+        collect_non_local_refs(&schema, &mut found);
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("schema filename")?;
+        for target in found {
+            offenders.push(format!("{file} -> {target}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "schemas must validate offline, so every $ref has to stay inside its own file: {}",
+        offenders.join(", ")
+    );
+    Ok(())
+}
+
 fn schema_records() -> Result<Vec<Value>, Box<dyn std::error::Error>> {
     let schema_root = workspace().join("schemas").join("v2");
     let mut paths = std::fs::read_dir(schema_root)?

@@ -65,7 +65,7 @@ docsight --agent context input.docx tbl_0008 --include content,neighbors,geometr
 docsight --agent context input.docx --find "quarterly revenue" --kind table
 ```
 
-`content` is the canonical typed DIR content, including table spans and nested cell blocks. `neighbors`, `heading`, and `related` carry explicit roles, confidence, and provenance. `geometry`, `fidelity`, and `provenance` remain separate evidence surfaces. A `--find` request returns its descriptor, matched character range, selected object, and ranking components. Ambiguous or weak matches return `status: "ambiguous"` with ranked candidates and no silently chosen context. `--kind` is valid only with `--find`.
+`content` is the canonical typed DIR content, including table spans and nested cell blocks. `neighbors`, `heading`, and `related` carry explicit roles, confidence, and provenance. `geometry`, `fidelity`, and `provenance` remain separate evidence surfaces. A `--find` request returns its descriptor, matched character range, selected object, and ranking components. Competitive matches return `status: "ambiguous"`; a best score below the resolution threshold returns `status: "low_confidence"`. Both statuses include ranked candidates and no silently chosen context. `--kind` is valid only with `--find`.
 
 Use `resolve` when the caller needs ranked navigation candidates rather than an expanded context:
 
@@ -74,7 +74,7 @@ docsight --agent resolve input.docx --text "revenue table" --kind table
 docsight --agent resolve input.pdf --text "director signature" --pages 10..14
 ```
 
-Resolve uses normalized lexical evidence, token overlap, object-kind and page constraints, nearby caption text, nearest preceding heading text, and canonical geometry for caption proximity. It does not use embeddings, a remote model, or natural-language question answering. Each candidate exposes the component score, weight, contribution, evidence anchor, and direct matched range when available. Scores below the resolution threshold and ties within the fixed ambiguity margin remain explicitly ambiguous.
+Resolve uses normalized lexical evidence, token overlap, object-kind and page constraints, nearby caption text, nearest preceding heading text, and canonical geometry for caption proximity. It does not use embeddings, a remote model, or natural-language question answering. Each candidate exposes the component score, weight, contribution, evidence anchor, and direct matched range when available. Scores below the resolution threshold remain explicitly low-confidence, while ties within the fixed ambiguity margin remain explicitly ambiguous.
 
 Use `--budget` when the JSON envelope should adapt its evidence projection before serialization:
 

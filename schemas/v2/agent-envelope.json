@@ -41,7 +41,7 @@
     "warnings": {
       "type": "array",
       "items": {
-        "$ref": "diagnostic.json"
+        "$ref": "#/$defs/diagnostic"
       }
     },
     "limits": {
@@ -90,11 +90,107 @@
           ]
         },
         "projection": {
-          "$ref": "projection-selection.json"
+          "$ref": "#/$defs/projection_selection"
         }
       },
       "additionalProperties": false
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "diagnostic": {
+      "type": "object",
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "effect"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "effect": {
+          "type": "string"
+        },
+        "object": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "projection_selection": {
+      "type": "object",
+      "required": [
+        "adaptive",
+        "selected_profile",
+        "omitted_evidence"
+      ],
+      "properties": {
+        "adaptive": {
+          "type": "boolean"
+        },
+        "budget_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requested_profile": {
+          "$ref": "#/$defs/projection_selection/$defs/profile"
+        },
+        "selected_profile": {
+          "$ref": "#/$defs/projection_selection/$defs/profile"
+        },
+        "omitted_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "extended_snippets",
+              "full_content",
+              "semantic_neighbors",
+              "related_objects",
+              "geometry",
+              "fidelity",
+              "provenance",
+              "matched_ranges",
+              "ranking_components",
+              "visual_references",
+              "relationship_hints"
+            ]
+          },
+          "uniqueItems": true
+        }
+      },
+      "$defs": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "balanced",
+            "rich"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }
