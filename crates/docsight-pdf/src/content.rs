@@ -152,6 +152,8 @@ pub(crate) struct ParsedContent {
     pub omitted_xobjects: bool,
     pub clip_text: bool,
     pub negative_font_size: bool,
+    pub unsupported_color_spaces: Vec<String>,
+    pub pattern_paints: Vec<String>,
 }
 
 pub(crate) fn parse_content(
@@ -176,6 +178,8 @@ pub(crate) fn parse_content(
     let mut omitted_xobjects = false;
     let mut clip_text = false;
     let mut negative_font_size = false;
+    let mut unsupported_color_spaces: Vec<String> = Vec::new();
+    let mut pattern_paints: Vec<String> = Vec::new();
     let mut inline_image = false;
     while let Some(token) = lexer.next_token()? {
         match token {
@@ -292,7 +296,13 @@ pub(crate) fn parse_content(
                                 "{operator} requires one color-space name"
                             )));
                         }
-                        let color_space = ColorSpace::parse(name(&operands[0], &operator)?)?;
+                        let color_space = ColorSpace::parse(name(&operands[0], &operator)?);
+                        if color_space == ColorSpace::Other {
+                            let space = name(&operands[0], &operator)?.to_owned();
+                            if !unsupported_color_spaces.contains(&space) {
+                                unsupported_color_spaces.push(space);
+                            }
+                        }
                         if operator == "cs" {
                             state.fill_color_space = color_space;
                         } else {
@@ -300,28 +310,35 @@ pub(crate) fn parse_content(
                         }
                     }
                     "sc" | "SC" | "scn" | "SCN" => {
-                        if operands
+                        let patterns: Vec<String> = operands
                             .iter()
-                            .any(|value| matches!(value, ContentValue::Name(_)))
-                        {
-                            return Err(DocsightError::UnsupportedFeature {
-                                feature: "PDF pattern color spaces".to_owned(),
-                            });
-                        }
-                        let values = operands
-                            .iter()
-                            .map(|value| number(value, &operator))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let color_space = if matches!(operator.as_str(), "sc" | "scn") {
-                            state.fill_color_space
+                            .filter_map(|value| match value {
+                                ContentValue::Name(name) => Some(name.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if !patterns.is_empty() {
+                            for pattern in patterns {
+                                if !pattern_paints.contains(&pattern) {
+                                    pattern_paints.push(pattern);
+                                }
+                            }
                         } else {
-                            state.stroke_color_space
-                        };
-                        let color = color_space.color(&values, &operator)?;
-                        if matches!(operator.as_str(), "sc" | "scn") {
-                            state.fill_color = color;
-                        } else {
-                            state.stroke_color = color;
+                            let values = operands
+                                .iter()
+                                .map(|value| number(value, &operator))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let color_space = if matches!(operator.as_str(), "sc" | "scn") {
+                                state.fill_color_space
+                            } else {
+                                state.stroke_color_space
+                            };
+                            let color = color_space.color(&values, &operator)?;
+                            if matches!(operator.as_str(), "sc" | "scn") {
+                                state.fill_color = color;
+                            } else {
+                                state.stroke_color = color;
+                            }
                         }
                     }
                     "m" => {
@@ -809,6 +826,8 @@ pub(crate) fn parse_content(
         omitted_xobjects,
         clip_text,
         negative_font_size,
+        unsupported_color_spaces,
+        pattern_paints,
     })
 }
 
@@ -1044,22 +1063,21 @@ fn cmyk(cyan: f32, magenta: f32, yellow: f32, black: f32) -> Result<Color, Docsi
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum ColorSpace {
     Gray,
     Rgb,
     Cmyk,
+    Other,
 }
 
 impl ColorSpace {
-    fn parse(name: &str) -> Result<Self, DocsightError> {
+    fn parse(name: &str) -> Self {
         match name {
-            "DeviceGray" | "G" => Ok(Self::Gray),
-            "DeviceRGB" | "RGB" => Ok(Self::Rgb),
-            "DeviceCMYK" | "CMYK" => Ok(Self::Cmyk),
-            _ => Err(DocsightError::UnsupportedFeature {
-                feature: format!("PDF color space {name}"),
-            }),
+            "DeviceGray" | "G" => Self::Gray,
+            "DeviceRGB" | "RGB" => Self::Rgb,
+            "DeviceCMYK" | "CMYK" => Self::Cmyk,
+            _ => Self::Other,
         }
     }
 
@@ -1068,6 +1086,11 @@ impl ColorSpace {
             (Self::Gray, [gray]) => rgb(*gray, *gray, *gray),
             (Self::Rgb, [red, green, blue]) => rgb(*red, *green, *blue),
             (Self::Cmyk, [cyan, magenta, yellow, black]) => cmyk(*cyan, *magenta, *yellow, *black),
+            (Self::Other, values) if values.iter().all(|value| value.is_finite()) => Ok(Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            }),
             _ => Err(malformed(format!(
                 "{operator} component count does not match the active color space"
             ))),
@@ -1905,9 +1928,9 @@ pub(crate) fn fonts_from_resources(
             Value::Name(value) => value.as_str(),
             _ => return Err(malformed("font Subtype must be a name")),
         };
-        if !matches!(subtype, "Type0" | "Type1" | "TrueType") {
+        if !matches!(subtype, "Type0" | "Type1" | "TrueType" | "Type3") {
             return Err(DocsightError::UnsupportedFeature {
-                feature: "PDF fonts other than Type0, Type1, or TrueType".to_owned(),
+                feature: "PDF fonts other than Type0, Type1, Type3, or TrueType".to_owned(),
             });
         }
         let descendant = if subtype == "Type0" {
@@ -1941,16 +1964,21 @@ pub(crate) fn fonts_from_resources(
         } else {
             None
         };
-        let base_font = dict
+        let base_font = match dict
             .get("BaseFont")
             .or_else(|| descendant.as_ref().and_then(|dict| dict.get("BaseFont")))
-            .ok_or_else(|| malformed("font has no BaseFont"))?;
-        let base_font = match base_font {
-            Value::Name(value) => value.as_str(),
-            _ => return Err(malformed("BaseFont must be a name")),
+        {
+            Some(Value::Name(value)) => value.as_str(),
+            Some(_) => {
+                return Err(malformed("BaseFont must be a name"));
+            }
+            None if subtype == "Type3" => resource_name.as_str(),
+            None => {
+                return Err(malformed("font has no BaseFont"));
+            }
         };
-        let canonical_font = canonical_base_font(base_font);
-        let bold = match canonical_font {
+        let canonical_font = canonical_base_font(base_font).to_owned();
+        let bold = match canonical_font.as_str() {
             "Helvetica" | "Helvetica-Oblique" | "Times-Roman" | "Times-Italic" | "Courier"
             | "Courier-Oblique" | "Symbol" | "ZapfDingbats" => false,
             "Helvetica-Bold"
@@ -1959,7 +1987,7 @@ pub(crate) fn fonts_from_resources(
             | "Times-BoldItalic"
             | "Courier-Bold"
             | "Courier-BoldOblique" => true,
-            _ if matches!(subtype, "Type0" | "Type1" | "TrueType") => {
+            _ if matches!(subtype, "Type0" | "Type1" | "Type3" | "TrueType") => {
                 canonical_font.contains("Bold")
             }
             _ => {
@@ -1983,6 +2011,11 @@ pub(crate) fn fonts_from_resources(
                 return Err(DocsightError::UnsupportedFeature {
                     feature: "TrueType PDF font without ToUnicode or an explicit encoding"
                         .to_owned(),
+                });
+            }
+            None if subtype == "Type3" && !dict.contains_key("Encoding") => {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: "Type3 PDF font without ToUnicode or an explicit encoding".to_owned(),
                 });
             }
             None => decoder_from_encoding(dict.get("Encoding"))?,
@@ -2035,7 +2068,7 @@ pub(crate) fn fonts_from_resources(
             resource_name,
             FontInfo {
                 bold,
-                base_font: canonical_font.to_owned(),
+                base_font: canonical_font.clone(),
                 decoder,
                 cid_widths,
                 outline,
@@ -2046,12 +2079,22 @@ pub(crate) fn fonts_from_resources(
     Ok(fonts)
 }
 
+pub(crate) struct ExtGraphicsStates {
+    pub states: BTreeMap<String, ExtGraphicsState>,
+    pub ignored_keys: Vec<String>,
+    pub blend_modes: Vec<String>,
+}
+
 pub(crate) fn ext_graphics_states_from_resources(
     resources: &BTreeMap<String, Value>,
     resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
-) -> Result<(BTreeMap<String, ExtGraphicsState>, Vec<String>), DocsightError> {
+) -> Result<ExtGraphicsStates, DocsightError> {
     let Some(resource_value) = resources.get("ExtGState") else {
-        return Ok((BTreeMap::new(), Vec::new()));
+        return Ok(ExtGraphicsStates {
+            states: BTreeMap::new(),
+            ignored_keys: Vec::new(),
+            blend_modes: Vec::new(),
+        });
     };
     let resource_dict = match resolve(resource_value)? {
         Value::Dict(dict) => dict,
@@ -2059,6 +2102,7 @@ pub(crate) fn ext_graphics_states_from_resources(
     };
     let mut result = BTreeMap::new();
     let mut ignored: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut unsupported_blend_modes: Vec<String> = Vec::new();
     for (name, value) in resource_dict {
         let dict = match resolve(&value)? {
             Value::Dict(dict) => dict,
@@ -2123,13 +2167,17 @@ pub(crate) fn ext_graphics_states_from_resources(
                     let _ = resolve(&value)?;
                     ignored.insert(key);
                 }
-                "BM" => validate_normal_blend_mode(&resolve(&value)?)?,
+                "BM" => {
+                    for mode in non_normal_blend_modes(&resolve(&value)?)? {
+                        if !unsupported_blend_modes.contains(&mode) {
+                            unsupported_blend_modes.push(mode);
+                        }
+                    }
+                }
                 "SMask" => match resolve(&value)? {
                     Value::Name(value) if value == "None" => {}
                     _ => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF soft masks".to_owned(),
-                        });
+                        ignored.insert(key);
                     }
                 },
                 "AIS" => match resolve(&value)? {
@@ -2162,7 +2210,11 @@ pub(crate) fn ext_graphics_states_from_resources(
         }
         result.insert(name, state);
     }
-    Ok((result, ignored.into_iter().collect()))
+    Ok(ExtGraphicsStates {
+        states: result,
+        ignored_keys: ignored.into_iter().collect(),
+        blend_modes: unsupported_blend_modes,
+    })
 }
 
 fn ext_number(value: &Value) -> Result<f32, DocsightError> {
@@ -2220,16 +2272,27 @@ fn ext_dash(
     Ok((dash, phase))
 }
 
-fn validate_normal_blend_mode(value: &Value) -> Result<(), DocsightError> {
+fn non_normal_blend_modes(value: &Value) -> Result<Vec<String>, DocsightError> {
     match value {
-        Value::Name(value) if value == "Normal" || value == "Compatible" => Ok(()),
-        Value::Array(values)
-            if values.iter().all(
-                |value| matches!(value, Value::Name(name) if name == "Normal" || name == "Compatible"),
-            ) => Ok(()),
-        Value::Name(value) => Err(DocsightError::UnsupportedFeature {
-            feature: format!("PDF blend mode {value}"),
-        }),
+        Value::Name(value) if value == "Normal" || value == "Compatible" => Ok(Vec::new()),
+        Value::Array(values) => {
+            let mut modes = Vec::new();
+            for value in values {
+                match value {
+                    Value::Name(name) if name == "Normal" || name == "Compatible" => {}
+                    Value::Name(name) => {
+                        if !modes.contains(name) {
+                            modes.push(name.clone());
+                        }
+                    }
+                    _ => {
+                        return Err(malformed("ExtGState BM must be a name or name array"));
+                    }
+                }
+            }
+            Ok(modes)
+        }
+        Value::Name(value) => Ok(vec![value.clone()]),
         _ => Err(malformed("ExtGState BM must be a name or name array")),
     }
 }

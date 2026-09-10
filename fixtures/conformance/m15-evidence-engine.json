@@ -198,7 +198,7 @@
         "object_id": "h_515ad605791c12fc496c1c18d79f6526",
         "page": 1,
         "reading_order": 1,
-        "render_fingerprint": "332569ddd833b1a9f7b0d504db3b3eeace4207650cbeac99c9ae51da5e9555f5",
+        "render_fingerprint": "24fcac785f70e2a8882fd10f81eba2448574aa683b9677288f4f70a43b0d015f",
         "source_path": "/word/document.xml::body/p[1]",
         "text_fragment": "Application Architecture Guide",
         "z_index": 0
@@ -345,10 +345,10 @@
       "height_px": 792,
       "page": 1,
       "pagination_decision_count": 17,
-      "raster_sha256": "5965fdf8c6747897b874735a804fb94135e3c06f7df743921faff9b3148367d4",
+      "raster_sha256": "3a21369311355e117f78daac82020b48254ae77b22a9ebe9931614f7fecdb80f",
       "resource_count": 0,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "be3afab75665cdc700831607ab60b6f6607e93cabdc39183cf9622f27390f560",
+      "trace_sha256": "5ac16dc84a9ddc12d0f028e99f22416d733c798dba1eca3a98c7060af457bf66",
       "warnings": [
         "DOCX_LAYOUT_PAGINATED",
         "DOCX_FONT_SUBSTITUTED",
@@ -383,9 +383,9 @@
       "verification": {
         "display_list_sha256": "cc5e13b4f8031a5b1d2f912a3efb5b5d797be6bfb55441bd2fe0009ab44a473e",
         "document_sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
-        "raster_sha256": "5965fdf8c6747897b874735a804fb94135e3c06f7df743921faff9b3148367d4",
+        "raster_sha256": "3a21369311355e117f78daac82020b48254ae77b22a9ebe9931614f7fecdb80f",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "be3afab75665cdc700831607ab60b6f6607e93cabdc39183cf9622f27390f560",
+        "trace_sha256": "5ac16dc84a9ddc12d0f028e99f22416d733c798dba1eca3a98c7060af457bf66",
         "valid": true
       },
       "warnings": [
@@ -519,7 +519,7 @@
         "object_id": "tbl_b54dbb45da2a78dec493d24c309ea8c0",
         "page": 1,
         "reading_order": 1,
-        "render_fingerprint": "246cb28219192cd2be56df66f19775092fa5d2812ae77dcde4a7f8d3f366051d",
+        "render_fingerprint": "042d618d1d038bb2890cd3df1f7fc5083d96b8f59d73bff5464982371a9328e4",
         "source_path": "pdf::page[1]::table[0]::ruled",
         "text_fragment": "\t\tEVENT A: 05/09\tEVENT B: 17/09\t\tEVENT C: 26/09\t\t\nGRUPO:\tORBITA\tLOTE:\t47\t\t\t\t\t\t\t\t\nID\tA1\tR1\tA2\tR2\tA3\tR3\tA4\tR4\tA5\tR5\t\n1\t3,8\t10,0\t8,0\t9,0\t2,9\t14,3\t\t\t\t\t\n2\t18,0\t10,0\t5,2\t4,6\t13,8\t13,0\t\t\t\t\t\n3\t5,9\t7,0\t10,5\t14,7\t4,7\t2,9\t\t\t\t\t\n4\t9,0\t5,7\t17,0\t3,8\t13,0\t14,9\t\t\t\t\t\n5\t6,1\t13,2\t14,8\t13,8\t18,4\t5,9\t\t\t\t\t\n6\t8,2\t15,2\t17,4...",
         "z_index": 0
@@ -554,10 +554,10 @@
       "height_px": 306,
       "page": 1,
       "pagination_decision_count": 0,
-      "raster_sha256": "9d5afa9b2df155e72362fb3885c33948dae680d7de25edbdf884907865daf6df",
+      "raster_sha256": "6caf9ff8a1810729255450db425619f186562213da234bf950eac1d81c215fec",
       "resource_count": 4,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "5537ec764fadbe12354bd561ce18a331ba71a81c26c9ec5138f7dc8035c4881c",
+      "trace_sha256": "c75e95ec002cfbdbe2685c54fcbe2be906cfb158f349e708ecc82eb2a3e0efcc",
       "warnings": [
         "APPROXIMATED_PDF_FONT"
       ],
@@ -590,9 +590,9 @@
       "verification": {
         "display_list_sha256": "488f46fc73dfd338530b5544ac0f9b4d462b652717e524fda820b6f80c62630f",
         "document_sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362",
-        "raster_sha256": "9d5afa9b2df155e72362fb3885c33948dae680d7de25edbdf884907865daf6df",
+        "raster_sha256": "6caf9ff8a1810729255450db425619f186562213da234bf950eac1d81c215fec",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "5537ec764fadbe12354bd561ce18a331ba71a81c26c9ec5138f7dc8035c4881c",
+        "trace_sha256": "c75e95ec002cfbdbe2685c54fcbe2be906cfb158f349e708ecc82eb2a3e0efcc",
         "valid": true
       },
       "warnings": [
@@ -619,7 +619,7 @@
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "7841d9d57dc3febd4f6018c0e39704e8c21b34e34b5b245b064fb3ac067ee802"
+      "sha256": "d46bfb25ab08ea71364f293f23c920527bcead09b376ad674c41cc6e06df8bf7"
     },
     {
       "file": "context-result.json",
@@ -652,9 +652,19 @@
       "sha256": "2e441fd929d6e0c9d077c608bfb5ef5a1de4362f21f9c065341866673ccb6a9f"
     },
     {
+      "file": "fingerprint-result.json",
+      "id": "https://docsight.dev/schemas/v2/fingerprint-result.json",
+      "sha256": "c1990fc8c99af337d58840f50a152b248d0340c0cef6f99778281b450fb97a45"
+    },
+    {
       "file": "hit-result.json",
       "id": "https://docsight.dev/schemas/v2/hit-result.json",
       "sha256": "f69d716914dd0344698e3da26929d455b475404315e00b2d5dc67f790a913e26"
+    },
+    {
+      "file": "images-result.json",
+      "id": "https://docsight.dev/schemas/v2/images-result.json",
+      "sha256": "1c2e37844566bae3713f7066b4783d485c8cd6cf6eb8abf2317d3905b2f6d046"
     },
     {
       "file": "inspect-result.json",
@@ -662,14 +672,29 @@
       "sha256": "edd747699f98321f349858a4a97c6c86b0a1f25a9c54484226957396d944371e"
     },
     {
+      "file": "links-result.json",
+      "id": "https://docsight.dev/schemas/v2/links-result.json",
+      "sha256": "db1c6cc5177f30c5591708a56bf9d7a42b3b0944b4a53c4d12a2e9aa0a1d8d67"
+    },
+    {
       "file": "ndjson-event.json",
       "id": "https://docsight.dev/schemas/v2/ndjson-event.json",
       "sha256": "0aff3708f37e70165739d3c55ca404e0ae6004d3af3fbc64096daccf92081dc6"
     },
     {
+      "file": "outline-result.json",
+      "id": "https://docsight.dev/schemas/v2/outline-result.json",
+      "sha256": "9da6865067748b9b7e0346ed2685e5d8762cbddfdc5a8f50f4028c084f312645"
+    },
+    {
       "file": "overview-result.json",
       "id": "https://docsight.dev/schemas/v2/overview-result.json",
       "sha256": "d00fd1b216cb9c74f3efd4fc02ba909e1b6f02e2c00f33aaba80c3bfae6ca354"
+    },
+    {
+      "file": "page-result.json",
+      "id": "https://docsight.dev/schemas/v2/page-result.json",
+      "sha256": "c8e0237997beeca70ca4cefc4aeedaa49e8cbf96be4f956053c9b1e66e167851"
     },
     {
       "file": "peek-result.json",
@@ -717,6 +742,21 @@
       "sha256": "a37a94f7e81cf7b24d067b138522d735d3835b3c85cdcb488bf29dfb23ef782c"
     },
     {
+      "file": "table-result.json",
+      "id": "https://docsight.dev/schemas/v2/table-result.json",
+      "sha256": "93076f3c0538d4949a0006bb79ab0bd26acbecc6c6fe388382b4ffa7c8df67a7"
+    },
+    {
+      "file": "tables-result.json",
+      "id": "https://docsight.dev/schemas/v2/tables-result.json",
+      "sha256": "975366dba2a09ba1474f234f12add2e8a8bae95af8164b815cc518752e6b2a32"
+    },
+    {
+      "file": "text-result.json",
+      "id": "https://docsight.dev/schemas/v2/text-result.json",
+      "sha256": "ad94f5ce25a1ec64b5c7da48f07dd84e5f743e7794c17e9a621ba4358630b256"
+    },
+    {
       "file": "trace-manifest.json",
       "id": "https://docsight.dev/schemas/v2/trace-manifest.json",
       "sha256": "b98dd61c40b1404d5b1453611d32a97526f61d3c4cca2886b3a366f2e524bb2d"
@@ -729,7 +769,7 @@
     {
       "file": "verify-result.json",
       "id": "https://docsight.dev/schemas/v2/verify-result.json",
-      "sha256": "f59e1ab719b9e981f9099c0b36ed49f7ca9774f8d568cb7ead6e591cb0809aca"
+      "sha256": "90632df98ffbea1664e7fb0675fd1bd65a3178cc59e62cd2e2919c2264ac9bbd"
     }
   ],
   "schema": "docsight.conformance/v1"

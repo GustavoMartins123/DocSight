@@ -1,8 +1,10 @@
 pub mod evidence;
 pub mod ir;
+pub mod png;
 
 pub use evidence::*;
 pub use ir::*;
+pub use png::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};

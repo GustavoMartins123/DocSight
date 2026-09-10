@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/table-result.json",
+  "title": "TableResult",
+  "type": "object",
+  "required": ["rows", "columns", "header_rows", "cells"],
+  "properties": {
+    "rows": { "type": "integer", "minimum": 0 },
+    "columns": { "type": "integer", "minimum": 0 },
+    "header_rows": { "type": "integer", "minimum": 0 },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "row",
+          "column",
+          "row_span",
+          "column_span",
+          "text",
+          "blocks",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+          },
+          "row": { "type": "integer", "minimum": 0 },
+          "column": { "type": "integer", "minimum": 0 },
+          "row_span": { "type": "integer", "minimum": 1 },
+          "column_span": { "type": "integer", "minimum": 1 },
+          "bbox": {
+            "type": ["object", "null"],
+            "required": ["x0", "y0", "x1", "y1"],
+            "properties": {
+              "x0": { "type": "number" },
+              "y0": { "type": "number" },
+              "x1": { "type": "number" },
+              "y1": { "type": "number" }
+            },
+            "additionalProperties": false
+          },
+          "text": { "type": "string" },
+          "blocks": { "type": "array" },
+          "source": { "$ref": "#/$defs/source_span" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "column_widths_pt": {
+      "type": ["array", "null"],
+      "items": { "type": "number" }
+    },
+    "detector": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "source_span": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "offset": { "type": ["integer", "null"], "minimum": 0 },
+        "length": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

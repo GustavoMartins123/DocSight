@@ -34,7 +34,8 @@ pub struct RenderMetadata {
     pub media_type: &'static str,
 }
 
-pub use docx_raster::{encode_png, glyph_coverage, raster_font_fingerprint};
+pub use docsight_core::encode_png;
+pub use docx_raster::{glyph_coverage, raster_font_fingerprint};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedImage {

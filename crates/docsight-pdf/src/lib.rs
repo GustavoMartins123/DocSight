@@ -308,15 +308,7 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
-        if !parsed.ignored_ext_keys.is_empty() {
-            warnings.push(ext_state_ignored_warning(number, &parsed.ignored_ext_keys));
-        }
-        if parsed.clip_text {
-            warnings.push(clip_text_warning(number));
-        }
-        if parsed.negative_font_size {
-            warnings.push(negative_font_size_warning(number));
-        }
+        warnings.extend(graphics_state_visual_warnings(number, &parsed));
         let page = self.page_record(number)?;
         Ok(PdfTracePage {
             number,
@@ -360,18 +352,7 @@ impl<'a> PdfDocument<'a> {
             if parsed.omitted_xobjects {
                 all_warnings.push(xobject_placeholder_warning(page_num));
             }
-            if !parsed.ignored_ext_keys.is_empty() {
-                all_warnings.push(ext_state_ignored_warning(
-                    page_num,
-                    &parsed.ignored_ext_keys,
-                ));
-            }
-            if parsed.clip_text {
-                all_warnings.push(clip_text_warning(page_num));
-            }
-            if parsed.negative_font_size {
-                all_warnings.push(negative_font_size_warning(page_num));
-            }
+            all_warnings.extend(graphics_state_visual_warnings(page_num, &parsed));
 
             let reconstructed = reconstruction::reconstruct_page_semantics(
                 page_num,
@@ -441,15 +422,7 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
-        if !parsed.ignored_ext_keys.is_empty() {
-            warnings.push(ext_state_ignored_warning(number, &parsed.ignored_ext_keys));
-        }
-        if parsed.clip_text {
-            warnings.push(clip_text_warning(number));
-        }
-        if parsed.negative_font_size {
-            warnings.push(negative_font_size_warning(number));
-        }
+        warnings.extend(graphics_state_visual_warnings(number, &parsed));
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
             page: number,
@@ -489,9 +462,9 @@ impl<'a> PdfDocument<'a> {
             Some(value) => self.store.resolve_dict(value)?.into_keys().collect(),
             None => BTreeSet::new(),
         };
-        let (ext_graphics_states, ignored_ext_keys) =
+        let graphics_states =
             ext_graphics_states_from_resources(&resources, |value| self.store.resolve(value))?;
-        let trace_resources = trace_resources(&fonts, &xobjects, &ext_graphics_states);
+        let trace_resources = trace_resources(&fonts, &xobjects, &graphics_states.states);
         let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(
             &content,
@@ -499,8 +472,14 @@ impl<'a> PdfDocument<'a> {
             page.media_box.y1,
             &fonts,
             &xobjects,
-            &ext_graphics_states,
-        )?;
+            &graphics_states.states,
+        )
+        .map_err(|error| match error {
+            DocsightError::MalformedDocument { message } => DocsightError::MalformedDocument {
+                message: format!("page {number}: {message}"),
+            },
+            other => other,
+        })?;
         Ok(ParsedPage {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
@@ -508,7 +487,10 @@ impl<'a> PdfDocument<'a> {
             omitted_xobjects: parsed.omitted_xobjects,
             clip_text: parsed.clip_text,
             negative_font_size: parsed.negative_font_size,
-            ignored_ext_keys,
+            unsupported_color_spaces: parsed.unsupported_color_spaces,
+            pattern_paints: parsed.pattern_paints,
+            unsupported_blend_modes: graphics_states.blend_modes,
+            ignored_ext_keys: graphics_states.ignored_keys,
             trace_resources,
         })
     }
@@ -589,6 +571,9 @@ struct ParsedPage {
     omitted_xobjects: bool,
     clip_text: bool,
     negative_font_size: bool,
+    unsupported_color_spaces: Vec<String>,
+    pattern_paints: Vec<String>,
+    unsupported_blend_modes: Vec<String>,
     ignored_ext_keys: Vec<String>,
     trace_resources: Vec<PdfTraceResource>,
 }
@@ -996,6 +981,51 @@ fn ext_state_ignored_warning(page: u32, keys: &[String]) -> Diagnostic {
     }
 }
 
+fn soft_mask_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_SOFT_MASK_IGNORED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("page {page} uses a PDF soft mask (transparency group)"),
+        effect: "text and structure remain exact; visual rendering paints masked content without its transparency mask"
+            .to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn graphics_state_visual_warnings(page: u32, parsed: &ParsedPage) -> Vec<Diagnostic> {
+    let mut warnings = Vec::new();
+    if !parsed.ignored_ext_keys.is_empty() {
+        let (masks, rest): (Vec<String>, Vec<String>) = parsed
+            .ignored_ext_keys
+            .iter()
+            .cloned()
+            .partition(|key| key == "SMask");
+        if !masks.is_empty() {
+            warnings.push(soft_mask_warning(page));
+        }
+        if !rest.is_empty() {
+            warnings.push(ext_state_ignored_warning(page, &rest));
+        }
+    }
+    if parsed.clip_text {
+        warnings.push(clip_text_warning(page));
+    }
+    if parsed.negative_font_size {
+        warnings.push(negative_font_size_warning(page));
+    }
+    if !parsed.unsupported_color_spaces.is_empty() {
+        warnings.push(color_space_warning(page, &parsed.unsupported_color_spaces));
+    }
+    if !parsed.pattern_paints.is_empty() {
+        warnings.push(pattern_warning(page, &parsed.pattern_paints));
+    }
+    if !parsed.unsupported_blend_modes.is_empty() {
+        warnings.push(blend_mode_warning(page, &parsed.unsupported_blend_modes));
+    }
+    warnings
+}
+
 fn clip_text_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "PDF_CLIP_TEXT_VISUAL".to_owned(),
@@ -1006,13 +1036,57 @@ fn clip_text_warning(page: u32) -> Diagnostic {
         page: Some(page),
     }
 }
-
 fn negative_font_size_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "PDF_NEGATIVE_FONT_SIZE_VISUAL".to_owned(),
         severity: DiagnosticSeverity::Warning,
         message: format!("page {page} uses a negative PDF font size"),
         effect: "text was extracted with mirrored geometry; visual rendering paints upright glyphs instead of mirrored ones"
+            .to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn color_space_warning(page: u32, names: &[String]) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_COLOR_SPACE_UNSUPPORTED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "page {page} uses PDF color spaces {} without a calibrated conversion",
+            names.join(", ")
+        ),
+        effect: "text and structure remain exact; visual rendering paints affected fills and strokes black"
+            .to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn pattern_warning(page: u32, names: &[String]) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_PATTERN_PAINT_UNSUPPORTED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "page {page} paints with PDF patterns {} without rendering their tiles",
+            names.join(", ")
+        ),
+        effect: "text and structure remain exact; visual rendering paints patterned fills and strokes with the previous flat color"
+            .to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
+fn blend_mode_warning(page: u32, names: &[String]) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_BLEND_MODE_UNSUPPORTED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "page {page} uses PDF blend modes {} without blending support",
+            names.join(", ")
+        ),
+        effect: "text and structure remain exact; visual rendering paints blended content opaque"
             .to_owned(),
         object: None,
         page: Some(page),

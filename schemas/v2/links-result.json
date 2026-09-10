@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/links-result.json",
+  "title": "LinksResult",
+  "type": "object",
+  "required": ["links"],
+  "properties": {
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "target", "is_external"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+          },
+          "text": { "type": "string" },
+          "target": { "type": "string" },
+          "is_external": { "type": "boolean" },
+          "page": { "type": ["integer", "null"], "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

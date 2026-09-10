@@ -440,7 +440,7 @@ fn renders_dash_cap_join_and_miter_styles_without_warning() -> Result<(), Docsig
 }
 
 #[test]
-fn rejects_non_normal_blend_modes() -> Result<(), DocsightError> {
+fn accepts_non_normal_blend_modes_with_visual_warning() -> Result<(), DocsightError> {
     let content = "/GS0 gs 10 10 80 80 re f";
     let objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
@@ -450,11 +450,12 @@ fn rejects_non_normal_blend_modes() -> Result<(), DocsightError> {
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
     ];
     let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
-    let error = PdfDocument::open(&source)?.rasterize(1, 72, None);
-    assert!(matches!(
-        error,
-        Err(DocsightError::UnsupportedFeature { feature }) if feature == "PDF blend mode Multiply"
-    ));
+    let raster = PdfDocument::open(&source)?.rasterize(1, 72, None)?;
+    assert!(raster.warnings.iter().any(|warning| {
+        warning.code == "PDF_BLEND_MODE_UNSUPPORTED"
+            && warning.page == Some(1)
+            && warning.message.contains("Multiply")
+    }));
     Ok(())
 }
 
@@ -686,5 +687,91 @@ fn accepts_unknown_extgstate_entries_with_visual_warning() -> Result<(), Docsigh
             && warning.page == Some(1)
             && warning.message.contains("FutureKey")
     }));
+    Ok(())
+}
+
+#[test]
+fn accepts_soft_masks_for_extraction_with_visual_warning() -> Result<(), DocsightError> {
+    let content = "q /GS0 gs BT /F1 10 Tf 20 70 Td (Hello) Tj ET Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /ExtGState /SMask << /S /Luminosity >> >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| { warning.code == "PDF_SOFT_MASK_IGNORED" && warning.page == Some(1) })
+    );
+    Ok(())
+}
+
+#[test]
+fn accepts_named_color_spaces_for_extraction_with_visual_warning() -> Result<(), DocsightError> {
+    let content = "q /C1 cs 0.5 sc 10 10 80 80 re f Q BT /F1 10 Tf 20 70 Td (Hello) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(document.warnings.iter().any(|warning| {
+        warning.code == "PDF_COLOR_SPACE_UNSUPPORTED"
+            && warning.page == Some(1)
+            && warning.message.contains("C1")
+    }));
+    let raster = PdfDocument::open(&source)?.rasterize(1, 72, None)?;
+    assert!(
+        raster
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_COLOR_SPACE_UNSUPPORTED")
+    );
+    Ok(())
+}
+
+#[test]
+fn accepts_pattern_paints_without_changing_text() -> Result<(), DocsightError> {
+    let content = "q /Pattern cs /P1 scn 10 10 80 80 re f Q BT /F1 10 Tf 20 70 Td (Hello) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(document.warnings.iter().any(|warning| {
+        warning.code == "PDF_PATTERN_PAINT_UNSUPPORTED"
+            && warning.page == Some(1)
+            && warning.message.contains("P1")
+    }));
+    Ok(())
+}
+
+#[test]
+fn accepts_type3_fonts_with_tounicode_for_extraction() -> Result<(), DocsightError> {
+    let content = "BT /F1 12 Tf 20 70 Td (\\001) Tj ET";
+    let cmap = "begincmap\n1 beginbfchar\n<01> <0041>\nendbfchar\nendcmap";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type3 /Name /C0 /ToUnicode 6 0 R >>".to_owned(),
+        "<< /Type /FontDescriptor /FontName /C0 >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.paragraphs().count(), 1);
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "APPROXIMATED_PDF_FONT" && warning.page == Some(1))
+    );
     Ok(())
 }

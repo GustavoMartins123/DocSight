@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/outline-result.json",
+  "title": "OutlineResult",
+  "type": "object",
+  "required": ["headings"],
+  "properties": {
+    "headings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "level", "text", "source"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+          },
+          "level": { "type": "integer", "minimum": 1 },
+          "text": { "type": "string" },
+          "source": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

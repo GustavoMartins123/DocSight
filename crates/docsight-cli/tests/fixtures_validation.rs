@@ -41,7 +41,12 @@ fn validates_headings_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let blocks = text_json["result"]["blocks"]
         .as_array()
         .ok_or("blocks missing")?;
-    assert_eq!(blocks.len(), 50);
+    assert_eq!(blocks.len(), 49);
+    assert!(blocks.iter().all(|block| {
+        block["text"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty())
+    }));
     Ok(())
 }
 

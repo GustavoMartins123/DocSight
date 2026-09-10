@@ -7,6 +7,7 @@
     "profile",
     "protocol",
     "error_schema",
+    "error_channel",
     "invocation_prefix",
     "sandbox",
     "document_formats",
@@ -20,6 +21,11 @@
     "profile": { "type": "string", "const": "agent-first-v1" },
     "protocol": { "type": "string", "const": "docsight.agent/v2" },
     "error_schema": { "type": "string", "format": "uri" },
+    "error_channel": {
+      "type": "string",
+      "const": "stderr",
+      "description": "failed agent requests emit the error envelope on stderr with no bytes on stdout"
+    },
     "invocation_prefix": { "type": "string", "const": "docsight --agent" },
     "sandbox": {
       "type": "object",
@@ -92,7 +98,8 @@
           "ndjson",
           "ndjson_events",
           "bounded",
-          "result_schema"
+          "result_schema",
+          "result_root"
         ],
         "properties": {
           "name": { "type": "string" },
@@ -113,6 +120,10 @@
           "result_schema": {
             "type": ["string", "null"],
             "format": "uri"
+          },
+          "result_root": {
+            "type": ["string", "null"],
+            "description": "name of the result field holding the primary payload; null when the result object itself is the payload"
           }
         },
         "additionalProperties": false

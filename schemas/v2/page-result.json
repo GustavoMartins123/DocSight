@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/page-result.json",
+  "title": "PageResult",
+  "type": "object",
+  "required": ["number", "width_pt", "height_pt", "spans"],
+  "properties": {
+    "number": { "type": "integer", "minimum": 1 },
+    "width_pt": { "type": "number" },
+    "height_pt": { "type": "number" },
+    "spans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "bbox",
+          "reading_order",
+          "confidence",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+          },
+          "text": { "type": "string" },
+          "bbox": {
+            "type": "object",
+            "required": ["x0", "y0", "x1", "y1"],
+            "properties": {
+              "x0": { "type": "number" },
+              "y0": { "type": "number" },
+              "x1": { "type": "number" },
+              "y1": { "type": "number" }
+            },
+            "additionalProperties": false
+          },
+          "reading_order": { "type": "integer", "minimum": 0 },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "source": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "overlays": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "text"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "header",
+              "footer",
+              "watermark",
+              "comment_marker",
+              "annotation"
+            ]
+          },
+          "text": { "type": "string" },
+          "bbox": {
+            "type": ["object", "null"],
+            "required": ["x0", "y0", "x1", "y1"],
+            "properties": {
+              "x0": { "type": "number" },
+              "y0": { "type": "number" },
+              "x1": { "type": "number" },
+              "y1": { "type": "number" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -582,6 +582,7 @@ struct CommandCapability {
     ndjson_events: &'static [&'static str],
     bounded: bool,
     result_schema: Option<&'static str>,
+    result_root: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -600,6 +601,7 @@ struct AgentCapabilitiesResult {
     profile: &'static str,
     protocol: &'static str,
     error_schema: &'static str,
+    error_channel: &'static str,
     invocation_prefix: &'static str,
     sandbox: AgentSandboxCapability,
     document_formats: &'static [&'static str],
@@ -1279,6 +1281,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
         profile: "agent-first-v1",
         protocol: docsight_agent::AGENT_SCHEMA,
         error_schema: "https://docsight.dev/schemas/v2/error-envelope.json",
+        error_channel: "stderr",
         invocation_prefix: "docsight --agent",
         sandbox: AgentSandboxCapability {
             flag: "--sandbox",
@@ -1311,6 +1314,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["capabilities"],
                 bounded: false,
                 result_schema: Some("https://docsight.dev/schemas/v2/capabilities-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "inspect",
@@ -1321,6 +1325,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["inspect"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/inspect-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "outline",
@@ -1330,7 +1335,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["heading"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/outline-result.json"),
+                result_root: Some("headings"),
             },
             CommandCapability {
                 name: "text",
@@ -1340,7 +1346,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["block"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/text-result.json"),
+                result_root: Some("blocks"),
             },
             CommandCapability {
                 name: "tables",
@@ -1350,7 +1357,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["table"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/tables-result.json"),
+                result_root: Some("tables"),
             },
             CommandCapability {
                 name: "table",
@@ -1360,7 +1368,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["table"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/table-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "page",
@@ -1370,7 +1379,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["span", "overlay"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/page-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "images",
@@ -1380,7 +1390,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["image"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/images-result.json"),
+                result_root: Some("images"),
             },
             CommandCapability {
                 name: "links",
@@ -1390,7 +1401,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["link"],
                 bounded: true,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/links-result.json"),
+                result_root: Some("links"),
             },
             CommandCapability {
                 name: "render",
@@ -1401,6 +1413,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["render"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/render-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "crop",
@@ -1411,6 +1424,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["crop"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/render-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "diff",
@@ -1427,6 +1441,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/diff-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "fingerprint",
@@ -1436,7 +1451,8 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson: true,
                 ndjson_events: &["fingerprint"],
                 bounded: false,
-                result_schema: None,
+                result_schema: Some("https://docsight.dev/schemas/v2/fingerprint-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "evidence",
@@ -1447,6 +1463,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["evidence"],
                 bounded: false,
                 result_schema: Some("https://docsight.dev/schemas/v2/evidence-record.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "bundle",
@@ -1457,6 +1474,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["bundle"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/bundle-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "replay",
@@ -1467,6 +1485,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["replay"],
                 bounded: false,
                 result_schema: Some("https://docsight.dev/schemas/v2/replay-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "verify",
@@ -1477,6 +1496,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["verify"],
                 bounded: false,
                 result_schema: Some("https://docsight.dev/schemas/v2/verify-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "coverage",
@@ -1487,6 +1507,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["coverage.global", "coverage.page"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/coverage-report.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "hit",
@@ -1497,6 +1518,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["hit"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/hit-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "query",
@@ -1507,6 +1529,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["query.summary", "query.match"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/spatial-query-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "overview",
@@ -1517,6 +1540,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["overview.summary", "overview.landmark"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/overview-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "focus",
@@ -1527,6 +1551,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["focus.summary", "focus.object", "focus.visual_reference"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/semantic-viewport.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "peek",
@@ -1537,6 +1562,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["peek.summary", "peek.object"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/peek-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "context",
@@ -1547,6 +1573,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["context", "context.candidate"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/context-result.json"),
+                result_root: None,
             },
             CommandCapability {
                 name: "resolve",
@@ -1557,6 +1584,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["resolve.summary", "resolve.candidate"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/resolve-result.json"),
+                result_root: None,
             },
         ],
     };
@@ -1621,6 +1649,12 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
     writeln!(writer, "Protocol: {}", result.protocol).map_err(stdout_error)?;
     writeln!(writer, "Formats: {}", result.document_formats.join(", ")).map_err(stdout_error)?;
     writeln!(writer, "Output: {}", result.agent_defaults).map_err(stdout_error)?;
+    writeln!(
+        writer,
+        "Errors: {} (stdout carries no bytes on errors)",
+        result.error_channel
+    )
+    .map_err(stdout_error)?;
     for command in result.commands {
         writeln!(writer, "{}: {}", command.name, command.summary).map_err(stdout_error)?;
     }
@@ -1851,6 +1885,10 @@ fn inspect_pdf_source(
                 | "PDF_EXTGSTATE_IGNORED"
                 | "PDF_CLIP_TEXT_VISUAL"
                 | "PDF_NEGATIVE_FONT_SIZE_VISUAL"
+                | "PDF_SOFT_MASK_IGNORED"
+                | "PDF_COLOR_SPACE_UNSUPPORTED"
+                | "PDF_PATTERN_PAINT_UNSUPPORTED"
+                | "PDF_BLEND_MODE_UNSUPPORTED"
         )
     });
     let result = InspectResult {
@@ -2170,6 +2208,7 @@ fn document_text(
                 text,
             }
         })
+        .filter(|record| !record.text.trim().is_empty())
         .collect();
 
     if ndjson {
@@ -2712,18 +2751,19 @@ fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
     let verification = verify_proof_bundle(&bundle)?;
     #[derive(Serialize)]
     struct VerifyResult {
-        bundle_path: String,
+        bundle_name: String,
         verification: docsight_render::trace::ProofVerification,
     }
-    let bundle_path = args
+    let bundle_name = args
         .bundle
-        .to_str()
+        .file_name()
+        .and_then(|name| name.to_str())
         .ok_or_else(|| DocsightError::InvalidArgument {
-            message: "bundle path must be valid UTF-8 for agent output".to_owned(),
+            message: "bundle path must end in a valid UTF-8 file name for agent output".to_owned(),
         })?
         .to_owned();
     let result = VerifyResult {
-        bundle_path,
+        bundle_name,
         verification,
     };
     if args.ndjson {

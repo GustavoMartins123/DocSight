@@ -3,9 +3,9 @@
   "$id": "https://docsight.dev/schemas/v2/verify-result.json",
   "title": "VerifyResult",
   "type": "object",
-  "required": ["bundle_path", "verification"],
+  "required": ["bundle_name", "verification"],
   "properties": {
-    "bundle_path": { "type": "string", "minLength": 1 },
+    "bundle_name": { "type": "string", "minLength": 1 },
     "verification": {
       "type": "object",
       "required": ["schema", "valid", "bundle_sha256", "document_sha256", "evidence_count", "trace_verified", "crop_verified"],

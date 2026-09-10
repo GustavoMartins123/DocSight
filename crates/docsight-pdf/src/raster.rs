@@ -95,7 +95,7 @@ pub(crate) fn rasterize(
     Ok(Raster {
         width,
         height,
-        png: encode_png(width, height, &canvas.pixels)?,
+        png: docsight_core::encode_png(width, height, &canvas.pixels)?,
         pixels: canvas.pixels,
     })
 }
@@ -1002,83 +1002,6 @@ fn malformed_path(message: &str) -> DocsightError {
     DocsightError::MalformedDocument {
         message: message.to_owned(),
     }
-}
-
-fn encode_png(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>, DocsightError> {
-    let pixel_width = usize::try_from(width).map_err(|_| raster_limit())?;
-    let row_bytes = pixel_width.checked_mul(3).ok_or_else(raster_limit)?;
-    let raw_capacity = row_bytes
-        .checked_add(1)
-        .and_then(|value| value.checked_mul(height as usize))
-        .ok_or_else(raster_limit)?;
-    let mut raw = Vec::with_capacity(raw_capacity);
-    for row in pixels.chunks_exact(row_bytes) {
-        raw.push(0);
-        raw.extend_from_slice(row);
-    }
-    let compressed = zlib_store(&raw)?;
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    let mut header = Vec::with_capacity(13);
-    header.extend_from_slice(&width.to_be_bytes());
-    header.extend_from_slice(&height.to_be_bytes());
-    header.extend_from_slice(&[8, 2, 0, 0, 0]);
-    append_chunk(&mut png, b"IHDR", &header)?;
-    append_chunk(&mut png, b"IDAT", &compressed)?;
-    append_chunk(&mut png, b"IEND", &[])?;
-    Ok(png)
-}
-
-fn zlib_store(bytes: &[u8]) -> Result<Vec<u8>, DocsightError> {
-    let mut output = vec![0x78, 0x01];
-    if bytes.is_empty() {
-        output.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
-    } else {
-        let chunks = bytes.chunks(u16::MAX as usize);
-        let count = chunks.len();
-        for (index, chunk) in chunks.enumerate() {
-            output.push(if index + 1 == count { 1 } else { 0 });
-            let length = u16::try_from(chunk.len()).map_err(|_| raster_limit())?;
-            output.extend_from_slice(&length.to_le_bytes());
-            output.extend_from_slice(&(!length).to_le_bytes());
-            output.extend_from_slice(chunk);
-        }
-    }
-    output.extend_from_slice(&adler32(bytes).to_be_bytes());
-    Ok(output)
-}
-
-fn append_chunk(output: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) -> Result<(), DocsightError> {
-    let length = u32::try_from(data.len()).map_err(|_| raster_limit())?;
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(kind);
-    output.extend_from_slice(data);
-    let mut checksum_input = Vec::with_capacity(kind.len() + data.len());
-    checksum_input.extend_from_slice(kind);
-    checksum_input.extend_from_slice(data);
-    output.extend_from_slice(&crc32(&checksum_input).to_be_bytes());
-    Ok(())
-}
-
-fn adler32(bytes: &[u8]) -> u32 {
-    let mut first = 1u32;
-    let mut second = 0u32;
-    for byte in bytes {
-        first = (first + u32::from(*byte)) % 65_521;
-        second = (second + first) % 65_521;
-    }
-    second << 16 | first
-}
-
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut value = 0xffff_ffffu32;
-    for byte in bytes {
-        value ^= u32::from(*byte);
-        for _ in 0..8 {
-            let mask = 0u32.wrapping_sub(value & 1);
-            value = value >> 1 ^ 0xedb8_8320 & mask;
-        }
-    }
-    !value
 }
 
 fn glyph(character: char) -> Option<[u8; 7]> {

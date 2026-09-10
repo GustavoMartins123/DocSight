@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/images-result.json",
+  "title": "ImagesResult",
+  "type": "object",
+  "required": ["images"],
+  "properties": {
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z_]+_[0-9a-f]{32}$"
+          },
+          "alt_text": { "type": ["string", "null"] },
+          "caption": { "type": ["string", "null"] },
+          "width_pt": { "type": ["number", "null"] },
+          "height_pt": { "type": ["number", "null"] },
+          "page": { "type": ["integer", "null"], "minimum": 1 },
+          "resource": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

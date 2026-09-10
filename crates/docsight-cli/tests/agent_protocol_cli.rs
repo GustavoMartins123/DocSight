@@ -439,8 +439,42 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
     let required = schema["properties"]["commands"]["items"]["required"]
         .as_array()
         .ok_or("capability command required fields")?;
-    for field in ["invocation", "ndjson_events", "result_schema"] {
+    for field in [
+        "invocation",
+        "ndjson_events",
+        "result_schema",
+        "result_root",
+    ] {
         assert!(required.iter().any(|value| value == field));
+    }
+    assert_eq!(value["result"]["error_channel"], "stderr");
+    for (name, root) in [
+        ("outline", "headings"),
+        ("text", "blocks"),
+        ("tables", "tables"),
+        ("images", "images"),
+        ("links", "links"),
+    ] {
+        let command = commands
+            .iter()
+            .find(|command| command["name"] == name)
+            .ok_or("command capability")?;
+        assert!(command["result_schema"].as_str().is_some_and(|schema| {
+            schema.starts_with("https://docsight.dev/schemas/v2/")
+                && schema.ends_with("-result.json")
+        }));
+        assert_eq!(command["result_root"], root);
+        let file = command["result_schema"]
+            .as_str()
+            .ok_or("schema url")?
+            .rsplit('/')
+            .next()
+            .ok_or("schema file")?;
+        let schema_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/v2")
+            .join(file);
+        let schema_file: serde_json::Value = serde_json::from_slice(&std::fs::read(schema_path)?)?;
+        assert!(schema_file["properties"][root].is_object());
     }
     Ok(())
 }

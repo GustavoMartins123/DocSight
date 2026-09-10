@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/fingerprint-result.json",
+  "title": "FingerprintResult",
+  "type": "object",
+  "required": [
+    "file_sha256",
+    "engine",
+    "ooxml_engine",
+    "pdf_engine",
+    "raster_engine",
+    "fonts",
+    "layout_profile",
+    "result_fingerprint"
+  ],
+  "properties": {
+    "file_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "engine": { "type": "string", "minLength": 1 },
+    "ooxml_engine": { "type": "string", "minLength": 1 },
+    "pdf_engine": { "type": "string", "minLength": 1 },
+    "raster_engine": { "type": "string", "minLength": 1 },
+    "fonts": { "type": "string", "minLength": 1 },
+    "layout_profile": { "type": "string", "minLength": 1 },
+    "result_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}
