@@ -317,6 +317,9 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
+        if parsed.unmapped_text_codes {
+            warnings.push(unmapped_text_warning(number));
+        }
         let warning_objects = spans
             .iter()
             .map(|span| (span.id.clone(), span.bbox))
@@ -447,6 +450,9 @@ impl<'a> PdfDocument<'a> {
         if parsed.omitted_xobjects {
             warnings.push(xobject_placeholder_warning(number));
         }
+        if parsed.unmapped_text_codes {
+            warnings.push(unmapped_text_warning(number));
+        }
         warnings.extend(graphics_state_visual_warnings(number, &parsed, &[]));
         let raster = raster::rasterize(&parsed.commands, public_page, target, dpi)?;
         Ok(RasterizedPage {
@@ -527,6 +533,7 @@ impl<'a> PdfDocument<'a> {
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
             omitted_xobjects: parsed.omitted_xobjects,
+            unmapped_text_codes: parsed.unmapped_text_codes,
             trace_resources,
         })
     }
@@ -621,6 +628,7 @@ struct ParsedPage {
     text_runs: Vec<TextRun>,
     approximated_font: bool,
     omitted_xobjects: bool,
+    unmapped_text_codes: bool,
     trace_resources: Vec<PdfTraceResource>,
 }
 
@@ -1068,6 +1076,17 @@ fn pdf_number(value: &Value) -> Result<f32, DocsightError> {
     }
 }
 
+fn unmapped_text_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_TEXT_CODE_UNMAPPED".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("page {page} shows text codes the font ToUnicode CMap does not map"),
+        effect: "those codes are extracted as the Unicode replacement character".to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
 fn font_approximation_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "APPROXIMATED_PDF_FONT".to_owned(),
@@ -1208,6 +1227,11 @@ fn visual_warning(page: u32, issue: VisualIssue, object: Option<ObjectId>) -> Di
             "PDF_CLIP_TEXT_VISUAL",
             format!("page {page} uses a clipping text rendering mode"),
             "the affected text was extracted, but its outline was not added to the clipping path",
+        ),
+        VisualIssue::NonUniformStroke => (
+            "PDF_NON_UNIFORM_STROKE_VISUAL",
+            format!("page {page} strokes a path under a non-uniform transform"),
+            "stroke width is approximated by the area-preserving mean of both axis scales",
         ),
         VisualIssue::NegativeFontSize => (
             "PDF_NEGATIVE_FONT_SIZE_VISUAL",

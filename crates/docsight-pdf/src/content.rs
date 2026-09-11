@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const MAX_OPERATIONS: usize = 1_000_000;
+const MAX_CID_TO_GID_ENTRIES: usize = 65_536;
 const MAX_GRAPHICS_DEPTH: usize = 64;
 const MAX_PATH_SEGMENTS: usize = 100_000;
 const MAX_OPERANDS: usize = 100_000;
@@ -78,6 +79,7 @@ pub(crate) enum VisualIssue {
     Pattern(String),
     TextClip,
     NegativeFontSize,
+    NonUniformStroke,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,6 +149,7 @@ pub(crate) struct FontInfo {
     cid_widths: Option<CidWidths>,
     pub outline: Option<Arc<FontProgram>>,
     cid_identity: bool,
+    cid_to_gid: Option<Arc<Vec<u16>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +162,14 @@ struct CidWidths {
 enum FontDecoder {
     Ascii,
     WinAnsi,
+    Simple(Arc<SimpleEncoding>),
+    GlyphIdentity(Arc<FontProgram>),
     ToUnicode(ToUnicodeMap),
+}
+
+#[derive(Debug)]
+struct SimpleEncoding {
+    characters: [Option<char>; 256],
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +183,7 @@ pub(crate) struct ParsedContent {
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
     pub omitted_xobjects: bool,
+    pub unmapped_text_codes: bool,
 }
 
 pub(crate) fn parse_content(
@@ -217,6 +228,7 @@ fn parse_content_inner(
     let mut marked_content_depth = 0usize;
     let mut operations = 0usize;
     let mut approximated_font = false;
+    let mut unmapped_text_codes = false;
     let mut omitted_xobjects = false;
     let mut inline_image = false;
     loop {
@@ -581,6 +593,7 @@ fn parse_content_inner(
                             cid_widths: font.cid_widths.clone(),
                             outline: font.outline.clone(),
                             cid_identity: font.cid_identity,
+                            cid_to_gid: font.cid_to_gid.clone(),
                         });
                         approximated_font |= font.outline.is_none();
                     }
@@ -654,6 +667,7 @@ fn parse_content_inner(
                             anchor_length,
                             &mut commands,
                             &mut text_runs,
+                            &mut unmapped_text_codes,
                         )?;
                     }
                     "TJ" => {
@@ -670,6 +684,7 @@ fn parse_content_inner(
                                     anchor_length,
                                     &mut commands,
                                     &mut text_runs,
+                                    &mut unmapped_text_codes,
                                 )?,
                                 ContentValue::Number(adjustment) => {
                                     let font = state
@@ -700,6 +715,7 @@ fn parse_content_inner(
                             anchor_length,
                             &mut commands,
                             &mut text_runs,
+                            &mut unmapped_text_codes,
                         )?;
                     }
                     "BMC" => {
@@ -888,6 +904,7 @@ fn parse_content_inner(
         text_runs,
         approximated_font,
         omitted_xobjects,
+        unmapped_text_codes,
     })
 }
 
@@ -901,6 +918,7 @@ fn append_text(
     anchor_length: u64,
     commands: &mut Vec<DisplayCommand>,
     text_runs: &mut Vec<TextRun>,
+    unmapped_text_codes: &mut bool,
 ) -> Result<(), DocsightError> {
     let font = state
         .text
@@ -908,9 +926,12 @@ fn append_text(
         .as_ref()
         .ok_or_else(|| malformed("text showing operator used before Tf"))?;
     let text = font.decoder.decode(bytes)?;
+    *unmapped_text_codes |= text.contains(char::REPLACEMENT_CHARACTER);
     let glyphs = match &font.outline {
-        Some(program) if font.cid_identity => program.glyphs_for_identity(bytes)?,
-        Some(program) => program.glyphs_for_text(&text)?,
+        Some(program) if font.cid_identity => {
+            program.glyphs_for_identity(bytes, font.cid_to_gid.as_deref().map(Vec::as_slice))?
+        }
+        Some(program) => program.glyphs_for_simple_text(bytes, &text)?,
         None => Vec::new(),
     };
     let character_count = text.chars().count() as f32;
@@ -1410,6 +1431,9 @@ impl GraphicsState {
             if let Some(pattern) = &self.stroke_pattern {
                 issues.insert(VisualIssue::Pattern(pattern.clone()));
             }
+            if self.ctm.has_non_uniform_scale() {
+                issues.insert(VisualIssue::NonUniformStroke);
+            }
         }
         issues.into_iter().collect()
     }
@@ -1496,6 +1520,7 @@ impl GraphicsState {
                 cid_widths: font.cid_widths.clone(),
                 outline: font.outline.clone(),
                 cid_identity: font.cid_identity,
+                cid_to_gid: font.cid_to_gid.clone(),
             });
         }
         if !state.ignored_keys.is_empty() {
@@ -1557,6 +1582,7 @@ struct FontSelection {
     cid_widths: Option<CidWidths>,
     outline: Option<Arc<FontProgram>>,
     cid_identity: bool,
+    cid_to_gid: Option<Arc<Vec<u16>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1739,6 +1765,12 @@ impl Matrix {
         Ok(transformed)
     }
 
+    fn has_non_uniform_scale(self) -> bool {
+        let horizontal = (self.a * self.a + self.b * self.b).sqrt();
+        let vertical = (self.c * self.c + self.d * self.d).sqrt();
+        horizontal.is_finite() && vertical.is_finite() && (horizontal - vertical).abs() > 0.0001
+    }
+
     fn stroke_scale(self) -> Result<f32, DocsightError> {
         let horizontal = (self.a * self.a + self.b * self.b).sqrt();
         let vertical = (self.c * self.c + self.d * self.d).sqrt();
@@ -1746,9 +1778,11 @@ impl Matrix {
             return Err(malformed("stroke transform produced a non-finite width"));
         }
         if (horizontal - vertical).abs() > 0.0001 {
-            return Err(DocsightError::UnsupportedFeature {
-                feature: "non-uniformly transformed PDF strokes".to_owned(),
-            });
+            let mean = (horizontal * vertical).sqrt();
+            if !mean.is_finite() || mean < 0.0 {
+                return Err(malformed("stroke transform produced a non-finite width"));
+            }
+            return Ok(mean);
         }
         Ok(horizontal)
     }
@@ -1857,7 +1891,15 @@ impl<'a> ContentLexer<'a> {
                     return Ok(ContentValue::Dictionary);
                 }
             } else {
-                self.cursor += 1;
+                match self.peek() {
+                    Some(b'(') => {
+                        self.parse_string()?;
+                    }
+                    Some(b'<') => {
+                        self.parse_hex_string()?;
+                    }
+                    _ => self.cursor += 1,
+                }
             }
         }
         Err(malformed("unterminated inline PDF dictionary"))
@@ -2166,58 +2208,6 @@ pub(crate) fn fonts_from_resources(
                 });
             }
         };
-        let encoding = match dict.get("Encoding") {
-            Some(value) => Some(resolve(value)?),
-            None => None,
-        };
-        let decoder = match dict.get("ToUnicode").or_else(|| {
-            descendant
-                .as_ref()
-                .and_then(|descendant| descendant.get("ToUnicode"))
-        }) {
-            Some(value) => FontDecoder::ToUnicode(parse_to_unicode(&decode_stream_value(value)?)?),
-            None if subtype == "Type0" => {
-                return Err(DocsightError::UnsupportedFeature {
-                    feature: "Type0 PDF font without ToUnicode CMap".to_owned(),
-                });
-            }
-            None if subtype == "TrueType" && !dict.contains_key("Encoding") => {
-                return Err(DocsightError::UnsupportedFeature {
-                    feature: "TrueType PDF font without ToUnicode or an explicit encoding"
-                        .to_owned(),
-                });
-            }
-            None if subtype == "Type3" && !dict.contains_key("Encoding") => {
-                return Err(DocsightError::UnsupportedFeature {
-                    feature: "Type3 PDF font without ToUnicode or an explicit encoding".to_owned(),
-                });
-            }
-            None => decoder_from_encoding(encoding.as_ref())?,
-        };
-        let cid_identity = match &descendant {
-            Some(descendant) => {
-                if !matches!(encoding.as_ref(), Some(Value::Name(name)) if name == "Identity-H") {
-                    return Err(DocsightError::UnsupportedFeature {
-                        feature: "CID metrics require Identity-H font encoding".to_owned(),
-                    });
-                }
-                match descendant.get("CIDToGIDMap") {
-                    None => {}
-                    Some(Value::Name(name)) if name == "Identity" => {}
-                    Some(_) => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF CIDToGIDMap streams".to_owned(),
-                        });
-                    }
-                }
-                true
-            }
-            None => false,
-        };
-        let cid_widths = match &descendant {
-            Some(descendant) => Some(CidWidths::parse(descendant, &resolve)?),
-            None => None,
-        };
         let descriptor_value = dict.get("FontDescriptor").or_else(|| {
             descendant
                 .as_ref()
@@ -2237,6 +2227,79 @@ pub(crate) fn fonts_from_resources(
             }
             None => None,
         };
+        let encoding = match dict.get("Encoding") {
+            Some(value) => Some(resolve(value)?),
+            None => None,
+        };
+        let decoder = match dict.get("ToUnicode").or_else(|| {
+            descendant
+                .as_ref()
+                .and_then(|descendant| descendant.get("ToUnicode"))
+        }) {
+            Some(value) => FontDecoder::ToUnicode(parse_to_unicode(&decode_stream_value(value)?)?),
+            None if subtype == "Type0" => match &outline {
+                Some(program) if program.has_glyph_unicode() => {
+                    FontDecoder::GlyphIdentity(Arc::clone(program))
+                }
+                _ => {
+                    return Err(DocsightError::UnsupportedFeature {
+                        feature: "Type0 PDF font without ToUnicode CMap".to_owned(),
+                    });
+                }
+            },
+            None if subtype == "TrueType" && !dict.contains_key("Encoding") => {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: "TrueType PDF font without ToUnicode or an explicit encoding"
+                        .to_owned(),
+                });
+            }
+            None if subtype == "Type3" && !dict.contains_key("Encoding") => {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: "Type3 PDF font without ToUnicode or an explicit encoding".to_owned(),
+                });
+            }
+            None => decoder_from_encoding(encoding.as_ref())?,
+        };
+        let mut cid_to_gid = None;
+        let cid_identity = match &descendant {
+            Some(descendant) => {
+                if !matches!(encoding.as_ref(), Some(Value::Name(name)) if name == "Identity-H") {
+                    return Err(DocsightError::UnsupportedFeature {
+                        feature: "CID metrics require Identity-H font encoding".to_owned(),
+                    });
+                }
+                cid_to_gid = match descendant.get("CIDToGIDMap") {
+                    None => None,
+                    Some(Value::Name(name)) if name == "Identity" => None,
+                    Some(value) => {
+                        let table = decode_stream_value(value)?;
+                        if !table.len().is_multiple_of(2) {
+                            return Err(malformed(
+                                "CIDToGIDMap stream must hold two bytes per CID",
+                            ));
+                        }
+                        if table.len() / 2 > MAX_CID_TO_GID_ENTRIES {
+                            return Err(DocsightError::ResourceLimit {
+                                resource: "PDF CIDToGIDMap entries".to_owned(),
+                                limit: MAX_CID_TO_GID_ENTRIES as u64,
+                            });
+                        }
+                        Some(Arc::new(
+                            table
+                                .chunks_exact(2)
+                                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                                .collect::<Vec<u16>>(),
+                        ))
+                    }
+                };
+                true
+            }
+            None => false,
+        };
+        let cid_widths = match &descendant {
+            Some(descendant) => Some(CidWidths::parse(descendant, &resolve)?),
+            None => None,
+        };
         fonts.insert(
             resource_name,
             FontInfo {
@@ -2246,6 +2309,7 @@ pub(crate) fn fonts_from_resources(
                 cid_widths,
                 outline,
                 cid_identity,
+                cid_to_gid,
             },
         );
     }
@@ -2383,9 +2447,7 @@ pub(crate) fn ext_graphics_states_from_resources(
                 "OP" | "op" => match resolve(&value)? {
                     Value::Bool(false) => {}
                     Value::Bool(true) => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF overprint rendering".to_owned(),
-                        });
+                        state.ignored_keys.insert(key);
                     }
                     _ => return Err(malformed("ExtGState overprint value must be boolean")),
                 },
@@ -2638,6 +2700,29 @@ impl FontDecoder {
         match self {
             Self::Ascii => decode_ascii(bytes),
             Self::WinAnsi => decode_win_ansi(bytes),
+            Self::Simple(encoding) => bytes
+                .iter()
+                .map(|byte| {
+                    encoding.characters[usize::from(*byte)].ok_or_else(|| {
+                        DocsightError::UnsupportedFeature {
+                            feature: format!("PDF font encoding has no glyph for code {byte}"),
+                        }
+                    })
+                })
+                .collect(),
+            Self::GlyphIdentity(program) => {
+                if !bytes.len().is_multiple_of(2) {
+                    return Err(malformed(
+                        "Identity-H text requires two-byte character codes",
+                    ));
+                }
+                Ok(bytes
+                    .chunks_exact(2)
+                    .filter_map(|code| {
+                        program.unicode_for_glyph(u16::from_be_bytes([code[0], code[1]]))
+                    })
+                    .collect())
+            }
             Self::ToUnicode(map) => map.decode(bytes),
         }
     }
@@ -2654,9 +2739,10 @@ impl ToUnicodeMap {
                 self.mappings.get(code).map(|value| (*length, value))
             });
             let Some((length, value)) = mapping else {
-                return Err(DocsightError::UnsupportedFeature {
-                    feature: "PDF text code missing from ToUnicode CMap".to_owned(),
-                });
+                let skip = self.code_lengths.iter().copied().min().unwrap_or(1).max(1);
+                output.push(char::REPLACEMENT_CHARACTER);
+                cursor = cursor.saturating_add(skip);
+                continue;
             };
             output.push_str(value);
             cursor += length;
@@ -2672,9 +2758,7 @@ fn decoder_from_encoding(encoding: Option<&Value>) -> Result<FontDecoder, Docsig
         Some(Value::Name(name)) => Err(DocsightError::UnsupportedFeature {
             feature: format!("PDF font encoding {name}"),
         }),
-        Some(Value::Dict(_)) => Err(DocsightError::UnsupportedFeature {
-            feature: "PDF font encoding differences".to_owned(),
-        }),
+        Some(Value::Dict(dict)) => simple_encoding(dict),
         Some(_) => Err(malformed("font Encoding must be a name or dictionary")),
     }
 }
@@ -2690,6 +2774,326 @@ fn decode_ascii(bytes: &[u8]) -> Result<String, DocsightError> {
 
 fn decode_win_ansi(bytes: &[u8]) -> Result<String, DocsightError> {
     bytes.iter().map(|byte| win_ansi_character(*byte)).collect()
+}
+
+const GLYPH_NAMES: &[(&str, char)] = &[
+    ("A", '\u{41}'),
+    ("AE", '\u{c6}'),
+    ("Aacute", '\u{c1}'),
+    ("Acircumflex", '\u{c2}'),
+    ("Adieresis", '\u{c4}'),
+    ("Agrave", '\u{c0}'),
+    ("Aring", '\u{c5}'),
+    ("Atilde", '\u{c3}'),
+    ("B", '\u{42}'),
+    ("C", '\u{43}'),
+    ("Ccedilla", '\u{c7}'),
+    ("D", '\u{44}'),
+    ("Delta", '\u{2206}'),
+    ("E", '\u{45}'),
+    ("Eacute", '\u{c9}'),
+    ("Ecircumflex", '\u{ca}'),
+    ("Edieresis", '\u{cb}'),
+    ("Egrave", '\u{c8}'),
+    ("Eth", '\u{d0}'),
+    ("Euro", '\u{20ac}'),
+    ("F", '\u{46}'),
+    ("G", '\u{47}'),
+    ("H", '\u{48}'),
+    ("I", '\u{49}'),
+    ("Iacute", '\u{cd}'),
+    ("Icircumflex", '\u{ce}'),
+    ("Idieresis", '\u{cf}'),
+    ("Igrave", '\u{cc}'),
+    ("J", '\u{4a}'),
+    ("K", '\u{4b}'),
+    ("L", '\u{4c}'),
+    ("Lslash", '\u{141}'),
+    ("M", '\u{4d}'),
+    ("N", '\u{4e}'),
+    ("Ntilde", '\u{d1}'),
+    ("O", '\u{4f}'),
+    ("OE", '\u{152}'),
+    ("Oacute", '\u{d3}'),
+    ("Ocircumflex", '\u{d4}'),
+    ("Odieresis", '\u{d6}'),
+    ("Ograve", '\u{d2}'),
+    ("Omega", '\u{3a9}'),
+    ("Oslash", '\u{d8}'),
+    ("Otilde", '\u{d5}'),
+    ("P", '\u{50}'),
+    ("Q", '\u{51}'),
+    ("R", '\u{52}'),
+    ("S", '\u{53}'),
+    ("Scaron", '\u{160}'),
+    ("T", '\u{54}'),
+    ("Thorn", '\u{de}'),
+    ("U", '\u{55}'),
+    ("Uacute", '\u{da}'),
+    ("Ucircumflex", '\u{db}'),
+    ("Udieresis", '\u{dc}'),
+    ("Ugrave", '\u{d9}'),
+    ("V", '\u{56}'),
+    ("W", '\u{57}'),
+    ("X", '\u{58}'),
+    ("Y", '\u{59}'),
+    ("Yacute", '\u{dd}'),
+    ("Ydieresis", '\u{178}'),
+    ("Z", '\u{5a}'),
+    ("Zcaron", '\u{17d}'),
+    ("a", '\u{61}'),
+    ("aacute", '\u{e1}'),
+    ("acircumflex", '\u{e2}'),
+    ("acute", '\u{b4}'),
+    ("adieresis", '\u{e4}'),
+    ("ae", '\u{e6}'),
+    ("agrave", '\u{e0}'),
+    ("ampersand", '\u{26}'),
+    ("apple", '\u{f8ff}'),
+    ("approxequal", '\u{2248}'),
+    ("aring", '\u{e5}'),
+    ("arrowleft", '\u{2190}'),
+    ("arrowright", '\u{2192}'),
+    ("asciicircum", '\u{5e}'),
+    ("asciitilde", '\u{7e}'),
+    ("asterisk", '\u{2a}'),
+    ("at", '\u{40}'),
+    ("atilde", '\u{e3}'),
+    ("b", '\u{62}'),
+    ("backslash", '\u{5c}'),
+    ("bar", '\u{7c}'),
+    ("braceleft", '\u{7b}'),
+    ("braceright", '\u{7d}'),
+    ("bracketleft", '\u{5b}'),
+    ("bracketright", '\u{5d}'),
+    ("breve", '\u{2d8}'),
+    ("brokenbar", '\u{a6}'),
+    ("bullet", '\u{2022}'),
+    ("bullet3", '\u{2022}'),
+    ("c", '\u{63}'),
+    ("caron", '\u{2c7}'),
+    ("ccedilla", '\u{e7}'),
+    ("cedilla", '\u{b8}'),
+    ("cent", '\u{a2}'),
+    ("circumflex", '\u{2c6}'),
+    ("colon", '\u{3a}'),
+    ("comma", '\u{2c}'),
+    ("copyright", '\u{a9}'),
+    ("currency", '\u{a4}'),
+    ("d", '\u{64}'),
+    ("dagger", '\u{2020}'),
+    ("daggerdbl", '\u{2021}'),
+    ("degree", '\u{b0}'),
+    ("dieresis", '\u{a8}'),
+    ("divide", '\u{f7}'),
+    ("dollar", '\u{24}'),
+    ("dotaccent", '\u{2d9}'),
+    ("dotlessi", '\u{131}'),
+    ("e", '\u{65}'),
+    ("eacute", '\u{e9}'),
+    ("ecircumflex", '\u{ea}'),
+    ("edieresis", '\u{eb}'),
+    ("egrave", '\u{e8}'),
+    ("eight", '\u{38}'),
+    ("ellipsis", '\u{2026}'),
+    ("emdash", '\u{2014}'),
+    ("endash", '\u{2013}'),
+    ("equal", '\u{3d}'),
+    ("eth", '\u{f0}'),
+    ("exclam", '\u{21}'),
+    ("exclamdown", '\u{a1}'),
+    ("f", '\u{66}'),
+    ("fi", '\u{fb01}'),
+    ("five", '\u{35}'),
+    ("fl", '\u{fb02}'),
+    ("florin", '\u{192}'),
+    ("four", '\u{34}'),
+    ("fraction", '\u{2044}'),
+    ("g", '\u{67}'),
+    ("germandbls", '\u{df}'),
+    ("grave", '\u{60}'),
+    ("greater", '\u{3e}'),
+    ("greaterequal", '\u{2265}'),
+    ("guillemotleft", '\u{ab}'),
+    ("guillemotright", '\u{bb}'),
+    ("guilsinglleft", '\u{2039}'),
+    ("guilsinglright", '\u{203a}'),
+    ("h", '\u{68}'),
+    ("hungarumlaut", '\u{2dd}'),
+    ("hyphen", '\u{2d}'),
+    ("hyphensoft", '\u{ad}'),
+    ("i", '\u{69}'),
+    ("iacute", '\u{ed}'),
+    ("icircumflex", '\u{ee}'),
+    ("idieresis", '\u{ef}'),
+    ("igrave", '\u{ec}'),
+    ("infinity", '\u{221e}'),
+    ("integral", '\u{222b}'),
+    ("j", '\u{6a}'),
+    ("k", '\u{6b}'),
+    ("l", '\u{6c}'),
+    ("less", '\u{3c}'),
+    ("lessequal", '\u{2264}'),
+    ("logicalnot", '\u{ac}'),
+    ("lozenge", '\u{25ca}'),
+    ("lslash", '\u{142}'),
+    ("m", '\u{6d}'),
+    ("macron", '\u{af}'),
+    ("minus", '\u{2212}'),
+    ("mu", '\u{b5}'),
+    ("multiply", '\u{d7}'),
+    ("n", '\u{6e}'),
+    ("nbspace", '\u{a0}'),
+    ("nine", '\u{39}'),
+    ("notequal", '\u{2260}'),
+    ("nsuperior", '\u{207f}'),
+    ("ntilde", '\u{f1}'),
+    ("numbersign", '\u{23}'),
+    ("o", '\u{6f}'),
+    ("oacute", '\u{f3}'),
+    ("ocircumflex", '\u{f4}'),
+    ("odieresis", '\u{f6}'),
+    ("oe", '\u{153}'),
+    ("ogonek", '\u{2db}'),
+    ("ograve", '\u{f2}'),
+    ("one", '\u{31}'),
+    ("onehalf", '\u{bd}'),
+    ("onequarter", '\u{bc}'),
+    ("onesuperior", '\u{b9}'),
+    ("ordfeminine", '\u{aa}'),
+    ("ordmasculine", '\u{ba}'),
+    ("oslash", '\u{f8}'),
+    ("otilde", '\u{f5}'),
+    ("p", '\u{70}'),
+    ("paragraph", '\u{b6}'),
+    ("parenleft", '\u{28}'),
+    ("parenright", '\u{29}'),
+    ("partialdiff", '\u{2202}'),
+    ("percent", '\u{25}'),
+    ("period", '\u{2e}'),
+    ("periodcentered", '\u{b7}'),
+    ("perthousand", '\u{2030}'),
+    ("pi", '\u{3c0}'),
+    ("plus", '\u{2b}'),
+    ("plusminus", '\u{b1}'),
+    ("product", '\u{220f}'),
+    ("q", '\u{71}'),
+    ("question", '\u{3f}'),
+    ("questiondown", '\u{bf}'),
+    ("quotedbl", '\u{22}'),
+    ("quotedblbase", '\u{201e}'),
+    ("quotedblleft", '\u{201c}'),
+    ("quotedblright", '\u{201d}'),
+    ("quoteleft", '\u{2018}'),
+    ("quoteright", '\u{2019}'),
+    ("quotesinglbase", '\u{201a}'),
+    ("quotesingle", '\u{27}'),
+    ("r", '\u{72}'),
+    ("radical", '\u{221a}'),
+    ("registered", '\u{ae}'),
+    ("ring", '\u{2da}'),
+    ("s", '\u{73}'),
+    ("scaron", '\u{161}'),
+    ("section", '\u{a7}'),
+    ("semicolon", '\u{3b}'),
+    ("seven", '\u{37}'),
+    ("six", '\u{36}'),
+    ("slash", '\u{2f}'),
+    ("space", '\u{20}'),
+    ("sterling", '\u{a3}'),
+    ("summation", '\u{2211}'),
+    ("t", '\u{74}'),
+    ("thorn", '\u{fe}'),
+    ("three", '\u{33}'),
+    ("threequarters", '\u{be}'),
+    ("threesuperior", '\u{b3}'),
+    ("tilde", '\u{2dc}'),
+    ("trademark", '\u{2122}'),
+    ("trademarkserif", '\u{2122}'),
+    ("two", '\u{32}'),
+    ("twosuperior", '\u{b2}'),
+    ("u", '\u{75}'),
+    ("uacute", '\u{fa}'),
+    ("ucircumflex", '\u{fb}'),
+    ("udieresis", '\u{fc}'),
+    ("ugrave", '\u{f9}'),
+    ("underscore", '\u{5f}'),
+    ("v", '\u{76}'),
+    ("w", '\u{77}'),
+    ("x", '\u{78}'),
+    ("y", '\u{79}'),
+    ("yacute", '\u{fd}'),
+    ("ydieresis", '\u{ff}'),
+    ("yen", '\u{a5}'),
+    ("z", '\u{7a}'),
+    ("zcaron", '\u{17e}'),
+    ("zero", '\u{30}'),
+];
+
+fn glyph_name_character(name: &str) -> Option<char> {
+    if let Some(rest) = name.strip_prefix("uni")
+        && rest.len() >= 4
+        && let Ok(code) = u32::from_str_radix(&rest[..4], 16)
+    {
+        return char::from_u32(code);
+    }
+    if let Some(rest) = name.strip_prefix('u')
+        && (4..=6).contains(&rest.len())
+        && let Ok(code) = u32::from_str_radix(rest, 16)
+    {
+        return char::from_u32(code);
+    }
+    let base = name.split_once('.').map_or(name, |(head, _)| head);
+    GLYPH_NAMES
+        .binary_search_by(|(candidate, _)| (*candidate).cmp(base))
+        .ok()
+        .map(|index| GLYPH_NAMES[index].1)
+}
+
+fn simple_encoding(dict: &BTreeMap<String, Value>) -> Result<FontDecoder, DocsightError> {
+    let mut characters = [None; 256];
+    match dict.get("BaseEncoding") {
+        Some(Value::Name(name)) if name == "MacRomanEncoding" => {
+            for (index, slot) in characters.iter_mut().enumerate() {
+                *slot = mac_roman_character(index as u8);
+            }
+        }
+        _ => {
+            for (index, slot) in characters.iter_mut().enumerate() {
+                *slot = win_ansi_character(index as u8).ok();
+            }
+        }
+    }
+    if let Some(value) = dict.get("Differences") {
+        let Value::Array(items) = value else {
+            return Err(malformed("font Encoding Differences must be an array"));
+        };
+        let mut code: Option<usize> = None;
+        for item in items {
+            match item {
+                Value::Int(start) if *start >= 0 && *start < 256 => code = Some(*start as usize),
+                Value::Int(_) => return Err(malformed("Differences code is out of range")),
+                Value::Name(name) => {
+                    let slot = code
+                        .ok_or_else(|| malformed("Differences must start with a character code"))?;
+                    if slot >= 256 {
+                        return Err(malformed("Differences code is out of range"));
+                    }
+                    characters[slot] = glyph_name_character(name);
+                    code = Some(slot + 1);
+                }
+                _ => return Err(malformed("Differences must hold codes and glyph names")),
+            }
+        }
+    }
+    Ok(FontDecoder::Simple(Arc::new(SimpleEncoding { characters })))
+}
+
+fn mac_roman_character(byte: u8) -> Option<char> {
+    if byte < 0x80 {
+        return char::from_u32(u32::from(byte));
+    }
+    crate::font::mac_roman_high(byte)
 }
 
 fn win_ansi_character(byte: u8) -> Result<char, DocsightError> {
@@ -2921,9 +3325,7 @@ fn cmap_hex(tokens: &[CMapToken], cursor: usize) -> Result<&[u8], DocsightError>
 
 fn decode_utf16be(bytes: &[u8]) -> Result<String, DocsightError> {
     if bytes.is_empty() {
-        return Err(DocsightError::UnsupportedFeature {
-            feature: "empty PDF ToUnicode mapping".to_owned(),
-        });
+        return Ok(String::new());
     }
     if !bytes.len().is_multiple_of(2) {
         return Err(malformed("ToUnicode target must be UTF-16BE"));

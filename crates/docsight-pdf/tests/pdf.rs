@@ -1089,3 +1089,77 @@ fn ascii85_encode(data: &[u8]) -> String {
     out.push_str("~>");
     out
 }
+
+#[test]
+fn inline_dictionary_values_do_not_confuse_the_tokenizer() -> Result<(), Box<dyn std::error::Error>>
+{
+    let content = concat!(
+        "/Span<</ActualText<FEFF00A0>>>BDC\n",
+        "BT /F1 12 Tf 20 70 Td (Marked) Tj ET\n",
+        "EMC\n",
+        "/Span<</Alt(a>>b)/Nested<</Deep<AB>>>>>BDC\n",
+        "BT /F1 12 Tf 20 40 Td (Nested) Tj ET\n",
+        "EMC"
+    );
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let text = document
+        .paragraphs()
+        .map(|(_, paragraph)| paragraph.text.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(text.contains("Marked"), "got {text:?}");
+    assert!(text.contains("Nested"), "got {text:?}");
+    Ok(())
+}
+
+#[test]
+fn overprint_is_recorded_as_a_visual_limitation_instead_of_failing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let content = "/GS0 gs 0 0 0 rg 10 10 100 50 re f";
+    let source = DocumentSource::from_bytes(build_pdf_with_extgstate(content))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("OP") || warning.code.contains("PDF")),
+        "overprint must surface as a diagnostic: {:?}",
+        document.warnings
+    );
+    Ok(())
+}
+
+fn build_pdf_with_extgstate(content: &str) -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /ExtGState << /GS0 << /Type /ExtGState /OP true /op true >> >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{}\nendstream",
+            content.len(),
+            content
+        ),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}

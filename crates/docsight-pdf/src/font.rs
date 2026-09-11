@@ -30,6 +30,9 @@ pub(crate) struct FontProgram {
     glyf_offset: usize,
     hmtx_offset: usize,
     cmap: BTreeMap<u32, u16>,
+    code_cmap: BTreeMap<u32, u16>,
+    code_first: bool,
+    glyph_to_unicode: BTreeMap<u16, char>,
 }
 
 impl FontProgram {
@@ -104,9 +107,13 @@ impl FontProgram {
             }
             loca.push(value);
         }
-        let cmap = match tables.get(b"cmap") {
+        let CharacterMap {
+            unicode: cmap,
+            codes: code_cmap,
+            code_first,
+        } = match tables.get(b"cmap") {
             Some(_) => parse_cmap(&data, &tables)?,
-            None => BTreeMap::new(),
+            None => CharacterMap::default(),
         };
         let sha256 = Sha256::digest(&data)
             .iter()
@@ -121,8 +128,19 @@ impl FontProgram {
             loca,
             glyf_offset: glyf,
             hmtx_offset: hmtx,
+            glyph_to_unicode: invert_cmap(&cmap),
             cmap,
+            code_cmap,
+            code_first,
         })
+    }
+
+    pub(crate) fn unicode_for_glyph(&self, glyph: u16) -> Option<char> {
+        self.glyph_to_unicode.get(&glyph).copied()
+    }
+
+    pub(crate) fn has_glyph_unicode(&self) -> bool {
+        !self.glyph_to_unicode.is_empty()
     }
 
     pub(crate) fn sha256(&self) -> &str {
@@ -132,7 +150,9 @@ impl FontProgram {
     pub(crate) fn glyph_for_char(&self, character: char) -> Result<u16, DocsightError> {
         self.cmap.get(&(character as u32)).copied().ok_or_else(|| {
             DocsightError::UnsupportedFeature {
-                feature: format!("embedded TrueType cmap has no character {character:?}"),
+                feature: format!(
+                    "embedded TrueType cmap has no character {character:?} and the text does not align with its byte codes"
+                ),
             }
         })
     }
@@ -162,6 +182,7 @@ impl FontProgram {
     pub(crate) fn glyphs_for_identity(
         &self,
         bytes: &[u8],
+        cid_to_gid: Option<&[u16]>,
     ) -> Result<Vec<GlyphOutline>, DocsightError> {
         if !bytes.len().is_multiple_of(2) {
             return Err(malformed(
@@ -170,14 +191,64 @@ impl FontProgram {
         }
         bytes
             .chunks_exact(2)
-            .map(|code| self.glyph(u16::from_be_bytes([code[0], code[1]])))
+            .map(|code| {
+                let cid = u16::from_be_bytes([code[0], code[1]]);
+                let glyph = match cid_to_gid {
+                    Some(table) => table.get(usize::from(cid)).copied().ok_or_else(|| {
+                        malformed(format!("CIDToGIDMap has no entry for CID {cid}"))
+                    })?,
+                    None => cid,
+                };
+                self.glyph(glyph)
+            })
             .collect()
     }
 
-    pub(crate) fn glyphs_for_text(&self, text: &str) -> Result<Vec<GlyphOutline>, DocsightError> {
-        text.chars()
-            .map(|character| self.glyph(self.glyph_for_char(character)?))
+    pub(crate) fn glyphs_for_simple_text(
+        &self,
+        bytes: &[u8],
+        text: &str,
+    ) -> Result<Vec<GlyphOutline>, DocsightError> {
+        let characters: Vec<char> = text.chars().collect();
+        let aligned = characters.len() == bytes.len();
+        if !aligned && !self.code_first {
+            return characters
+                .into_iter()
+                .map(|character| self.glyph(self.glyph_for_char(character)?))
+                .collect();
+        }
+        bytes
+            .iter()
+            .enumerate()
+            .map(|(index, code)| {
+                let character = aligned.then(|| characters[index]);
+                self.glyph(self.glyph_id(u32::from(*code), character)?)
+            })
             .collect()
+    }
+
+    fn glyph_id(&self, code: u32, character: Option<char>) -> Result<u16, DocsightError> {
+        if self.code_first
+            && let Some(glyph) = self
+                .code_cmap
+                .get(&(0xf000 | code))
+                .or_else(|| self.code_cmap.get(&code))
+        {
+            return Ok(*glyph);
+        }
+        if let Some(character) = character
+            && let Some(glyph) = self.cmap.get(&(character as u32))
+        {
+            return Ok(*glyph);
+        }
+        Err(DocsightError::UnsupportedFeature {
+            feature: match character {
+                Some(character) => format!(
+                    "embedded TrueType cmap maps neither code {code} nor character {character:?}"
+                ),
+                None => format!("embedded TrueType cmap has no code {code}"),
+            },
+        })
     }
 
     fn advance(&self, glyph_id: u16) -> Result<f32, DocsightError> {
@@ -221,23 +292,54 @@ struct Table {
     length: usize,
 }
 
-fn tables(data: &[u8]) -> Result<BTreeMap<[u8; 4], Table>, DocsightError> {
-    if data.len() < 12 || &data[0..4] != b"\x00\x01\x00\x00" {
+fn sfnt_directory(data: &[u8]) -> Result<usize, DocsightError> {
+    if data.len() < 12 {
         return Err(DocsightError::UnsupportedFeature {
             feature: "embedded font is not a TrueType sfnt".to_owned(),
         });
     }
-    let count = usize::from(u16_at(data, 4)?);
+    match &data[0..4] {
+        b"\x00\x01\x00\x00" | b"true" | b"ttcf" => {}
+        b"OTTO" => {
+            return Err(DocsightError::UnsupportedFeature {
+                feature: "embedded OpenType font with CFF outlines".to_owned(),
+            });
+        }
+        _ => {
+            return Err(DocsightError::UnsupportedFeature {
+                feature: "embedded font is not a TrueType sfnt".to_owned(),
+            });
+        }
+    }
+    if &data[0..4] != b"ttcf" {
+        return Ok(0);
+    }
+    let fonts = u32_at(data, 8)?;
+    if fonts == 0 {
+        return Err(malformed("TrueType collection declares no fonts"));
+    }
+    let offset = usize::try_from(u32_at(data, 12)?)
+        .map_err(|_| malformed("TrueType collection offset overflow"))?;
+    if offset.checked_add(12).is_none_or(|end| end > data.len()) {
+        return Err(malformed("TrueType collection offset is out of range"));
+    }
+    Ok(offset)
+}
+
+fn tables(data: &[u8]) -> Result<BTreeMap<[u8; 4], Table>, DocsightError> {
+    let base = sfnt_directory(data)?;
+    let count = usize::from(u16_at(data, base + 4)?);
     let directory_len = count
         .checked_mul(16)
         .and_then(|value| value.checked_add(12))
+        .and_then(|value| value.checked_add(base))
         .ok_or_else(|| malformed("TrueType table directory overflow"))?;
     if directory_len > data.len() {
         return Err(malformed("TrueType table directory is truncated"));
     }
     let mut result = BTreeMap::new();
     for index in 0..count {
-        let offset = 12 + index * 16;
+        let offset = base + 12 + index * 16;
         let tag = [
             data[offset],
             data[offset + 1],
@@ -285,10 +387,17 @@ fn required_table(
     Ok((table.offset, table.length))
 }
 
+#[derive(Default)]
+struct CharacterMap {
+    unicode: BTreeMap<u32, u16>,
+    codes: BTreeMap<u32, u16>,
+    code_first: bool,
+}
+
 fn parse_cmap(
     data: &[u8],
     tables: &BTreeMap<[u8; 4], Table>,
-) -> Result<BTreeMap<u32, u16>, DocsightError> {
+) -> Result<CharacterMap, DocsightError> {
     let (offset, length) = required_table(tables, b"cmap")?;
     if length < 4 {
         return Err(malformed("TrueType cmap table is truncated"));
@@ -317,22 +426,152 @@ fn parse_cmap(
             (0, _, 12) => 1,
             (3, 1, 4) => 2,
             (0, _, 4) => 3,
+            (3, 0, 4) => 4,
+            (1, 0, 6) => 5,
+            (1, 0, 0) => 6,
             _ => continue,
         };
-        if selected.map(|(old, _)| rank < old).unwrap_or(true) {
-            selected = Some((rank, absolute));
+        if selected.map(|(old, _, _, _)| rank < old).unwrap_or(true) {
+            selected = Some((rank, absolute, platform, encoding));
         }
     }
-    let (_, offset) = selected.ok_or_else(|| DocsightError::UnsupportedFeature {
-        feature: "embedded TrueType font has no supported cmap".to_owned(),
-    })?;
-    match u16_at(data, offset)? {
-        4 => parse_cmap4(data, offset),
-        12 => parse_cmap12(data, offset),
-        _ => Err(DocsightError::UnsupportedFeature {
-            feature: "embedded TrueType cmap format".to_owned(),
-        }),
+    let (_, offset, platform, encoding) =
+        selected.ok_or_else(|| DocsightError::UnsupportedFeature {
+            feature: "embedded TrueType font has no supported cmap".to_owned(),
+        })?;
+    let raw = match u16_at(data, offset)? {
+        0 => parse_cmap0(data, offset)?,
+        4 => parse_cmap4(data, offset)?,
+        6 => parse_cmap6(data, offset)?,
+        12 => parse_cmap12(data, offset)?,
+        _ => {
+            return Err(DocsightError::UnsupportedFeature {
+                feature: "embedded TrueType cmap format".to_owned(),
+            });
+        }
+    };
+    Ok(CharacterMap {
+        unicode: recode_cmap(raw.clone(), platform, encoding),
+        codes: raw,
+        code_first: matches!(platform, 1) || matches!((platform, encoding), (3, 0)),
+    })
+}
+
+const MAC_ROMAN_HIGH: [char; 128] = [
+    '\u{c4}', '\u{c5}', '\u{c7}', '\u{c9}', '\u{d1}', '\u{d6}', '\u{dc}', '\u{e1}', '\u{e0}',
+    '\u{e2}', '\u{e4}', '\u{e3}', '\u{e5}', '\u{e7}', '\u{e9}', '\u{e8}', '\u{ea}', '\u{eb}',
+    '\u{ed}', '\u{ec}', '\u{ee}', '\u{ef}', '\u{f1}', '\u{f3}', '\u{f2}', '\u{f4}', '\u{f6}',
+    '\u{f5}', '\u{fa}', '\u{f9}', '\u{fb}', '\u{fc}', '\u{2020}', '\u{b0}', '\u{a2}', '\u{a3}',
+    '\u{a7}', '\u{2022}', '\u{b6}', '\u{df}', '\u{ae}', '\u{a9}', '\u{2122}', '\u{b4}', '\u{a8}',
+    '\u{2260}', '\u{c6}', '\u{d8}', '\u{221e}', '\u{b1}', '\u{2264}', '\u{2265}', '\u{a5}',
+    '\u{b5}', '\u{2202}', '\u{2211}', '\u{220f}', '\u{3c0}', '\u{222b}', '\u{aa}', '\u{ba}',
+    '\u{3a9}', '\u{e6}', '\u{f8}', '\u{bf}', '\u{a1}', '\u{ac}', '\u{221a}', '\u{192}', '\u{2248}',
+    '\u{2206}', '\u{ab}', '\u{bb}', '\u{2026}', '\u{a0}', '\u{c0}', '\u{c3}', '\u{d5}', '\u{152}',
+    '\u{153}', '\u{2013}', '\u{2014}', '\u{201c}', '\u{201d}', '\u{2018}', '\u{2019}', '\u{f7}',
+    '\u{25ca}', '\u{ff}', '\u{178}', '\u{2044}', '\u{20ac}', '\u{2039}', '\u{203a}', '\u{fb01}',
+    '\u{fb02}', '\u{2021}', '\u{b7}', '\u{201a}', '\u{201e}', '\u{2030}', '\u{c2}', '\u{ca}',
+    '\u{c1}', '\u{cb}', '\u{c8}', '\u{cd}', '\u{ce}', '\u{cf}', '\u{cc}', '\u{d3}', '\u{d4}',
+    '\u{f8ff}', '\u{d2}', '\u{da}', '\u{db}', '\u{d9}', '\u{131}', '\u{2c6}', '\u{2dc}', '\u{af}',
+    '\u{2d8}', '\u{2d9}', '\u{2da}', '\u{b8}', '\u{2dd}', '\u{2db}', '\u{2c7}',
+];
+
+pub(crate) fn mac_roman_high(byte: u8) -> Option<char> {
+    (byte >= 0x80).then(|| MAC_ROMAN_HIGH[usize::from(byte - 0x80)])
+}
+
+fn invert_cmap(cmap: &BTreeMap<u32, u16>) -> BTreeMap<u16, char> {
+    let mut inverted: BTreeMap<u16, char> = BTreeMap::new();
+    for (code, glyph) in cmap {
+        let Some(character) = char::from_u32(*code) else {
+            continue;
+        };
+        inverted
+            .entry(*glyph)
+            .and_modify(|existing| {
+                if character < *existing {
+                    *existing = character;
+                }
+            })
+            .or_insert(character);
     }
+    inverted
+}
+
+fn recode_cmap(raw: BTreeMap<u32, u16>, platform: u16, encoding: u16) -> BTreeMap<u32, u16> {
+    match (platform, encoding) {
+        (1, _) => raw
+            .into_iter()
+            .map(|(code, glyph)| {
+                let code = match u8::try_from(code) {
+                    Ok(byte) if byte >= 0x80 => MAC_ROMAN_HIGH[usize::from(byte - 0x80)] as u32,
+                    _ => code,
+                };
+                (code, glyph)
+            })
+            .collect(),
+        (3, 0) => {
+            let mut mapped = BTreeMap::new();
+            for (code, glyph) in raw {
+                mapped.insert(code, glyph);
+                if (0xf000..=0xf0ff).contains(&code) {
+                    mapped.entry(code - 0xf000).or_insert(glyph);
+                }
+            }
+            mapped
+        }
+        _ => raw,
+    }
+}
+
+fn parse_cmap0(data: &[u8], offset: usize) -> Result<BTreeMap<u32, u16>, DocsightError> {
+    let end = offset
+        .checked_add(262)
+        .ok_or_else(|| malformed("TrueType cmap format 0 overflow"))?;
+    if end > data.len() {
+        return Err(malformed("TrueType cmap format 0 table is truncated"));
+    }
+    let mut map = BTreeMap::new();
+    for code in 0_u32..256 {
+        let glyph = u16::from(data[offset + 6 + code as usize]);
+        if glyph != 0 {
+            map.insert(code, glyph);
+        }
+    }
+    Ok(map)
+}
+
+fn parse_cmap6(data: &[u8], offset: usize) -> Result<BTreeMap<u32, u16>, DocsightError> {
+    let first = u32::from(u16_at(data, offset + 6)?);
+    let count = usize::from(u16_at(data, offset + 8)?);
+    if count > MAX_CMAP_ENTRIES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "TrueType cmap entries".to_owned(),
+            limit: MAX_CMAP_ENTRIES as u64,
+        });
+    }
+    let end = offset
+        .checked_add(10)
+        .and_then(|value| {
+            count
+                .checked_mul(2)
+                .and_then(|size| value.checked_add(size))
+        })
+        .ok_or_else(|| malformed("TrueType cmap format 6 overflow"))?;
+    if end > data.len() {
+        return Err(malformed("TrueType cmap format 6 table is truncated"));
+    }
+    let mut map = BTreeMap::new();
+    for index in 0..count {
+        let glyph = u16_at(data, offset + 10 + index * 2)?;
+        if glyph == 0 {
+            continue;
+        }
+        let code = first
+            .checked_add(index as u32)
+            .ok_or_else(|| malformed("TrueType cmap format 6 code overflow"))?;
+        map.insert(code, glyph);
+    }
+    Ok(map)
 }
 
 fn parse_cmap4(data: &[u8], offset: usize) -> Result<BTreeMap<u32, u16>, DocsightError> {
