@@ -5,14 +5,6 @@ use crate::SandboxPolicy;
 use docsight_core::DocsightError;
 use std::process::{Command, Stdio};
 
-pub fn apply_address_space_limit(limit_bytes: u64) -> bool {
-    let limit = libc::rlimit {
-        rlim_cur: limit_bytes as libc::rlim_t,
-        rlim_max: limit_bytes as libc::rlim_t,
-    };
-    unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) == 0 }
-}
-
 pub fn apply_cpu_limit(policy: &SandboxPolicy) -> bool {
     let cpu_hard = policy.cpu_timeout_secs.saturating_add(5);
     let cpu_limit = libc::rlimit {

@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::posix::{apply_address_space_limit, apply_cpu_limit, parse_paths};
+use super::posix::{apply_cpu_limit, parse_paths};
 use super::sandbox_failure;
 use crate::{
     SANDBOX_READ_PATHS_ENV, SANDBOX_TEMP_PATH_ENV, SANDBOX_WRITE_PATHS_ENV, SandboxLimitsReport,
@@ -33,6 +33,14 @@ pub fn apply_resource_limits(policy: &SandboxPolicy) -> Result<SandboxLimitsRepo
         ));
     }
     Ok(report)
+}
+
+fn apply_address_space_limit(limit_bytes: u64) -> bool {
+    let limit = libc::rlimit {
+        rlim_cur: limit_bytes as libc::rlim_t,
+        rlim_max: limit_bytes as libc::rlim_t,
+    };
+    unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) == 0 }
 }
 
 fn install_network_filter() -> Result<(), DocsightError> {

@@ -22,6 +22,8 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features
+      - run: rustup target add aarch64-apple-darwin
+      - run: cargo clippy --workspace --all-targets --all-features --target aarch64-apple-darwin
 
   evidence-engine:
     strategy:
