@@ -1,0 +1,18 @@
+[package]
+name = "docsight-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+docsight-core = { path = "../docsight-core" }
+docsight-layout = { path = "../docsight-layout" }
+docsight-ooxml = { path = "../docsight-ooxml" }
+docsight-pdf = { path = "../docsight-pdf" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

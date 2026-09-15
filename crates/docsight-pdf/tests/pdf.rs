@@ -1163,3 +1163,72 @@ fn build_pdf_with_extgstate(content: &str) -> Vec<u8> {
     );
     pdf
 }
+
+#[test]
+fn reports_unmapped_text_codes_as_reduced_text_fidelity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let content = "BT /F1 12 Tf 20 70 Td (\\001\\002) Tj ET";
+    let cmap = "begincmap\n1 beginbfchar\n<01> <0041>\nendbfchar\nendcmap";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /TrueType /BaseFont /Example /ToUnicode 6 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_TEXT_CODE_UNMAPPED")
+    );
+    let capabilities = docsight_core::document_capabilities(&document);
+    assert_eq!(
+        capabilities.text,
+        docsight_core::CoverageStatus::Approximated
+    );
+
+    let coverage = docsight_core::compute_coverage(&document, &source, None, true, 1.0)?;
+    assert_eq!(
+        coverage.global.text.status,
+        docsight_core::CoverageStatus::Approximated
+    );
+    assert!(
+        coverage
+            .reason_codes
+            .iter()
+            .any(|code| code == "PDF_TEXT_CODE_UNMAPPED")
+    );
+    Ok(())
+}
+
+#[test]
+fn reports_non_uniform_stroke_as_reduced_render_fidelity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let content = "q 3 0 0 1 0 0 cm 1 w 10 10 m 50 10 l S Q";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_NON_UNIFORM_STROKE_VISUAL")
+    );
+    let capabilities = docsight_core::document_capabilities(&document);
+    assert_eq!(
+        capabilities.render,
+        docsight_core::CoverageStatus::Approximated
+    );
+
+    let coverage = docsight_core::compute_coverage(&document, &source, None, true, 1.0)?;
+    assert_eq!(
+        coverage.global.visual.status,
+        docsight_core::CoverageStatus::Unsupported
+    );
+    Ok(())
+}

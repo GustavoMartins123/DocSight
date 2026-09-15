@@ -3,6 +3,7 @@ members = [
     "crates/docsight-agent",
     "crates/docsight-cli",
     "crates/docsight-core",
+    "crates/docsight-ingest",
     "crates/docsight-layout",
     "crates/docsight-ooxml",
     "crates/docsight-pdf",

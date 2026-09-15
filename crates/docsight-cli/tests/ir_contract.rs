@@ -1,9 +1,7 @@
 use docsight_core::{
     Document, DocumentSource, IR_ENGINE_VERSION, IR_SCHEMA_VERSION, canonical_violations,
 };
-use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
-use docsight_pdf::PdfDocument;
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -52,11 +50,7 @@ fn ir_schema() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 fn ingest(path: &Path) -> Result<Document, Box<dyn std::error::Error>> {
-    let source = DocumentSource::open(path)?;
-    match source.format() {
-        docsight_core::DocumentFormat::Docx => Ok(layout_docx(parse_docx(&source)?)?.document),
-        docsight_core::DocumentFormat::Pdf => Ok(PdfDocument::open(&source)?.to_document()?),
-    }
+    Ok(docsight_ingest::ingest(&DocumentSource::open(path)?)?)
 }
 
 fn normalized_snapshot(document: &Document) -> Result<String, Box<dyn std::error::Error>> {

@@ -27,6 +27,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Modelled entities: document, metadata, styles, sections, pages, blocks, table cells, overlays, resources, hyperlinks, comments, tracked-change counts and diagnostics.
 - Block kinds: paragraph, heading, list item, table, figure, note, unknown.
 - Canonical ordering is a contract, not a convention: pages ascend, blocks ascend by page and reading order, page indexes agree with block placement and every object identifier is unique. Ingestion validates this and fails closed with `BACKEND_FAILURE` if a producer breaks it.
+- Fidelity is derived from the IR's own diagnostics by a single catalogue in `docsight-core`, so `inspect`, `coverage` and `evidence` cannot disagree about what a document lost.
 - Every visible block carries, when knowable: identifier, kind, page, bounding box, z-index, reading order, source provenance and confidence.
 
 ### DOCX
@@ -48,7 +49,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 
 ### Operations
 
-All of these read the IR; none of them reach into format-specific parser structures.
+Ingestion has a single boundary, `docsight-ingest`, which detects the format, dispatches to the parser and returns the normalized IR. Every operation below reads that IR. Format-specific types appear only where a raster or trace backend is genuinely required: PDF rasterization, PDF tracing, and the degraded `inspect` path for a PDF that cannot be fully converted.
 
 - Navigation and structure: `inspect`, `outline`, `overview`, `peek`, `focus`, `context`, `page`.
 - Text and tables: `text`, `tables`, `table` (JSON, Markdown, CSV, TSV, HTML).

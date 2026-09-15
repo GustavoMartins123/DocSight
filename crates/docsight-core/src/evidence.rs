@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 
 const TEXT_LOSS_CODES: &[&str] = &["DOCX_RUN_ELEMENT_UNSUPPORTED"];
 
+const GLOBAL_TEXT_LOSS_CODES: &[&str] = &["PDF_TEXT_CODE_UNMAPPED"];
+
 const GEOMETRY_WARNING_CODES: &[&str] = &[
     "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
     "DOCX_BLOCK_TALLER_THAN_PAGE",
@@ -28,6 +30,7 @@ const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
     "PDF_COLOR_SPACE_UNSUPPORTED",
     "PDF_PATTERN_PAINT_UNSUPPORTED",
     "PDF_BLEND_MODE_UNSUPPORTED",
+    "PDF_NON_UNIFORM_STROKE_VISUAL",
 ];
 
 const PAGE_APPROXIMATION_CODES: &[&str] = &["DOCX_LAYOUT_PAGINATED"];
@@ -167,7 +170,12 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
             ) && text_loss_objects.contains(&block.id)
         })
         .count();
-    let text = if text_blocks_total == 0 {
+    let text = if GLOBAL_TEXT_LOSS_CODES
+        .iter()
+        .any(|code| reasons.contains(*code))
+    {
+        0.0
+    } else if text_blocks_total == 0 {
         1.0
     } else {
         1.0 - text_blocks_affected as f32 / text_blocks_total as f32
@@ -413,6 +421,25 @@ fn truncate_at_char_boundary(text: &str, max_bytes: usize) -> String {
     format!("{}...", &text[..boundary])
 }
 
+fn global_region_kind(code: &str) -> (CoverageStatus, &'static str) {
+    if GLOBAL_TEXT_LOSS_CODES.contains(&code) {
+        (
+            CoverageStatus::Approximated,
+            "the page shows text codes the source encoding does not map to characters",
+        )
+    } else if GLOBAL_VISUAL_UNSUPPORTED_CODES.contains(&code) {
+        (
+            CoverageStatus::Unsupported,
+            "the page is not backed by source-faithful geometry or rendering",
+        )
+    } else {
+        (
+            CoverageStatus::Approximated,
+            "the page is not backed by source-faithful geometry or rendering",
+        )
+    }
+}
+
 fn metric_reason_codes(profile: &FidelityProfile, relevant: &[&str]) -> Vec<String> {
     profile
         .reasons
@@ -469,6 +496,7 @@ fn page_coverage(
     for code in GLOBAL_GEOMETRY_APPROXIMATION_CODES
         .iter()
         .chain(GLOBAL_VISUAL_UNSUPPORTED_CODES.iter())
+        .chain(GLOBAL_TEXT_LOSS_CODES.iter())
     {
         if fidelity.reasons.iter().any(|reason| reason == code) {
             for block in page_blocks {
@@ -479,19 +507,14 @@ fn page_coverage(
                     .iter()
                     .any(|region: &CoverageRegion| region.reason_code == *code)
             {
-                let status = if GLOBAL_VISUAL_UNSUPPORTED_CODES.contains(code) {
-                    CoverageStatus::Unsupported
-                } else {
-                    CoverageStatus::Approximated
-                };
+                let (status, description) = global_region_kind(code);
                 regions.push(CoverageRegion {
                     page,
                     object_id: None,
                     bbox: None,
                     status,
                     reason_code: (*code).to_owned(),
-                    description: "the page is not backed by source-faithful geometry or rendering"
-                        .to_owned(),
+                    description: description.to_owned(),
                 });
             }
         }
@@ -743,7 +766,11 @@ pub fn document_capabilities(document: &Document) -> DocumentCapabilities {
         }
         DocumentFormat::Pdf => DocumentCapabilities {
             structure: CoverageStatus::Inferred,
-            text: CoverageStatus::Exact,
+            text: approximated_unless(
+                codes
+                    .iter()
+                    .any(|code| GLOBAL_TEXT_LOSS_CODES.contains(code)),
+            ),
             render: approximated_unless(
                 codes
                     .iter()
