@@ -1,7 +1,7 @@
 use crate::font::{text_width, wrap_text};
 use docsight_core::{
     Block, BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, ObjectId,
-    Overlay, OverlayKind, Page, Rect, SourceSpan, Style,
+    Overlay, OverlayKind, Page, Rect, SourceSpan, Style, validate_canonical,
 };
 
 const MAX_LAYOUT_PAGES: u32 = 10_000;
@@ -277,6 +277,8 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
     doc.pages = doc_pages;
     doc.blocks = updated_blocks;
     doc.warnings.append(&mut warnings);
+
+    validate_canonical(&doc)?;
 
     Ok(LaidOutDocument {
         document: doc,

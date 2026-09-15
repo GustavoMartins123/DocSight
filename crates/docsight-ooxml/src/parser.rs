@@ -2,8 +2,9 @@ use crate::package::read_parts;
 use docsight_core::{
     Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
     Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
-    Hyperlink, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId, ParagraphBlock, Resource,
-    ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell, TrackedChanges, UnknownBlock,
+    Hyperlink, IrVersion, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId,
+    ParagraphBlock, Resource, ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell,
+    TrackedChanges, UnknownBlock, validate_canonical,
 };
 use roxmltree::{Document as XmlDocument, Node, ParsingOptions};
 use std::collections::{BTreeMap, BTreeSet};
@@ -109,16 +110,6 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 .checked_add(1)
                 .ok_or_else(block_count_error)?;
             let paragraph_path = format!("/word/document.xml::body/p[{paragraph_index}]");
-            let child_figures = extract_figures(
-                child,
-                source,
-                &rels,
-                &mut reading_order,
-                &mut figure_index,
-                &mut resources,
-                &parts.binary_part_digests,
-                &mut warnings,
-            )?;
             extract_hyperlinks(
                 child,
                 source,
@@ -137,6 +128,16 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut warnings,
             )?;
             blocks.extend(paragraph_blocks);
+            let child_figures = extract_figures(
+                child,
+                source,
+                &rels,
+                &mut reading_order,
+                &mut figure_index,
+                &mut resources,
+                &parts.binary_part_digests,
+                &mut warnings,
+            )?;
             figure_warnings(child_figures.iter(), &mut warnings);
             blocks.extend(child_figures);
             collect_anchor_ids(
@@ -251,7 +252,8 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         })
         .collect::<Result<Vec<_>, DocsightError>>()?;
 
-    Ok(Document {
+    let document = Document {
+        version: IrVersion::current(),
         id: source.id(),
         sha256: source.sha256().to_owned(),
         format: DocumentFormat::Docx,
@@ -266,7 +268,9 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         comments,
         tracked_changes,
         warnings,
-    })
+    };
+    validate_canonical(&document)?;
+    Ok(document)
 }
 
 fn preserve_inert_parts(

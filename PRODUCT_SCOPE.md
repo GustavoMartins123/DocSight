@@ -1,0 +1,158 @@
+# Product scope
+
+DocSight is a local, headless, deterministic tool for inspecting, structuring, rendering, comparing and extracting evidence from DOCX and PDF documents.
+
+This document answers one question: **what does DocSight promise today?**
+
+It is normative. A command may not claim more than this document lists, and any behaviour listed under *Partial* must expose its limitation through a typed diagnostic rather than silently degrading. The command surface is declared programmatically by `docsight --agent capabilities`; the two are kept in sync by `crates/docsight-cli/tests/product_scope.rs`.
+
+Everything runs offline. Parsing, layout, rendering, diffing and verification never require the network, Word, Excel, LibreOffice, COM automation or a remote service.
+
+---
+
+## Supported
+
+Behaviour in this section is implemented, tested and source-faithful unless a document itself triggers a diagnostic.
+
+### Input and identity
+
+- DOCX (OOXML wordprocessing) and PDF, detected by magic bytes and never by file extension.
+- Content-addressed document identity: `sha256` of the exact bytes, and a `doc_…` identifier derived from it.
+- Deterministic object identifiers derived from the document digest plus a normalized semantic source path. The same bytes produce the same identifiers on every platform, regardless of file name or location.
+- Resource limits on document size, archive entries, compression ratio, XML depth, token size, path segments, pages and layout iterations, each reported as a typed `RESOURCE_LIMIT` error.
+
+### Document IR
+
+- A single normalized `Document` IR shared by both formats, versioned by `schema_version` and `engine_version` and published as a JSON Schema at `schemas/ir/v1/document-ir.json`.
+- Modelled entities: document, metadata, styles, sections, pages, blocks, table cells, overlays, resources, hyperlinks, comments, tracked-change counts and diagnostics.
+- Block kinds: paragraph, heading, list item, table, figure, note, unknown.
+- Canonical ordering is a contract, not a convention: pages ascend, blocks ascend by page and reading order, page indexes agree with block placement and every object identifier is unique. Ingestion validates this and fails closed with `BACKEND_FAILURE` if a producer breaks it.
+- Every visible block carries, when knowable: identifier, kind, page, bounding box, z-index, reading order, source provenance and confidence.
+
+### DOCX
+
+- Paragraphs, headings, list items, structural tables, figures, footnotes and endnotes.
+- Table grid with row and column spans, nested tables, cell text and cell geometry.
+- Style definitions with `basedOn` inheritance, section geometry, page size and margins, headers and footers.
+- Hyperlinks, comments and tracked-change counts.
+- Deterministic pagination and geometry for a single section, honouring explicit page breaks and `keep-with-next`.
+- Unknown body elements are preserved as opaque nodes with a diagnostic; they are never dropped silently.
+
+### PDF
+
+- A native parser with no third-party document engine at runtime: cross-reference tables, cross-reference streams, hybrid `XRefStm`, object streams and `Prev` chains.
+- Stream filters, page tree, page resources and content streams.
+- Text extraction with encoding and `ToUnicode` resolution, embedded TrueType outlines, `Identity-H` CID fonts and CID-to-GID mapping.
+- Paragraph and heading reconstruction with per-object confidence.
+- Table inference with an explicit detector name and confidence score.
+
+### Operations
+
+All of these read the IR; none of them reach into format-specific parser structures.
+
+- Navigation and structure: `inspect`, `outline`, `overview`, `peek`, `focus`, `context`, `page`.
+- Text and tables: `text`, `tables`, `table` (JSON, Markdown, CSV, TSV, HTML).
+- Resources and links: `images`, `links`. Link targets are reported, never fetched.
+- Geometry: page-local points at 1/72 inch with the page origin at the top-left, used identically by geometry, render, crop, hit-testing and diff.
+- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box).
+- Spatial and structural selection: `query` (DQL with `above`, `below`, `inside`, `overlaps`, `nearest`, `distance-to`), `hit` (point or region to objects), `resolve` (ranked descriptor matching with explainable components).
+- Evidence and reproducibility: `evidence`, `coverage`, `fingerprint`, `bundle`, `verify`, `replay`.
+- Comparison: `diff` at package, semantic and visual levels.
+- Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens.
+- Process isolation: `--sandbox` on Linux, macOS and Windows, failing closed on platforms where enforcement is unavailable.
+
+### Diagnostics and errors
+
+- Typed diagnostics with a stable code, severity, message, consequence and the affected object or page.
+- Structured errors on stderr with the exit codes `0`, `2`, `10`, `11`, `12`, `13`, `20`, `21`, `30` and `40`, decidable without string matching.
+- Encrypted documents are rejected before inspection with exit code `12`.
+
+---
+
+## Partial
+
+Behaviour in this section works, but is not source-faithful. Each item is reported at runtime through the listed diagnostic code, and reduces the corresponding fidelity dimension in `inspect` and `coverage`.
+
+### DOCX
+
+| Limitation | Diagnostic |
+| --- | --- |
+| Multiple sections collapse to the first section's page geometry | `DOCX_SECTIONS_COLLAPSED` |
+| Missing `sectPr`; a default Letter section is synthesized | `DOCX_SECTION_DEFAULTED` |
+| Pagination never splits a block, so widows, orphans and `keep-lines` are approximated by whole-block moves | `DOCX_PAGINATION_BLOCK_GRANULAR` |
+| A block taller than the content area overflows the page | `DOCX_BLOCK_TALLER_THAN_PAGE` |
+| Layout is computed rather than read from the source | `DOCX_LAYOUT_PAGINATED` |
+| Text is measured with a deterministic proportional fallback font, not the document's own font | `DOCX_FONT_SUBSTITUTED` |
+| Embedded images are not rasterized; a placeholder box is rendered | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
+| An image relationship cannot be resolved | `DOCX_IMAGE_UNRESOLVED` |
+| Numbering definitions or formats cannot be resolved | `DOCX_NUMBERING_UNRESOLVED`, `DOCX_NUMBERING_FORMAT_MISSING` |
+| Unusable table grid widths fall back to equal columns | `DOCX_TABLE_GRID_WIDTHS_UNUSABLE` |
+| Run-level elements that are not interpreted, so paragraph text may be incomplete | `DOCX_RUN_ELEMENT_UNSUPPORTED` |
+| Body elements preserved as opaque nodes without semantic interpretation | `DOCX_BODY_ELEMENT_UNSUPPORTED` |
+| Embedded objects and active content preserved inert, digest only | `DOCX_EMBEDDED_OBJECT_INERT`, `DOCX_ACTIVE_CONTENT_INERT` |
+| A hyperlink target page cannot be resolved | `DOCX_LINK_PAGE_UNRESOLVED` |
+
+Tracked changes are counted, not reconstructed: `tracked_changes` reports insertion and deletion counts without per-revision authorship or content.
+
+### PDF
+
+| Limitation | Diagnostic |
+| --- | --- |
+| Form XObjects are not traversed; they are placed as a figure placeholder and their text is not extracted | `PDF_XOBJECT_PLACEHOLDER` |
+| Text without an embedded outline uses the deterministic fallback glyph set | `APPROXIMATED_PDF_FONT` |
+| Codes the `ToUnicode` CMap does not map are extracted as the replacement character | `PDF_TEXT_CODE_UNMAPPED` |
+| Unsupported `ExtGState` entries are ignored for painting | `PDF_EXTGSTATE_IGNORED` |
+| Soft masks, unsupported blend modes, patterns and unsupported colour spaces are ignored for painting | `PDF_SOFT_MASK_IGNORED`, `PDF_BLEND_MODE_UNSUPPORTED`, `PDF_PATTERN_PAINT_UNSUPPORTED`, `PDF_COLOR_SPACE_UNSUPPORTED` |
+| Clipping text rendering modes extract text but do not clip | `PDF_CLIP_TEXT_VISUAL` |
+| Negative font sizes extract text but do not reproduce the signed transform | `PDF_NEGATIVE_FONT_SIZE_VISUAL` |
+| Strokes under a non-uniform transform use an area-preserving mean width | `PDF_NON_UNIFORM_STROKE_VISUAL` |
+
+Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Shading resources (`sh`), unsupported content operators and unsupported font programs fail closed with exit code `20` rather than painting something approximate.
+
+### Operation-level diagnostics
+
+These are not format limitations. They are the cases where a command can answer, but not completely, and says so.
+
+| Limitation | Diagnostic |
+| --- | --- |
+| PDF structure is reconstructed, so blocks and tables are reported as inferred | `INFERRED_SEMANTICS`, `INFERRED_TABLE` |
+| A semantic diff item rests on a reconstruction below full confidence | `LOW_CONFIDENCE_RECONSTRUCTION` |
+| Visual diff evidence is limited because the compared pages are not source-faithful | `DIFF_VISUAL_EVIDENCE_LIMITED` |
+| Cross-version lineage cannot be resolved to a single predecessor | `DIFF_LINEAGE_AMBIGUOUS` |
+| A crop region extends past the object's assigned page and is clipped to it | `OBJECT_CROP_CLIPPED_TO_PAGE` |
+| A render fingerprint could not be computed for an object | `RENDER_FINGERPRINT_UNAVAILABLE` |
+| A trace does not carry complete decision data, so replay verifies what is available | `TRACE_DECISION_PARTIAL` |
+| An object has no canonical geometry, so it is excluded from spatial results and counted | `SPATIAL_GEOMETRY_UNAVAILABLE` |
+| `context` cannot assign a page to one canonical DOCX section | `CONTEXT_SECTION_UNAVAILABLE` |
+| `context` has no object-level fidelity for an overlay | `CONTEXT_FIDELITY_UNAVAILABLE` |
+
+### Cross-cutting
+
+- `Shape` blocks and `Watermark` and `Annotation` overlays exist in the IR but no parser produces them yet. PDF annotations are not read.
+- PDF documents produce no overlays; headers, footers and comment markers are DOCX-only and come from layout.
+- The `caption` DQL selector is DOCX-only and fails closed for PDF, because caption semantics are not reconstructed there.
+- There is no cache between invocations. Every command re-ingests the document.
+
+---
+
+## Out of scope
+
+These are not limitations to be fixed inside the current product. They are deliberate boundaries.
+
+- **OCR and image understanding.** DocSight never infers text from pixels.
+- **Document editing or authoring.** No writing, no conversion back to DOCX or PDF, no redaction.
+- **Other Office formats.** No XLSX, no PPTX, no legacy binary `.doc`/`.xls`/`.ppt`.
+- **Active content execution.** Macros, OLE objects, PDF JavaScript, embedded attachments and form actions are preserved inert or rejected; they are never executed.
+- **Network behaviour.** No daemon, no server mode, no cloud rendering, no telemetry, no hyperlink fetching, no remote font or resource resolution.
+- **External document engines.** No Word, LibreOffice, Excel, COM automation, `unoconv` or remote converter as a runtime dependency; no MuPDF or other third-party document interpreter in the binary. MuPDF may be used only as an optional external oracle during development.
+- **Retrieval and question answering.** No RAG, no vector search, no embeddings, no natural-language queries over documents.
+- **Word-identical rendering.** DocSight measures and publishes the fidelity it achieves; it does not claim to reproduce Word's or Acrobat's output pixel for pixel.
+- **Encrypted document recovery.** Password-protected documents are rejected, not decrypted or brute-forced.
+
+---
+
+## Related documents
+
+- `BACKLOG.md` — what is deferred, split into v1, post-v1 and experimental.
+- `AGENT_PROTOCOL.md` — the machine contract in detail.
+- `AGENTS.md` — engineering rules for changing any of the above.

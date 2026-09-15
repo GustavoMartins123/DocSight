@@ -1,6 +1,34 @@
 use crate::{Diagnostic, DocsightError, DocumentFormat, ObjectId, Rect};
 use serde::{Deserialize, Serialize};
 
+pub const IR_SCHEMA_VERSION: &str = "1.0";
+pub const IR_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IrVersion {
+    pub schema_version: String,
+    pub engine_version: String,
+}
+
+impl IrVersion {
+    pub fn current() -> Self {
+        Self {
+            schema_version: IR_SCHEMA_VERSION.to_owned(),
+            engine_version: IR_ENGINE_VERSION.to_owned(),
+        }
+    }
+
+    pub fn is_current_schema(&self) -> bool {
+        self.schema_version == IR_SCHEMA_VERSION
+    }
+}
+
+impl Default for IrVersion {
+    fn default() -> Self {
+        Self::current()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceSpan {
     pub path: String,
@@ -341,6 +369,7 @@ pub struct TrackedChanges {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    pub version: IrVersion,
     pub id: String,
     pub sha256: String,
     pub format: DocumentFormat,

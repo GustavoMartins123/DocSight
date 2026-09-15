@@ -1,7 +1,8 @@
 use docsight_core::{
-    Block, BlockContent, BlockKind, Document, DocumentFormat, DocumentMetadata, HeadingBlock,
-    ObjectId, Page, ParagraphBlock, Rect, SourceSpan, TableBlock, TableCell, table_to_csv,
-    table_to_html, table_to_markdown, table_to_tsv,
+    Block, BlockContent, BlockKind, CanonicalViolation, Document, DocumentFormat, DocumentMetadata,
+    HeadingBlock, IR_ENGINE_VERSION, IR_SCHEMA_VERSION, IrVersion, ObjectId, Page, ParagraphBlock,
+    Rect, SourceSpan, TableBlock, TableCell, canonical_violations, table_to_csv, table_to_html,
+    table_to_markdown, table_to_tsv, validate_canonical,
 };
 
 fn sample_document() -> Document {
@@ -100,6 +101,7 @@ fn sample_document() -> Document {
     };
 
     Document {
+        version: docsight_core::IrVersion::current(),
         id: doc_id,
         sha256: digest,
         format: DocumentFormat::Docx,
@@ -172,4 +174,119 @@ fn preserves_block_ref_geometry() {
     assert_eq!(block_ref.bbox_pt.x0, 50.0);
     assert_eq!(block_ref.bbox_pt.y0, 50.0);
     assert_eq!(block_ref.confidence, 1.0);
+}
+
+#[test]
+fn serializes_the_ir_deterministically() -> Result<(), Box<dyn std::error::Error>> {
+    let doc = sample_document();
+    let first = serde_json::to_vec(&doc)?;
+    let second = serde_json::to_vec(&sample_document())?;
+    assert_eq!(first, second);
+    Ok(())
+}
+
+#[test]
+fn publishes_the_ir_version_on_every_document() {
+    let doc = sample_document();
+    assert_eq!(doc.version.schema_version, IR_SCHEMA_VERSION);
+    assert_eq!(doc.version.engine_version, IR_ENGINE_VERSION);
+    assert!(doc.version.is_current_schema());
+    assert!(
+        !IrVersion {
+            schema_version: "0.9".to_owned(),
+            engine_version: IR_ENGINE_VERSION.to_owned(),
+        }
+        .is_current_schema()
+    );
+}
+
+#[test]
+fn accepts_a_canonically_ordered_document() -> Result<(), Box<dyn std::error::Error>> {
+    validate_canonical(&sample_document())?;
+    assert!(canonical_violations(&sample_document()).is_empty());
+    Ok(())
+}
+
+#[test]
+fn rejects_blocks_that_are_not_in_reading_order() {
+    let mut doc = sample_document();
+    doc.blocks.swap(0, 1);
+    doc.pages[0].block_ids.swap(0, 1);
+    let violations = canonical_violations(&doc);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| matches!(violation, CanonicalViolation::BlockOutOfOrder { .. }))
+    );
+    assert!(validate_canonical(&doc).is_err());
+}
+
+#[test]
+fn rejects_duplicate_object_ids() {
+    let mut doc = sample_document();
+    let duplicate = doc.blocks[0].id.clone();
+    doc.blocks[1].id = duplicate.clone();
+    doc.pages[0].block_ids[1] = duplicate.clone();
+    let violations = canonical_violations(&doc);
+    assert!(violations.iter().any(|violation| matches!(
+        violation,
+        CanonicalViolation::DuplicateObjectId { id } if *id == duplicate
+    )));
+}
+
+#[test]
+fn rejects_a_page_index_that_omits_a_placed_block() {
+    let mut doc = sample_document();
+    doc.pages[0].block_ids.pop();
+    let violations = canonical_violations(&doc);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| matches!(violation, CanonicalViolation::PageIndexMissingBlock { .. }))
+    );
+}
+
+#[test]
+fn rejects_a_page_index_entry_without_a_block() {
+    let mut doc = sample_document();
+    doc.pages[0]
+        .block_ids
+        .push(ObjectId::from_raw("p_does_not_exist"));
+    let violations = canonical_violations(&doc);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| matches!(violation, CanonicalViolation::PageIndexUnknownBlock { .. }))
+    );
+}
+
+#[test]
+fn rejects_pages_that_are_not_ascending() {
+    let mut doc = sample_document();
+    let mut second = doc.pages[0].clone();
+    second.number = 1;
+    second.block_ids = Vec::new();
+    doc.pages.push(second);
+    let violations = canonical_violations(&doc);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| matches!(violation, CanonicalViolation::PageOutOfOrder { .. }))
+    );
+}
+
+#[test]
+fn reports_a_canonical_violation_as_a_typed_error() {
+    let mut doc = sample_document();
+    doc.blocks.swap(0, 1);
+    let error = validate_canonical(&doc)
+        .err()
+        .unwrap_or_else(|| unreachable!());
+    assert_eq!(error.exit_code(), 30);
+    assert_eq!(error.diagnostic().code, "BACKEND_FAILURE");
+    assert!(
+        error
+            .to_string()
+            .contains("canonical ordering contract violated")
+    );
 }
