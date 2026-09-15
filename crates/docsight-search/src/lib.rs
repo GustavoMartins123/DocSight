@@ -2221,6 +2221,7 @@ mod tests {
             }),
         );
         Ok(Document {
+            version: docsight_core::IrVersion::current(),
             id: "doc_test".to_owned(),
             sha256: "0".repeat(64),
             format: DocumentFormat::Docx,

@@ -8,6 +8,7 @@ const DIGEST: &str = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890
 
 fn dummy_document(blocks: Vec<Block>, section: Option<Section>) -> Document {
     Document {
+        version: docsight_core::IrVersion::current(),
         id: "doc_1234567890ab".to_owned(),
         sha256: DIGEST.to_owned(),
         format: DocumentFormat::Docx,

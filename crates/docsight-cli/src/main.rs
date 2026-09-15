@@ -5,9 +5,10 @@ use docsight_agent::{
     validate_projection,
 };
 use docsight_core::{
-    BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
-    DocumentSource, ObjectId, PageFidelity, Rect, compute_coverage, compute_evidence, table_to_csv,
-    table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
+    BlockContent, CoverageStatus, Diagnostic, DiagnosticSeverity, DocsightError, Document,
+    DocumentFormat, DocumentSource, ObjectId, PageFidelity, Rect, compute_coverage,
+    compute_evidence, document_capabilities, table_to_csv, table_to_html, table_to_markdown,
+    table_to_tsv, table_to_tsv_string,
 };
 use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents};
 use docsight_layout::layout_docx;
@@ -469,40 +470,16 @@ struct CapabilityAssessment {
 }
 
 impl CapabilityAssessment {
-    fn exact() -> Self {
+    fn from_status(status: CoverageStatus) -> Self {
         Self {
-            available: true,
-            source_faithful: true,
-            fidelity: "exact",
-        }
-    }
-
-    fn inferred() -> Self {
-        Self {
-            available: true,
-            source_faithful: false,
-            fidelity: "inferred",
+            available: status != CoverageStatus::Unsupported,
+            source_faithful: status == CoverageStatus::Exact,
+            fidelity: status.as_str(),
         }
     }
 
     fn unsupported() -> Self {
-        Self {
-            available: false,
-            source_faithful: false,
-            fidelity: "unsupported",
-        }
-    }
-
-    fn exact_unless(approximated: bool) -> Self {
-        if approximated {
-            Self {
-                available: true,
-                source_faithful: false,
-                fidelity: "approximated",
-            }
-        } else {
-            Self::exact()
-        }
+        Self::from_status(CoverageStatus::Unsupported)
     }
 }
 
@@ -514,6 +491,23 @@ struct InspectCapabilityDetails {
 }
 
 impl InspectCapabilityDetails {
+    fn from_document(document: &Document) -> Self {
+        let capabilities = document_capabilities(document);
+        Self {
+            structure: CapabilityAssessment::from_status(capabilities.structure),
+            text: CapabilityAssessment::from_status(capabilities.text),
+            render: CapabilityAssessment::from_status(capabilities.render),
+        }
+    }
+
+    fn unsupported() -> Self {
+        Self {
+            structure: CapabilityAssessment::unsupported(),
+            text: CapabilityAssessment::unsupported(),
+            render: CapabilityAssessment::unsupported(),
+        }
+    }
+
     fn available(&self) -> InspectCapabilities {
         InspectCapabilities {
             structure: self.structure.available,
@@ -1871,33 +1865,12 @@ fn inspect_source(
 ) -> Result<(InspectResult, Vec<Diagnostic>), DocsightError> {
     match source.format() {
         DocumentFormat::Docx => {
-            let document = layout_docx(parse_docx(source)?)?.document;
-            let structure_complete = !document.warnings.iter().any(|warning| {
-                warning.code.contains("UNSUPPORTED")
-                    && warning.code != "DOCX_RUN_ELEMENT_UNSUPPORTED"
-            });
-            let text_complete = !document
-                .warnings
-                .iter()
-                .any(|warning| warning.code == "DOCX_RUN_ELEMENT_UNSUPPORTED");
-            let render_complete = !document.warnings.iter().any(|warning| {
-                matches!(
-                    warning.code.as_str(),
-                    "DOCX_FONT_SUBSTITUTED"
-                        | "DOCX_FIGURE_RASTER_PLACEHOLDER"
-                        | "DOCX_BLOCK_TALLER_THAN_PAGE"
-                        | "DOCX_PAGINATION_BLOCK_GRANULAR"
-                )
-            });
+            let document = load_document(source)?;
             let paragraphs = document.paragraphs().count() + document.list_items().count();
             let tracked = (document.tracked_changes.insertions > 0
                 || document.tracked_changes.deletions > 0)
                 .then_some(document.tracked_changes);
-            let capability_details = InspectCapabilityDetails {
-                structure: CapabilityAssessment::exact_unless(!structure_complete),
-                text: CapabilityAssessment::exact_unless(!text_complete),
-                render: CapabilityAssessment::exact_unless(!render_complete),
-            };
+            let capability_details = InspectCapabilityDetails::from_document(&document);
             let result = InspectResult {
                 format: source.format(),
                 size_bytes: source.size_bytes(),
@@ -1926,11 +1899,7 @@ fn inspect_pdf_source(
     let unavailable = |pages: Option<u32>, error: DocsightError| {
         let mut diagnostic = error.diagnostic();
         diagnostic.severity = DiagnosticSeverity::Warning;
-        let capability_details = InspectCapabilityDetails {
-            structure: CapabilityAssessment::unsupported(),
-            text: CapabilityAssessment::unsupported(),
-            render: CapabilityAssessment::unsupported(),
-        };
+        let capability_details = InspectCapabilityDetails::unsupported();
         let result = InspectResult {
             format: DocumentFormat::Pdf,
             size_bytes: source.size_bytes(),
@@ -1966,25 +1935,7 @@ fn inspect_pdf_source(
         Err(error) => return Err(error),
     };
     let warnings = document.warnings.clone();
-    let render_source_faithful = !warnings.iter().any(|warning| {
-        matches!(
-            warning.code.as_str(),
-            "APPROXIMATED_PDF_FONT"
-                | "PDF_XOBJECT_PLACEHOLDER"
-                | "PDF_EXTGSTATE_IGNORED"
-                | "PDF_CLIP_TEXT_VISUAL"
-                | "PDF_NEGATIVE_FONT_SIZE_VISUAL"
-                | "PDF_SOFT_MASK_IGNORED"
-                | "PDF_COLOR_SPACE_UNSUPPORTED"
-                | "PDF_PATTERN_PAINT_UNSUPPORTED"
-                | "PDF_BLEND_MODE_UNSUPPORTED"
-        )
-    });
-    let capability_details = InspectCapabilityDetails {
-        structure: CapabilityAssessment::inferred(),
-        text: CapabilityAssessment::exact(),
-        render: CapabilityAssessment::exact_unless(!render_source_faithful),
-    };
+    let capability_details = InspectCapabilityDetails::from_document(&document);
     let result = InspectResult {
         format: DocumentFormat::Pdf,
         size_bytes: source.size_bytes(),

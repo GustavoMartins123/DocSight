@@ -12,7 +12,7 @@ use content::{
 };
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
-    DocumentSource, ErrorLocation, ObjectId, Page, Rect, SourceSpan,
+    DocumentSource, ErrorLocation, IrVersion, ObjectId, Page, Rect, SourceSpan, validate_canonical,
 };
 use filters::decode_stream;
 use raster::{MAX_DPI, MIN_DPI};
@@ -402,7 +402,8 @@ impl<'a> PdfDocument<'a> {
             });
         }
 
-        Ok(Document {
+        let document = Document {
+            version: IrVersion::current(),
             id: self.source.id(),
             sha256: self.source.sha256().to_owned(),
             format: DocumentFormat::Pdf,
@@ -422,7 +423,9 @@ impl<'a> PdfDocument<'a> {
             comments: Vec::new(),
             tracked_changes: docsight_core::TrackedChanges::default(),
             warnings: all_warnings,
-        })
+        };
+        validate_canonical(&document)?;
+        Ok(document)
     }
 
     pub fn rasterize(

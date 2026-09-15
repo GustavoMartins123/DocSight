@@ -1,0 +1,437 @@
+{
+  "blocks": [
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 72.0,
+        "y1": 107.0
+      },
+      "confidence": 1.0,
+      "content": {
+        "level": 1,
+        "style_id": "Heading1",
+        "text": "Feature Overview",
+        "type": "heading"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "h_d5d019d36212d102b32751c147a50a31",
+      "kind": "heading",
+      "page": 1,
+      "reading_order": 1,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::body/p[1]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 107.0,
+        "y1": 124.97000122070312
+      },
+      "confidence": 1.0,
+      "content": {
+        "style_id": null,
+        "text": "For details see our website: Project Homepage",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_817e1ba3e94c51819e85808e4ecbb9c5",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 2,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::body/p[2]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 124.97000122070312,
+        "y1": 142.94000244140625
+      },
+      "confidence": 1.0,
+      "content": {
+        "style_id": null,
+        "text": "Check appendix: Go to Appendix",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_9efd02251e1dc62950242447da23755c",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 3,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::body/p[3]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 142.94000244140625,
+        "y1": 160.91000366210938
+      },
+      "confidence": 1.0,
+      "content": {
+        "style_id": null,
+        "text": "",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_cd5f597dce791f518f2da316cfc85f2d",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 4,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::body/p[4]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 160.91000366210938,
+        "y1": 272.9100036621094
+      },
+      "confidence": 1.0,
+      "content": {
+        "alt_text": "System Architecture Diagram",
+        "caption": null,
+        "height_pt": 100.0,
+        "resource_id": "rIdImg",
+        "type": "figure",
+        "width_pt": 200.0
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "fig_14e9484ca1f59fc201f11f6496b278ae",
+      "kind": "figure",
+      "page": 1,
+      "reading_order": 5,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::figure[1]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 272.9100036621094,
+        "y1": 290.8800048828125
+      },
+      "confidence": 1.0,
+      "content": {
+        "style_id": null,
+        "text": "Status of this revision: Approved",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_042e14f8e2a3db58e5e3ea11c833d106",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 6,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::body/p[5]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 290.8800048828125,
+        "y1": 305.8800048828125
+      },
+      "confidence": 1.0,
+      "content": {
+        "anchor_path": null,
+        "kind": "footnote",
+        "note_id": "1",
+        "text": "Footnote on architectural constraints.",
+        "type": "note"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "fn_41ebd1fff75651a537f80040d55d6112",
+      "kind": "note",
+      "page": 1,
+      "reading_order": 7,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/footnotes.xml::footnote[1]"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 305.8800048828125,
+        "y1": 320.8800048828125
+      },
+      "confidence": 1.0,
+      "content": {
+        "anchor_path": null,
+        "kind": "endnote",
+        "note_id": "1",
+        "text": "Endnote bibliographic reference citation.",
+        "type": "note"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "en_5422bd21041e3bc72ee2ff1e331ddf75",
+      "kind": "note",
+      "page": 1,
+      "reading_order": 8,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/endnotes.xml::endnote[1]"
+      },
+      "z_index": 0
+    }
+  ],
+  "comments": [
+    {
+      "anchor_path": null,
+      "author": "Auditor",
+      "date": "2026-09-03T12:00:00Z",
+      "id": "cmt_49d01cc8fd64a42101364518142456df",
+      "page": null,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/comments.xml::comment[1]"
+      },
+      "text": "Diagram verified against component manifest."
+    }
+  ],
+  "format": "docx",
+  "id": "doc_f926e034bac29cdd236ac9aac6453752",
+  "links": [
+    {
+      "anchor_path": "/word/document.xml::body/p[2]",
+      "id": "lnk_863f7882a9faf975dbbdda888b7adccc",
+      "is_external": true,
+      "page": 1,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::link[1]"
+      },
+      "target": "https://docsight.dev",
+      "text": "Project Homepage"
+    },
+    {
+      "anchor_path": "/word/document.xml::body/p[3]",
+      "id": "lnk_937c2794a591d6fd4f150c6365933607",
+      "is_external": false,
+      "page": 1,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "/word/document.xml::link[2]"
+      },
+      "target": "#appendix",
+      "text": "Go to Appendix"
+    }
+  ],
+  "metadata": {
+    "author": null,
+    "producer": null,
+    "subject": null,
+    "title": null
+  },
+  "pages": [
+    {
+      "block_ids": [
+        "h_d5d019d36212d102b32751c147a50a31",
+        "p_817e1ba3e94c51819e85808e4ecbb9c5",
+        "p_9efd02251e1dc62950242447da23755c",
+        "p_cd5f597dce791f518f2da316cfc85f2d",
+        "fig_14e9484ca1f59fc201f11f6496b278ae",
+        "p_042e14f8e2a3db58e5e3ea11c833d106",
+        "fn_41ebd1fff75651a537f80040d55d6112",
+        "en_5422bd21041e3bc72ee2ff1e331ddf75"
+      ],
+      "height_pt": 792.0,
+      "number": 1,
+      "overlays": [
+        {
+          "bbox": {
+            "x0": 72.0,
+            "x1": 540.0,
+            "y0": 44.0,
+            "y1": 62.0
+          },
+          "id": "hdr_f69a0863ed491463ee97d1b892f39382",
+          "kind": "header",
+          "page": 1,
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "header"
+          },
+          "text": "STANDARD TECHNICAL REPORT"
+        },
+        {
+          "bbox": {
+            "x0": 72.0,
+            "x1": 540.0,
+            "y0": 730.0,
+            "y1": 746.0
+          },
+          "id": "ftr_ce65905ffcbdbcc104ce18ee5d85c5a4",
+          "kind": "footer",
+          "page": 1,
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "footer"
+          },
+          "text": "CONFIDENTIAL  •  PAGE 1"
+        }
+      ],
+      "width_pt": 612.0
+    }
+  ],
+  "resources": [
+    {
+      "content_sha256": "9df02e96f3fbc47b466c27d5f57383e46f9c3459413726da6fcef0e07b13d2a7",
+      "id": "res_d2b7065bd1d1b4467c2e933577e165e2",
+      "kind": "image",
+      "mime_type": "image/png",
+      "name": "rIdImg",
+      "target": "word/media/arch.png"
+    }
+  ],
+  "sections": [
+    {
+      "footer_text": "CONFIDENTIAL  •  PAGE [PAGE]",
+      "header_text": "STANDARD TECHNICAL REPORT",
+      "id": "sect_0c8f53318d22c73d52330cfb1eb62b66",
+      "margin_bottom_pt": 72.0,
+      "margin_left_pt": 72.0,
+      "margin_right_pt": 72.0,
+      "margin_top_pt": 72.0,
+      "page_height_pt": 792.0,
+      "page_width_pt": 612.0,
+      "section_index": 1
+    }
+  ],
+  "sha256": "f926e034bac29cdd236ac9aac64537528871ede8d4f83078c2f0dbfed8a1a86b",
+  "size_bytes": 8478,
+  "styles": [
+    {
+      "based_on": null,
+      "bold": null,
+      "font_family": null,
+      "font_size_pt": null,
+      "id": "Heading1",
+      "italic": null,
+      "name": "heading 1"
+    },
+    {
+      "based_on": null,
+      "bold": null,
+      "font_family": null,
+      "font_size_pt": null,
+      "id": "Normal",
+      "italic": null,
+      "name": "Normal"
+    }
+  ],
+  "tracked_changes": {
+    "deletions": 1,
+    "insertions": 1
+  },
+  "version": {
+    "engine_version": "<engine>",
+    "schema_version": "1.0"
+  },
+  "warnings": [
+    {
+      "code": "DOCX_FIGURE_RASTER_PLACEHOLDER",
+      "effect": "visual evidence for this figure does not include the original image pixels",
+      "message": "embedded image for figure fig_14e9484ca1f59fc201f11f6496b278ae is not rasterized; a placeholder box is rendered",
+      "object": "fig_14e9484ca1f59fc201f11f6496b278ae",
+      "severity": "warning"
+    },
+    {
+      "code": "DOCX_LAYOUT_PAGINATED",
+      "effect": "line wrapping and page boundaries are computed approximations",
+      "message": "DOCX was paginated using deterministic layout engine",
+      "severity": "warning"
+    },
+    {
+      "code": "DOCX_FONT_SUBSTITUTED",
+      "effect": "glyph metrics follow standard proportional reference widths",
+      "message": "layout used deterministic proportional fallback font",
+      "severity": "warning"
+    },
+    {
+      "code": "DOCX_PAGINATION_BLOCK_GRANULAR",
+      "effect": "widow, orphan and keep-lines rules are approximated by whole-block moves; page breaks can occur earlier than in Word",
+      "message": "pagination never splits a block across pages",
+      "severity": "warning"
+    }
+  ]
+}

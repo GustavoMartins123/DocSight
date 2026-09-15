@@ -1,0 +1,350 @@
+{
+  "blocks": [
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 341.6000061035156,
+        "y0": 47.5999755859375,
+        "y1": 65.5999755859375
+      },
+      "confidence": 0.8999999761581421,
+      "content": {
+        "level": 1,
+        "style_id": null,
+        "text": "Project Architecture Report",
+        "type": "heading"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "h_5c5bd4fa20c240245a718728c89db972",
+      "kind": "heading",
+      "page": 1,
+      "reading_order": 1,
+      "source": {
+        "length": 2,
+        "offset": 202,
+        "path": "pdf::page[1]::content"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 201.20001220703125,
+        "y0": 100.79998779296875,
+        "y1": 114.79998779296875
+      },
+      "confidence": 0.8999999761581421,
+      "content": {
+        "level": 2,
+        "style_id": null,
+        "text": "1. System Overview",
+        "type": "heading"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "h_67ec344cfa3f8255c9877664b0ac7fad",
+      "kind": "heading",
+      "page": 1,
+      "reading_order": 2,
+      "source": {
+        "length": 2,
+        "offset": 252,
+        "path": "pdf::page[1]::content"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 464.0000305175781,
+        "y0": 134.0,
+        "y1": 159.0
+      },
+      "confidence": 0.8500000238418579,
+      "content": {
+        "style_id": null,
+        "text": "This document describes the native architecture of the system. All components operate deterministically without remote dependencies.",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_260f81f774d6c4b913cc09d739a5406d",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 3,
+      "source": {
+        "length": 103,
+        "offset": 346,
+        "path": "pdf::page[1]::content"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 234.8000030517578,
+        "y0": 190.79998779296875,
+        "y1": 204.79998779296875
+      },
+      "confidence": 0.8999999761581421,
+      "content": {
+        "level": 2,
+        "style_id": null,
+        "text": "2. Performance Metrics",
+        "type": "heading"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "h_75b91254dfe9c90f0e8652c71bcd3d93",
+      "kind": "heading",
+      "page": 1,
+      "reading_order": 4,
+      "source": {
+        "length": 2,
+        "offset": 501,
+        "path": "pdf::page[1]::content"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 428.0,
+        "y0": 224.0,
+        "y1": 234.0
+      },
+      "confidence": 0.8500000238418579,
+      "content": {
+        "style_id": null,
+        "text": "Key metrics are summarized in the table below for quick review.",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_de9c5d1d34774ca969e54cb4ebbeea4f",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 5,
+      "source": {
+        "length": 2,
+        "offset": 596,
+        "path": "pdf::page[1]::content"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 250.0,
+        "y0": 302.0,
+        "y1": 362.0
+      },
+      "confidence": 0.9909999966621399,
+      "content": {
+        "cells": [
+          {
+            "bbox": {
+              "x0": 50.0,
+              "x1": 150.0,
+              "y0": 302.0,
+              "y1": 332.0
+            },
+            "blocks": [],
+            "column": 0,
+            "column_span": 1,
+            "id": "cell_f3b37d9a95ec5af7dde442cc8848fa07",
+            "row": 0,
+            "row_span": 1,
+            "source": {
+              "length": null,
+              "offset": null,
+              "path": "pdf::page[1]::table::cell[0,0]"
+            },
+            "text": "Metric"
+          },
+          {
+            "bbox": {
+              "x0": 150.0,
+              "x1": 250.0,
+              "y0": 302.0,
+              "y1": 332.0
+            },
+            "blocks": [],
+            "column": 1,
+            "column_span": 1,
+            "id": "cell_ddf88096de599f0cc7ec13dd19b03c43",
+            "row": 0,
+            "row_span": 1,
+            "source": {
+              "length": null,
+              "offset": null,
+              "path": "pdf::page[1]::table::cell[0,1]"
+            },
+            "text": "Score"
+          },
+          {
+            "bbox": {
+              "x0": 50.0,
+              "x1": 150.0,
+              "y0": 332.0,
+              "y1": 362.0
+            },
+            "blocks": [],
+            "column": 0,
+            "column_span": 1,
+            "id": "cell_c8c08830c3105b764835ecda95b92a68",
+            "row": 1,
+            "row_span": 1,
+            "source": {
+              "length": null,
+              "offset": null,
+              "path": "pdf::page[1]::table::cell[1,0]"
+            },
+            "text": "Latency"
+          },
+          {
+            "bbox": {
+              "x0": 150.0,
+              "x1": 250.0,
+              "y0": 332.0,
+              "y1": 362.0
+            },
+            "blocks": [],
+            "column": 1,
+            "column_span": 1,
+            "id": "cell_f95231a9ac27bade8b73b5386800820d",
+            "row": 1,
+            "row_span": 1,
+            "source": {
+              "length": null,
+              "offset": null,
+              "path": "pdf::page[1]::table::cell[1,1]"
+            },
+            "text": "12ms"
+          }
+        ],
+        "columns": 2,
+        "detector": "ruled",
+        "header_rows": 1,
+        "rows": 2,
+        "type": "table"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "tbl_9be7ac4bff0dc8db97c13184d908cb6a",
+      "kind": "table",
+      "page": 1,
+      "reading_order": 6,
+      "source": {
+        "length": null,
+        "offset": null,
+        "path": "pdf::page[1]::table[0]::ruled"
+      },
+      "z_index": 0
+    },
+    {
+      "bbox": {
+        "x0": 50.0,
+        "x1": 530.0,
+        "y0": 394.0,
+        "y1": 404.0
+      },
+      "confidence": 0.8500000238418579,
+      "content": {
+        "style_id": null,
+        "text": "In conclusion, the native pipeline satisfies all operational safety constraints.",
+        "type": "paragraph"
+      },
+      "flags": {
+        "break_after": false,
+        "keep_lines": false,
+        "keep_with_next": false,
+        "page_break_before": false
+      },
+      "id": "p_952da7dc268586a1485bc393d644a088",
+      "kind": "paragraph",
+      "page": 1,
+      "reading_order": 7,
+      "source": {
+        "length": 2,
+        "offset": 860,
+        "path": "pdf::page[1]::content"
+      },
+      "z_index": 0
+    }
+  ],
+  "comments": [],
+  "format": "pdf",
+  "id": "doc_a518b8cc3eb674dfc63dd83e6b85c776",
+  "links": [],
+  "metadata": {
+    "author": null,
+    "producer": "docsight-pdf-native",
+    "subject": null,
+    "title": null
+  },
+  "pages": [
+    {
+      "block_ids": [
+        "h_5c5bd4fa20c240245a718728c89db972",
+        "h_67ec344cfa3f8255c9877664b0ac7fad",
+        "p_260f81f774d6c4b913cc09d739a5406d",
+        "h_75b91254dfe9c90f0e8652c71bcd3d93",
+        "p_de9c5d1d34774ca969e54cb4ebbeea4f",
+        "tbl_9be7ac4bff0dc8db97c13184d908cb6a",
+        "p_952da7dc268586a1485bc393d644a088"
+      ],
+      "height_pt": 842.0,
+      "number": 1,
+      "overlays": [],
+      "width_pt": 595.0
+    }
+  ],
+  "resources": [],
+  "sections": [],
+  "sha256": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05",
+  "size_bytes": 1517,
+  "styles": [],
+  "tracked_changes": {
+    "deletions": 0,
+    "insertions": 0
+  },
+  "version": {
+    "engine_version": "<engine>",
+    "schema_version": "1.0"
+  },
+  "warnings": [
+    {
+      "code": "APPROXIMATED_PDF_FONT",
+      "effect": "the renderer uses the declared deterministic fallback glyph set for that font",
+      "message": "page 1 contains text without an embedded TrueType outline",
+      "page": 1,
+      "severity": "warning"
+    }
+  ]
+}

@@ -1,8 +1,10 @@
+pub mod canonical;
 pub mod evidence;
 mod glyph;
 pub mod ir;
 pub mod png;
 
+pub use canonical::*;
 pub use evidence::*;
 pub use glyph::*;
 pub use ir::*;

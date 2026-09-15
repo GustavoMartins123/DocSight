@@ -1,0 +1,73 @@
+# Backlog
+
+Work that is known, deliberately deferred, and classified by whether it blocks the first serious release.
+
+`PRODUCT_SCOPE.md` states what DocSight promises today. This file states what it does not promise yet and when that is expected to change. Nothing here is a commitment to a date; the classification is about ordering, not scheduling.
+
+Classification:
+
+- **v1** — required before DocSight can be installed and trusted by a third party. A gap that makes a common real document unusable, or that makes an existing promise unreliable.
+- **post-v1** — real value, but the product is honest and useful without it.
+- **experimental** — unproven direction. Needs a use case, a contract and a test strategy before any code.
+
+---
+
+## v1
+
+### Ingestion
+
+| Item | Why it blocks v1 |
+| --- | --- |
+| Traverse Form XObjects in PDF content streams | Text inside a Form XObject is currently invisible to every command. On a real corpus this silently emptied 8 of 43 documents. Tracked as A8 in `ACHADOS_CORPUS_REAL.md`. |
+| Incremental PDF updates (`Prev` chains from appended revisions) | Common in signed and annotated PDFs. Tracked as A1b. |
+| Rasterize embedded DOCX images instead of placeholder boxes | `render` and `crop` currently produce visual evidence that omits the actual image (`DOCX_FIGURE_RASTER_PLACEHOLDER`). |
+
+### Contract correctness
+
+| Item | Why it blocks v1 |
+| --- | --- |
+| Classify `PDF_NON_UNIFORM_STROKE_VISUAL` as a visual-fidelity loss | The diagnostic states the stroke width is approximated, but the code is absent from the visual reason-code catalogue, so `inspect` and `coverage` still report render fidelity as exact. |
+| Classify `PDF_TEXT_CODE_UNMAPPED` as a text-fidelity loss | Characters are extracted as the Unicode replacement character while text fidelity is still reported as exact. |
+| Single ingestion boundary shared by CLI, diff and render | Three crates each dispatch format to parser independently. They agree today only by inspection. |
+
+### Layout fidelity
+
+| Item | Why it blocks v1 |
+| --- | --- |
+| Multi-section DOCX geometry | Section geometry after the first section is discarded (`DOCX_SECTIONS_COLLAPSED`), so page size, margins and headers are wrong for any document that changes section. |
+| Line-level pagination | Pagination moves whole blocks, so widows, orphans and `keep-lines` are approximations and page breaks can occur earlier than in Word. |
+
+### Operability
+
+| Item | Why it blocks v1 |
+| --- | --- |
+| Content-addressed cache between invocations | An agent workflow re-parses and re-lays-out the same document for every command. Tracked as A13. |
+
+---
+
+## post-v1
+
+- Real font discovery, loading and shaping instead of the deterministic proportional fallback, with a declared font fingerprint in the reproducibility inputs.
+- PDF annotations, and `Annotation` and `Watermark` overlays in the IR. The entities exist but no parser produces them.
+- DOCX floating objects and shapes, and the `Shape` block kind, which is likewise declared but never produced.
+- Per-revision tracked changes: authorship, timestamp and content, rather than insertion and deletion counts.
+- Complex DOCX numbering: multi-level list restarts, custom patterns and style-linked numbering.
+- Table columns, column spans and text flow across columns.
+- PDF caption reconstruction, which would let the `caption` DQL selector work for PDF instead of failing closed.
+- Table detection quality: calibrated confidence for unruled and partially-ruled tables, and a second detector with declared provenance.
+- Richer `diff` lineage across versions, reducing `DIFF_LINEAGE_AMBIGUOUS`.
+- Packaged distribution: signed release artifacts, install instructions and a supported-platform matrix.
+
+---
+
+## experimental
+
+Nothing here is planned. Each item requires a written use case, a stable contract and a test strategy before implementation, per Rule 1 of the implementation plan.
+
+- DQL beyond the current constrained selector grammar: joins, aggregation, user-defined predicates.
+- A plugin interface for third-party detectors or exporters.
+- Incremental or streaming ingestion of very large documents.
+- A local viewer or TUI over the IR.
+- Structured export targets beyond the current ones, such as a normalized archival format.
+
+Items explicitly rejected rather than deferred are listed under *Out of scope* in `PRODUCT_SCOPE.md`.

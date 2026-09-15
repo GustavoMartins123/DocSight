@@ -32,6 +32,15 @@ const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
 
 const PAGE_APPROXIMATION_CODES: &[&str] = &["DOCX_LAYOUT_PAGINATED"];
 
+const DOCX_RENDER_APPROXIMATION_CODES: &[&str] = &[
+    "DOCX_FONT_SUBSTITUTED",
+    "DOCX_FIGURE_RASTER_PLACEHOLDER",
+    "DOCX_BLOCK_TALLER_THAN_PAGE",
+    "DOCX_PAGINATION_BLOCK_GRANULAR",
+];
+
+const DOCX_TEXT_APPROXIMATION_CODE: &str = "DOCX_RUN_ELEMENT_UNSUPPORTED";
+
 const UNKNOWN_STRUCTURE_PENALTY: f32 = 1.000;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -703,4 +712,51 @@ pub fn compute_coverage(
         affected_objects_count: affected_ids.len(),
         reason_codes,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DocumentCapabilities {
+    pub structure: CoverageStatus,
+    pub text: CoverageStatus,
+    pub render: CoverageStatus,
+}
+
+pub fn document_capabilities(document: &Document) -> DocumentCapabilities {
+    let codes: BTreeSet<&str> = document
+        .warnings
+        .iter()
+        .map(|warning| warning.code.as_str())
+        .collect();
+    match document.format {
+        DocumentFormat::Docx => {
+            DocumentCapabilities {
+                structure: approximated_unless(codes.iter().any(|code| {
+                    code.contains("UNSUPPORTED") && *code != DOCX_TEXT_APPROXIMATION_CODE
+                })),
+                text: approximated_unless(codes.contains(DOCX_TEXT_APPROXIMATION_CODE)),
+                render: approximated_unless(
+                    codes
+                        .iter()
+                        .any(|code| DOCX_RENDER_APPROXIMATION_CODES.contains(code)),
+                ),
+            }
+        }
+        DocumentFormat::Pdf => DocumentCapabilities {
+            structure: CoverageStatus::Inferred,
+            text: CoverageStatus::Exact,
+            render: approximated_unless(
+                codes
+                    .iter()
+                    .any(|code| GLOBAL_VISUAL_UNSUPPORTED_CODES.contains(code)),
+            ),
+        },
+    }
+}
+
+fn approximated_unless(approximated: bool) -> CoverageStatus {
+    if approximated {
+        CoverageStatus::Approximated
+    } else {
+        CoverageStatus::Exact
+    }
 }
