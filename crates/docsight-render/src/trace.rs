@@ -3,8 +3,8 @@ use docsight_core::{
     BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
     DocumentSource, EvidenceRecord, ObjectId, Rect, ResourceKind, compute_evidence, write_all,
 };
-use docsight_layout::{LaidOutPage, layout_docx};
-use docsight_ooxml::parse_docx;
+use docsight_ingest::{ingest as load_document, ingest_docx};
+use docsight_layout::LaidOutPage;
 use docsight_pdf::{
     PdfDocument, PdfTraceClip, PdfTraceDisplayOperation, PdfTraceFillRule, PdfTraceLineCap,
     PdfTraceLineJoin, PdfTracePage, PdfTracePathSegment, PdfTraceResourceKind,
@@ -888,7 +888,7 @@ fn trace_pdf_operation(operation: &PdfTraceDisplayOperation) -> TraceDisplayOper
 fn trace_material(source: &DocumentSource, page: u32) -> Result<TraceMaterial, DocsightError> {
     match source.format() {
         DocumentFormat::Docx => {
-            let laid_out = layout_docx(parse_docx(source)?)?;
+            let laid_out = ingest_docx(source)?;
             Ok(TraceMaterial::Docx {
                 document: laid_out.document,
                 pages: laid_out.pages,
@@ -900,13 +900,6 @@ fn trace_material(source: &DocumentSource, page: u32) -> Result<TraceMaterial, D
             let page = pdf.trace_page(page)?;
             Ok(TraceMaterial::Pdf { document, page })
         }
-    }
-}
-
-fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
-    match source.format() {
-        DocumentFormat::Docx => Ok(layout_docx(parse_docx(source)?)?.document),
-        DocumentFormat::Pdf => PdfDocument::open(source)?.to_document(),
     }
 }
 

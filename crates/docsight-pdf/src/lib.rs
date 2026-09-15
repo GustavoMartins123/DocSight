@@ -372,6 +372,9 @@ impl<'a> PdfDocument<'a> {
             if parsed.omitted_xobjects {
                 all_warnings.push(xobject_placeholder_warning(page_num));
             }
+            if parsed.unmapped_text_codes {
+                all_warnings.push(unmapped_text_warning(page_num));
+            }
             let reconstructed = reconstruction::reconstruct_page_semantics(
                 page_num,
                 self.source.sha256(),

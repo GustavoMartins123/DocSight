@@ -1,22 +1,18 @@
 [package]
-name = "docsight-render"
+name = "docsight-ingest"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-sha2.workspace = true
 docsight-core = { path = "../docsight-core" }
-docsight-ingest = { path = "../docsight-ingest" }
 docsight-layout = { path = "../docsight-layout" }
+docsight-ooxml = { path = "../docsight-ooxml" }
 docsight-pdf = { path = "../docsight-pdf" }
-serde.workspace = true
-serde_json.workspace = true
-zip.workspace = true
 
 [dev-dependencies]
-docsight-ingest = { path = "../docsight-ingest" }
+serde_json.workspace = true
 
 [lints]
 workspace = true

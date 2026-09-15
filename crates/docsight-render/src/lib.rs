@@ -3,8 +3,7 @@ pub mod hit;
 pub mod trace;
 
 use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect, write_all};
-use docsight_layout::layout_docx;
-use docsight_ooxml::parse_docx;
+use docsight_ingest::ingest_docx;
 use docsight_pdf::{PdfDocument, RasterizedPage};
 use docx_raster::rasterize_docx_page;
 pub use hit::*;
@@ -73,8 +72,7 @@ pub fn render_docx(
     source: &DocumentSource,
     request: &RenderRequest,
 ) -> Result<RenderedImage, DocsightError> {
-    let unpaginated = parse_docx(source)?;
-    let laid_out = layout_docx(unpaginated)?;
+    let laid_out = ingest_docx(source)?;
     let (page_num, crop_box, crop_object) = match &request.target {
         RenderTarget::Page { page } => (*page, None, None),
         RenderTarget::Region { page, bbox } => (*page, Some(*bbox), None),

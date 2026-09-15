@@ -2,9 +2,7 @@ use docsight_core::{
     Block, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect,
     table_to_tsv_string,
 };
-use docsight_layout::layout_docx;
-use docsight_ooxml::parse_docx;
-use docsight_pdf::PdfDocument;
+use docsight_ingest::ingest as load_doc;
 use docsight_render::{RenderRequest, RenderTarget, encode_png, render_document};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -463,20 +461,6 @@ fn lineage_ambiguity_warning(record: &LineageRecord) -> Option<Diagnostic> {
         object,
         page: None,
     })
-}
-
-fn load_doc(source: &DocumentSource) -> Result<Document, DocsightError> {
-    match source.format() {
-        DocumentFormat::Docx => {
-            let unpaginated = parse_docx(source)?;
-            let laid_out = layout_docx(unpaginated)?;
-            Ok(laid_out.document)
-        }
-        DocumentFormat::Pdf => {
-            let pdf = PdfDocument::open(source)?;
-            pdf.to_document()
-        }
-    }
 }
 
 pub fn diff_package(

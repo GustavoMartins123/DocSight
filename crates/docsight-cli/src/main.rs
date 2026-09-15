@@ -11,8 +11,7 @@ use docsight_core::{
     table_to_tsv, table_to_tsv_string,
 };
 use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents};
-use docsight_layout::layout_docx;
-use docsight_ooxml::parse_docx;
+use docsight_ingest::ingest as load_document;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{
     HitQuery, RenderRequest, RenderTarget, render_document,
@@ -1321,20 +1320,6 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
-    }
-}
-
-fn load_document(source: &DocumentSource) -> Result<Document, DocsightError> {
-    match source.format() {
-        DocumentFormat::Docx => {
-            let unpaginated = parse_docx(source)?;
-            let laid_out = layout_docx(unpaginated)?;
-            Ok(laid_out.document)
-        }
-        DocumentFormat::Pdf => {
-            let pdf = PdfDocument::open(source)?;
-            pdf.to_document()
-        }
     }
 }
 

@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand};
-use docsight_core::{Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource};
-use docsight_layout::layout_docx;
-use docsight_ooxml::parse_docx;
-use docsight_pdf::PdfDocument;
+use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource};
+use docsight_ingest::ingest as load_doc;
 use docsight_render::{RenderRequest, RenderTarget, render_document};
 use serde::Serialize;
 use std::io::{self, Write};
@@ -255,20 +253,6 @@ fn execute_worker(cli: &WorkerCli) -> Result<(), DocsightError> {
             writeln!(io::stdout(), "Rendered page {} to {}", page, out.display())
                 .map_err(stdout_err)?;
             Ok(())
-        }
-    }
-}
-
-fn load_doc(source: &DocumentSource) -> Result<Document, DocsightError> {
-    match source.format() {
-        DocumentFormat::Docx => {
-            let unpaginated = parse_docx(source)?;
-            let laid_out = layout_docx(unpaginated)?;
-            Ok(laid_out.document)
-        }
-        DocumentFormat::Pdf => {
-            let pdf = PdfDocument::open(source)?;
-            pdf.to_document()
         }
     }
 }

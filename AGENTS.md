@@ -36,6 +36,7 @@ Use um workspace Rust com responsabilidades separadas, sem dependências circula
 - `docsight-cli`: interface `clap`, validação de argumentos e apresentação humana.
 - `docsight-agent`: schemas JSON/NDJSON, limites de saída e tokens de continuação.
 - `docsight-core`: IDs, geometria, `Document IR`, proveniência e diagnósticos.
+- `docsight-ingest`: fronteira única de ingestão; despacha formato para o parser e devolve `Document IR` normalizada.
 - `docsight-ooxml`: leitura OPC/ZIP e parsing OOXML limitado por recursos.
 - `docsight-layout`: paginação e layout determinístico de DOCX.
 - `docsight-pdf`: parser PDF próprio, page tree, recursos, content streams e normalização para a IR.

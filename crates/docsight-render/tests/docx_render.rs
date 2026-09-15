@@ -1,6 +1,5 @@
 use docsight_core::DocumentSource;
-use docsight_layout::layout_docx;
-use docsight_ooxml::parse_docx;
+use docsight_ingest::ingest_docx;
 use docsight_render::{RenderRequest, RenderTarget, render_document};
 use std::path::PathBuf;
 
@@ -18,8 +17,7 @@ fn renders_docx_full_page_and_object_crop_to_png() -> Result<(), Box<dyn std::er
     let path = fixture("sample_headings.docx");
     let source = DocumentSource::open(&path)?;
 
-    let unpaginated = parse_docx(&source)?;
-    let laid_out = layout_docx(unpaginated)?;
+    let laid_out = ingest_docx(&source)?;
     let first_heading = laid_out
         .document
         .headings()

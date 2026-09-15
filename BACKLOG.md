@@ -22,14 +22,6 @@ Classification:
 | Incremental PDF updates (`Prev` chains from appended revisions) | Common in signed and annotated PDFs. Tracked as A1b. |
 | Rasterize embedded DOCX images instead of placeholder boxes | `render` and `crop` currently produce visual evidence that omits the actual image (`DOCX_FIGURE_RASTER_PLACEHOLDER`). |
 
-### Contract correctness
-
-| Item | Why it blocks v1 |
-| --- | --- |
-| Classify `PDF_NON_UNIFORM_STROKE_VISUAL` as a visual-fidelity loss | The diagnostic states the stroke width is approximated, but the code is absent from the visual reason-code catalogue, so `inspect` and `coverage` still report render fidelity as exact. |
-| Classify `PDF_TEXT_CODE_UNMAPPED` as a text-fidelity loss | Characters are extracted as the Unicode replacement character while text fidelity is still reported as exact. |
-| Single ingestion boundary shared by CLI, diff and render | Three crates each dispatch format to parser independently. They agree today only by inspection. |
-
 ### Layout fidelity
 
 | Item | Why it blocks v1 |

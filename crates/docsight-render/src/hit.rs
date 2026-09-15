@@ -1,10 +1,7 @@
 use docsight_core::{
-    BlockContent, BlockKind, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId,
-    OverlayKind, Rect,
+    BlockContent, BlockKind, DocsightError, Document, DocumentSource, ObjectId, OverlayKind, Rect,
 };
-use docsight_layout::layout_docx;
-use docsight_ooxml::parse_docx;
-use docsight_pdf::PdfDocument;
+use docsight_ingest::ingest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -99,17 +96,7 @@ pub fn hit_test_document(
     page_number: u32,
     query: &HitQuery,
 ) -> Result<HitResult, DocsightError> {
-    let document = match source.format() {
-        DocumentFormat::Docx => {
-            let unpaginated = parse_docx(source)?;
-            let laid_out = layout_docx(unpaginated)?;
-            laid_out.document
-        }
-        DocumentFormat::Pdf => {
-            let pdf = PdfDocument::open(source)?;
-            pdf.to_document()?
-        }
-    };
+    let document = ingest(source)?;
 
     hit_test(&document, page_number, query)
 }

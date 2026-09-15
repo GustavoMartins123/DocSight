@@ -200,6 +200,7 @@ dependencies = [
  "docsight-agent",
  "docsight-core",
  "docsight-diff",
+ "docsight-ingest",
  "docsight-layout",
  "docsight-ooxml",
  "docsight-pdf",
@@ -230,15 +231,24 @@ name = "docsight-diff"
 version = "0.1.4"
 dependencies = [
  "docsight-core",
- "docsight-layout",
- "docsight-ooxml",
- "docsight-pdf",
+ "docsight-ingest",
  "docsight-render",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "docsight-ingest"
+version = "0.1.4"
+dependencies = [
+ "docsight-core",
+ "docsight-layout",
+ "docsight-ooxml",
+ "docsight-pdf",
+ "serde_json",
 ]
 
 [[package]]
@@ -279,8 +289,8 @@ name = "docsight-render"
 version = "0.1.4"
 dependencies = [
  "docsight-core",
+ "docsight-ingest",
  "docsight-layout",
- "docsight-ooxml",
  "docsight-pdf",
  "serde",
  "serde_json",
@@ -312,9 +322,7 @@ version = "0.1.4"
 dependencies = [
  "clap",
  "docsight-core",
- "docsight-layout",
- "docsight-ooxml",
- "docsight-pdf",
+ "docsight-ingest",
  "docsight-render",
  "libc",
  "serde",
