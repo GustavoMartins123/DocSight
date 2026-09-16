@@ -34,7 +34,8 @@ TARGETS = {
     'aarch64-apple-darwin': ('docsight', 'macho', 0x0100000C),
 }
 DOCUMENTS = ('README.md', 'INSTALL.md', 'PRODUCT_SCOPE.md', 'AGENT_PROTOCOL.md',
-             'PERFORMANCE.md', 'CHANGELOG.md', 'BACKLOG.md', 'FUZZING.md', 'LICENSE-MIT', 'LICENSE-APACHE')
+             'PERFORMANCE.md', 'CHANGELOG.md', 'BACKLOG.md', 'FUZZING.md', 'BETA.md', 'RELEASE.md',
+             'LICENSE-MIT', 'LICENSE-APACHE')
 EXAMPLES = ('sample_headings.docx', 'sample_semantic.pdf')
 MAX_FILE_BYTES = 268_435_456
 MAX_TOTAL_BYTES = 536_870_912

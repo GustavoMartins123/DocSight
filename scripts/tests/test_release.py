@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -84,6 +85,16 @@ class ReleaseFixture(unittest.TestCase):
 
 
 class ReleaseTests(ReleaseFixture):
+    def test_readme_offline_guides_are_shipped_in_every_archive(self):
+        links = re.findall(r'\]\(([A-Za-z_-]+\.md)\)', (ROOT / 'README.md').read_text())
+        self.assertIn('BETA.md', links)
+        self.assertIn('RELEASE.md', links)
+        with zipfile.ZipFile(self.package()) as archive:
+            members = archive.namelist()
+            for name in links:
+                self.assertIn(name, DOCUMENTS)
+                self.assertTrue(any(member.endswith('/' + name) for member in members), name)
+
     def test_all_five_target_headers_are_supported(self):
         for target in TARGETS:
             with self.subTest(target=target):

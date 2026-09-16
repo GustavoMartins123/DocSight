@@ -4,12 +4,20 @@ DocSight is a local, headless evidence layer for inspecting DOCX and PDF files f
 
 The same document bytes, engine version, backends, fonts and options produce deterministic JSON and artifacts. Unsupported or approximate behavior is exposed through typed diagnostics rather than hidden behind a fallback.
 
+## Installation
+
+For a maintainer-published binary candidate, follow the [installation guide](INSTALL.md).
+A source checkout or a workflow definition does not mean binaries have already
+been published. The configured five-target matrix requires native validation
+before a candidate is described as supported. Running the extracted binary does
+not require Rust or Python.
+
 ## Five-minute agent-first quickstart
 
-Build with the pinned stable Rust toolchain:
+For development or when no binary has been published, build with the pinned stable Rust toolchain:
 
 ```bash
-cargo build --release
+cargo build --locked --release
 export PATH="$PWD/target/release:$PATH"
 export DOC="/absolute/path/to/document.docx"
 ```
@@ -114,3 +122,11 @@ docsight completions elvish > docsight.elv
 - [Performance and scale](PERFORMANCE.md) documents the versioned DS-9 workloads, metrics and CI budgets.
 
 DocSight does not edit documents, perform OCR, answer natural-language questions, fetch hyperlinks or run as a daemon. PDF structure is inferred with confidence and provenance; DOCX layout reports every approximation that can affect evidence.
+
+## Maintainer validation and beta
+
+[Release procedures](RELEASE.md) document native packaging, checksums, smoke
+checks and the V1 evidence gate. [Beta procedures](BETA.md) cover local opt-in
+observations, consent and reproducing a failure before fixing it. Neither a
+passing automation unit test nor an empty issue register is release acceptance.
+The engine remains at version 0.1.4; the current V1 gaps remain in the backlog.
