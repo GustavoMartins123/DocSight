@@ -1,0 +1,14 @@
+{
+  "schema": "docsight.readiness-policy/v1",
+  "minimum_beta_participants": 5,
+  "minimum_corpus_documents": 100,
+  "minimum_real_documents_per_format": 25,
+  "required_reviews": [
+    "policy",
+    "installation",
+    "behavior-and-json",
+    "render-and-diff",
+    "security-and-fuzzing",
+    "beta-participation-and-triage"
+  ]
+}
