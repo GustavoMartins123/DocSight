@@ -14,12 +14,6 @@ Classification:
 
 ## v1
 
-### Ingestion
-
-| Item | Why it blocks v1 |
-| --- | --- |
-| Incremental PDF updates (`Prev` chains from appended revisions) | Common in signed and annotated PDFs. Tracked as A1b. |
-
 ### Layout fidelity
 
 | Item | Why it blocks v1 |
@@ -42,7 +36,7 @@ Classification:
 - Filtered image scaling. Figure scaling is nearest-neighbour, chosen for determinism; a box or Lanczos filter would look closer to Word at the cost of a defined tolerance in the visual goldens.
 - Remaining PNG variants: 1, 2, 4 and 16 bits per channel, and interlaced images. Each currently fails closed with a diagnostic naming the variant.
 - Shading (`sh`) painting. The operator no longer vetoes a document, but the shaded area is left unpainted and reported through `PDF_SHADING_UNSUPPORTED`.
-- Image XObject decoding. PDF image pixels are still placeholders; only DOCX PNG parts are decoded today.
+- Image XObject decoding. PDF image pixels are still placeholders; DOCX PNG and JPEG parts are already decoded.
 - Contextual spacing (`w:contextualSpacing`), which is parsed and reported but not applied between paragraphs of the same style.
 - Annotation appearance streams: an annotation currently contributes geometry and text to the IR, not its rendered pixels.
 - `Watermark` overlays in the IR. The entity exists but no parser produces it.
@@ -53,7 +47,7 @@ Classification:
 - PDF caption reconstruction, which would let the `caption` DQL selector work for PDF instead of failing closed.
 - Table detection quality: calibrated confidence for unruled and partially-ruled tables, and a second detector with declared provenance.
 - Richer `diff` lineage across versions, reducing `DIFF_LINEAGE_AMBIGUOUS`.
-- Packaged distribution: signed release artifacts, install instructions and a supported-platform matrix.
+- Distribution authentication: signing and macOS notarization, with maintainer credentials and clean-machine validation. Native package generation, checksums, installation instructions and a five-target validation workflow are implemented; their existence does not prove a release has been built or published.
 
 ---
 
@@ -68,3 +62,18 @@ Nothing here is planned. Each item requires a written use case, a stable contrac
 - Structured export targets beyond the current ones, such as a normalized archival format.
 
 Items explicitly rejected rather than deferred are listed under *Out of scope* in `PRODUCT_SCOPE.md`.
+
+
+## Reconciled implemented items
+
+Incremental PDF cross-reference updates (`Prev` chains, formerly A1b) are already
+implemented in `crates/docsight-pdf/src/syntax.rs`. The existing
+`reads_cross_reference_streams_with_compressed_objects` integration test in
+`crates/docsight-pdf/tests/pdf.rs` includes an `incremental_update: true` case.
+This corrects the stale backlog classification; it is not a new parser
+implementation or a claim that the native test was rerun in every environment.
+
+DS10 candidate tooling is described in RELEASE.md and DS11 observation tooling
+in BETA.md. The machine-readable `release/known-gaps.json` retains the open V1
+engine gaps above. A completed tooling implementation is not completion of the
+native validation, real beta or V1 acceptance criteria.
