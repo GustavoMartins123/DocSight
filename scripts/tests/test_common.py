@@ -34,6 +34,10 @@ class CommonTests(unittest.TestCase):
             with self.subTest(number=number), self.assertRaises(ToolError):
                 finite_number(number, 0, 'timeout')
 
+    def test_unrepresentable_integer_limits_are_typed_errors(self):
+        with self.assertRaises(ToolError):
+            finite_number(10 ** 1000, 0, 'timeout')
+
     def test_json_is_canonical(self):
         self.assertEqual(json_bytes({'b': 2, 'a': 1}), json_bytes({'a': 1, 'b': 2}))
 

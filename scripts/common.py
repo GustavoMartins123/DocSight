@@ -97,7 +97,11 @@ def exact_keys(value: Any, keys: set[str], name: str) -> dict[str, Any]:
 
 
 def finite_number(value: Any, minimum: float, name: str) -> float:
-    if type(value) not in (int, float) or not math.isfinite(value) or value < minimum:
+    try:
+        valid = type(value) in (int, float) and math.isfinite(value) and value >= minimum
+    except OverflowError:
+        valid = False
+    if not valid:
         raise ToolError('INVALID_NUMBER', f'{name} must be finite and at least {minimum}')
     return value
 
