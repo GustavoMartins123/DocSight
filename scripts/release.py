@@ -18,6 +18,12 @@ from scripts.common import (
 )
 
 SCHEMA = 'docsight.release/v1'
+SMOKE_CHECKS = (
+    'version', 'capabilities', 'docx_inspect', 'pdf_inspect', 'docx_determinism',
+    'pdf_determinism', 'docx_text', 'pdf_text', 'docx_render', 'pdf_render',
+    'identical_diff', 'sandbox_inspect', 'typed_error',
+    'completion_bash', 'completion_elvish', 'completion_fish', 'completion_powershell', 'completion_zsh',
+)
 VERSION_PATTERN = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?'
 TARGETS = {
     'x86_64-pc-windows-msvc': ('docsight.exe', 'pe', 0x8664),
@@ -252,6 +258,22 @@ def verify_archive(path: Path) -> dict[str, Any]:
         raise ToolError('CORRUPT_ARCHIVE', 'Release archive is corrupt or missing declared content') from error
 
 
+def validate_smoke_receipt(receipt: Any, manifest: dict[str, Any], archive_digest: str) -> None:
+    exact_keys(receipt, {'schema', 'version', 'target', 'revision', 'archive_sha256', 'checks', 'passed'}, 'smoke receipt')
+    if (receipt['schema'] != 'docsight.release-smoke/v1' or receipt['passed'] is not True
+            or receipt['archive_sha256'] != archive_digest
+            or any(receipt[key] != manifest[key] for key in ('version', 'target', 'revision'))):
+        raise ToolError('INVALID_SMOKE_RECEIPT', 'Native smoke receipt does not attest this exact archive')
+    checks = receipt['checks']
+    if not isinstance(checks, list) or len(checks) != len(SMOKE_CHECKS):
+        raise ToolError('INCOMPLETE_SMOKE_RECEIPT', 'Every required native smoke check must be present')
+    for name, check in zip(SMOKE_CHECKS, checks):
+        exact_keys(check, {'name', 'passed', 'error_code', 'elapsed_ms'}, 'smoke check')
+        if check['name'] != name or check['passed'] is not True or check['error_code'] is not None:
+            raise ToolError('FAILED_SMOKE_RECEIPT', 'Every native smoke check must pass exactly once')
+        bounded_integer(check['elapsed_ms'], 0, 3_600_000, 'smoke duration')
+
+
 def collect_archives(directory: Path) -> dict[str, Any]:
     archives = sorted(directory.glob('*.zip'))
     if len(archives) != len(TARGETS):
@@ -266,6 +288,8 @@ def collect_archives(directory: Path) -> dict[str, Any]:
         expected = f'{sha256_file(path)}  {path.name}\n'
         if path.with_name(path.name + '.sha256').read_text() != expected:
             raise ToolError('ARCHIVE_CHECKSUM_MISMATCH', 'Archive checksum differs from its sidecar')
+        receipt = read_json(directory / f"smoke-{manifest['target']}.json")
+        validate_smoke_receipt(receipt, manifest, sha256_file(path))
         lines.append(expected)
     if targets != set(TARGETS) or len(identities) != 1:
         raise ToolError('INCONSISTENT_RELEASE_SET', 'All targets must have the same version, commit and toolchain')

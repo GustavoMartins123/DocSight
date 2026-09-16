@@ -17,14 +17,7 @@ from scripts.common import (
     ProcessResult, ToolError, error_json, isolated_environment, json_bytes,
     parse_json, run_bounded, sha256_file, write_new,
 )
-from scripts.release import TARGETS, archive_basename, check_binary, verify_archive
-
-REQUIRED_CHECKS = (
-    'version', 'capabilities', 'docx_inspect', 'pdf_inspect', 'docx_determinism',
-    'pdf_determinism', 'docx_text', 'pdf_text', 'docx_render', 'pdf_render',
-    'identical_diff', 'sandbox_inspect', 'typed_error',
-    'completion_bash', 'completion_elvish', 'completion_fish', 'completion_powershell', 'completion_zsh',
-)
+from scripts.release import SMOKE_CHECKS, TARGETS, archive_basename, check_binary, verify_archive
 
 
 def native_target() -> str:
@@ -208,7 +201,7 @@ def smoke_archive(archive_path: Path, runner: Callable[..., ProcessResult] = run
     return {'schema': 'docsight.release-smoke/v1', 'version': manifest['version'],
             'target': manifest['target'], 'revision': manifest['revision'],
             'archive_sha256': sha256_file(archive_path), 'checks': checks,
-            'passed': len(checks) == len(REQUIRED_CHECKS) and all(check['passed'] for check in checks)}
+            'passed': len(checks) == len(SMOKE_CHECKS) and all(check['passed'] for check in checks)}
 
 
 def main() -> int:

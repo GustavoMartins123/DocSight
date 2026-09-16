@@ -1,0 +1,129 @@
+name: release
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      previous_revision:
+        description: Optional full ancestor commit SHA for release notes
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  configuration:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.configuration.outputs.matrix }}
+      version: ${{ steps.configuration.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: configuration
+        run: |
+          python -c 'import json, os; from scripts.release import matrix, workspace_version; f = open(os.environ["GITHUB_OUTPUT"], "a"); print("matrix=" + json.dumps(matrix()), file=f); print("version=" + workspace_version(), file=f); f.close()'
+      - name: Validate selected release tag
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python -m scripts.release version --tag "$RELEASE_TAG"
+
+  package:
+    needs: configuration
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.configuration.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      TARGET: ${{ matrix.target }}
+      BINARY: ${{ matrix.binary }}
+      VERSION: ${{ needs.configuration.outputs.version }}
+      CARGO_TERM_COLOR: never
+      RUSTFLAGS: "-D warnings"
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-D warnings -C target-feature=+crt-static"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - name: Test release automation
+        run: python -m unittest discover -s scripts/tests -v
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features --target "$TARGET" -- -D warnings
+      - run: cargo test --locked --workspace --all-features --target "$TARGET"
+      - run: cargo build --locked --release -p docsight-cli --bin docsight --target "$TARGET"
+      - name: Enforce DS9 budgets on the canonical host
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo run --locked --release -p xtask -- benchmark --check --output target/ds9-performance.json
+      - name: Collect dependency notices
+        run: |
+          cargo metadata --locked --format-version 1 --all-features > target/release-metadata.json
+          python -m scripts.notices --metadata target/release-metadata.json --out target/THIRD_PARTY_NOTICES.md
+      - name: Package the native binary
+        run: python -m scripts.release package --binary "target/$TARGET/release/$BINARY" --target "$TARGET" --revision "$GITHUB_SHA" --notices target/THIRD_PARTY_NOTICES.md --out dist
+      - name: Exercise the extracted archive without Rust on PATH
+        run: python -m scripts.smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docsight-package-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docsight-checks-${{ matrix.target }}
+          path: |
+            dist/smoke-*.json
+            target/ds9-performance.json
+          if-no-files-found: ignore
+
+  assemble:
+    needs: [configuration, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docsight-package-*
+          merge-multiple: true
+          path: dist
+      - name: Verify all platform archives and smoke receipts
+        run: python -m scripts.release collect dist
+      - name: Generate release notes
+        env:
+          PREVIOUS_REVISION: ${{ inputs.previous_revision }}
+        run: |
+          args=(--revision "$GITHUB_SHA" --out dist/RELEASE_NOTES.md)
+          if [ -n "$PREVIOUS_REVISION" ]; then args+=(--since "$PREVIOUS_REVISION"); fi
+          python -m scripts.changelog "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docsight-release-candidate
+          path: dist/
+          if-no-files-found: error
