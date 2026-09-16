@@ -30,6 +30,8 @@ class ReleaseFixture(unittest.TestCase):
             (self.root / name).write_text(name + '\n')
         (self.root / 'schemas/v2').mkdir(parents=True)
         (self.root / 'schemas/v2/agent-envelope.json').write_text('{"type":"object"}\n')
+        (self.root / 'schemas/ir/v1').mkdir(parents=True)
+        (self.root / 'schemas/ir/v1/document-ir.json').write_text('{"type":"object"}\n')
         (self.root / 'fixtures/validation').mkdir(parents=True)
         for name in EXAMPLES:
             (self.root / 'fixtures/validation' / name).write_text('synthetic packaging fixture\n')
@@ -140,6 +142,11 @@ class ReleaseTests(ReleaseFixture):
         shutil.rmtree(self.root / 'schemas')
         with self.assertRaisesRegex(ToolError, 'schemas'):
             self.package()
+
+    def test_ir_contract_and_linked_offline_guides_are_shipped(self):
+        manifest = verify_archive(self.package())
+        paths = {record['path'] for record in manifest['files']}
+        self.assertTrue({'schemas/ir/v1/document-ir.json', 'BACKLOG.md', 'FUZZING.md'} <= paths)
 
     def test_payload_tampering_is_detected(self):
         path = self.package()
