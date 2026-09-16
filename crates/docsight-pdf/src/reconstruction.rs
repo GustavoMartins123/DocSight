@@ -108,6 +108,7 @@ pub(crate) fn reconstruct_page_semantics(
                     anchor_length,
                 ),
                 flags: docsight_core::LayoutFlags::default(),
+                format: Default::default(),
                 confidence: 0.85,
                 content: BlockContent::Paragraph(ParagraphBlock {
                     text,
@@ -171,6 +172,7 @@ pub(crate) fn reconstruct_page_semantics(
                     anchor_length,
                 ),
                 flags: docsight_core::LayoutFlags::default(),
+                format: Default::default(),
                 confidence: 0.90,
                 content: BlockContent::Heading(HeadingBlock {
                     level,
@@ -252,6 +254,7 @@ pub(crate) fn reconstruct_page_semantics(
             reading_order: 0,
             source: SourceSpan::new(format!("pdf::page[{page}]::xobject::{resource_name}")),
             flags: docsight_core::LayoutFlags::default(),
+            format: Default::default(),
             confidence: 0.75,
             content: BlockContent::Figure(FigureBlock {
                 alt_text: None,

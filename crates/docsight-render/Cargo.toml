@@ -10,6 +10,7 @@ sha2.workspace = true
 docsight-core = { path = "../docsight-core" }
 docsight-ingest = { path = "../docsight-ingest" }
 docsight-layout = { path = "../docsight-layout" }
+docsight-ooxml = { path = "../docsight-ooxml" }
 docsight-pdf = { path = "../docsight-pdf" }
 serde.workspace = true
 serde_json.workspace = true

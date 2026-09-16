@@ -336,7 +336,7 @@
   },
   "version": {
     "engine_version": "<engine>",
-    "schema_version": "1.0"
+    "schema_version": "1.1"
   },
   "warnings": [
     {

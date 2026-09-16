@@ -38,6 +38,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Hyperlinks, comments and tracked-change counts.
 - Package metadata from `docProps/core.xml` and `docProps/app.xml`: title, author, subject and the authoring application.
 - Deterministic pagination and geometry for a single section, honouring explicit page breaks and `keep-with-next`.
+- Paragraph formatting from the style cascade and direct properties: alignment (`w:jc`), spacing before and after and automatic line spacing (`w:spacing`), and left, right, first-line and hanging indentation (`w:ind`).
 - Unknown body elements are preserved as opaque nodes with a diagnostic; they are never dropped silently.
 
 ### PDF
@@ -58,7 +59,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Text and tables: `text`, `tables`, `table` (JSON, Markdown, CSV, TSV, HTML).
 - Resources and links: `images`, `links`. Link targets are reported, never fetched.
 - Geometry: page-local points at 1/72 inch with the page origin at the top-left, used identically by geometry, render, crop, hit-testing and diff.
-- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box).
+- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box). Embedded PNG images are decoded natively and drawn into their figure box; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
 - Spatial and structural selection: `query` (DQL with `above`, `below`, `inside`, `overlaps`, `nearest`, `distance-to`), `hit` (point or region to objects), `resolve` (ranked descriptor matching with explainable components).
 - Evidence and reproducibility: `evidence`, `coverage`, `fingerprint`, `bundle`, `verify`, `replay`. Coverage reports text, structure, geometry, visual and resource fidelity per page and for the whole document, plus `unsupported_feature_count`, so a caller can tell how much of the document was actually interpreted.
 - Comparison: `diff` at package, semantic and visual levels.
@@ -87,7 +88,7 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | A block taller than the content area overflows the page | `DOCX_BLOCK_TALLER_THAN_PAGE` |
 | Layout is computed rather than read from the source | `DOCX_LAYOUT_PAGINATED` |
 | Text is measured with a deterministic proportional fallback font, not the document's own font | `DOCX_FONT_SUBSTITUTED` |
-| Embedded images are not rasterized; a placeholder box is rendered | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
+| An embedded image is not a PNG this engine can decode, so a placeholder box is rendered instead of its pixels; the diagnostic names the detected format | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
 | An image relationship cannot be resolved | `DOCX_IMAGE_UNRESOLVED` |
 | Numbering definitions or formats cannot be resolved | `DOCX_NUMBERING_UNRESOLVED`, `DOCX_NUMBERING_FORMAT_MISSING` |
 | Unusable table grid widths fall back to equal columns | `DOCX_TABLE_GRID_WIDTHS_UNUSABLE` |
@@ -95,6 +96,7 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | Body elements preserved as opaque nodes without semantic interpretation | `DOCX_BODY_ELEMENT_UNSUPPORTED` |
 | Embedded objects and active content preserved inert, digest only | `DOCX_EMBEDDED_OBJECT_INERT`, `DOCX_ACTIVE_CONTENT_INERT` |
 | A hyperlink target page cannot be resolved | `DOCX_LINK_PAGE_UNRESOLVED` |
+| Contextual spacing is declared but not applied, so spacing is added even between paragraphs of the same style | `DOCX_CONTEXTUAL_SPACING_IGNORED` |
 
 Tracked changes are counted, not reconstructed: `tracked_changes` reports insertion and deletion counts without per-revision authorship or content.
 
@@ -129,6 +131,10 @@ These are not format limitations. They are the cases where a command can answer,
 | An object has no canonical geometry, so it is excluded from spatial results and counted | `SPATIAL_GEOMETRY_UNAVAILABLE` |
 | `context` cannot assign a page to one canonical DOCX section | `CONTEXT_SECTION_UNAVAILABLE` |
 | `context` has no object-level fidelity for an overlay | `CONTEXT_FIDELITY_UNAVAILABLE` |
+
+### Images
+
+Only PNG is decoded, and only 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG, GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as placeholders. Scaling to the figure box is nearest-neighbour, which is deterministic but does not filter; enlarging a small image shows its pixels rather than a smoothed version.
 
 ### Cross-cutting
 

@@ -25,6 +25,7 @@ pub struct DocxParts {
     pub core_properties: Option<String>,
     pub extended_properties: Option<String>,
     pub binary_part_digests: std::collections::BTreeMap<String, String>,
+    pub binary_part_formats: std::collections::BTreeMap<String, String>,
     pub inert_part_digests: std::collections::BTreeMap<String, String>,
 }
 
@@ -89,14 +90,16 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     }
     binary_names.sort();
     let mut binary_part_digests = std::collections::BTreeMap::new();
+    let mut binary_part_formats = std::collections::BTreeMap::new();
     for name in binary_names {
-        let digest = hash_binary_part(&mut archive, &name)?;
+        let (digest, format) = hash_binary_part(&mut archive, &name)?;
+        binary_part_formats.insert(name.clone(), format);
         binary_part_digests.insert(name, digest);
     }
     inert_names.sort();
     let mut inert_part_digests = std::collections::BTreeMap::new();
     for name in inert_names {
-        let digest = hash_binary_part(&mut archive, &name)?;
+        let (digest, _) = hash_binary_part(&mut archive, &name)?;
         inert_part_digests.insert(name, digest);
     }
 
@@ -113,6 +116,7 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
         core_properties,
         extended_properties,
         binary_part_digests,
+        binary_part_formats,
         inert_part_digests,
     })
 }
@@ -281,10 +285,65 @@ fn is_inert_part(name: &str) -> bool {
         || lower.starts_with("word/activex/")
 }
 
+pub fn read_media_part(bytes: &[u8], name: &str) -> Result<Option<Vec<u8>>, DocsightError> {
+    preflight_archive(bytes)?;
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(zip_error)?;
+    let mut file = match archive.by_name(name) {
+        Ok(file) => file,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(error) => return Err(zip_error(error)),
+    };
+    if file.size() > MAX_BINARY_PART_BYTES {
+        return Err(resource_limit(
+            "binary OOXML part size",
+            MAX_BINARY_PART_BYTES,
+        ));
+    }
+    let mut content = Vec::new();
+    file.by_ref()
+        .take(MAX_BINARY_PART_BYTES.saturating_add(1))
+        .read_to_end(&mut content)
+        .map_err(|error| DocsightError::MalformedDocument {
+            message: format!("failed to read OOXML binary part {name}: {error}"),
+        })?;
+    if content.len() as u64 > MAX_BINARY_PART_BYTES {
+        return Err(resource_limit(
+            "binary OOXML part size",
+            MAX_BINARY_PART_BYTES,
+        ));
+    }
+    Ok(Some(content))
+}
+
+fn detect_image_format(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
+        "png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpeg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "gif"
+    } else if bytes.starts_with(b"BM") {
+        "bmp"
+    } else if bytes.starts_with(&[0x49, 0x49, 0x2A, 0x00])
+        || bytes.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    {
+        "tiff"
+    } else if bytes.starts_with(&[0x01, 0x00, 0x00, 0x00]) {
+        "emf"
+    } else if bytes.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) {
+        "wmf"
+    } else if bytes.starts_with(b"<?xml") || bytes.starts_with(b"<svg") {
+        "svg"
+    } else {
+        "unknown"
+    }
+}
+
 fn hash_binary_part(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     name: &str,
-) -> Result<String, DocsightError> {
+) -> Result<(String, String), DocsightError> {
     let mut file = archive.by_name(name).map_err(zip_error)?;
     if file.size() > MAX_BINARY_PART_BYTES {
         return Err(resource_limit(
@@ -296,6 +355,8 @@ fn hash_binary_part(
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     let mut total = 0_u64;
+    let mut format = "unknown";
+    let mut first_chunk = true;
     loop {
         let read = reader
             .read(&mut buffer)
@@ -304,6 +365,10 @@ fn hash_binary_part(
             })?;
         if read == 0 {
             break;
+        }
+        if first_chunk {
+            format = detect_image_format(&buffer[..read]);
+            first_chunk = false;
         }
         total = total
             .checked_add(
@@ -319,11 +384,12 @@ fn hash_binary_part(
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(hasher
+    let digest = hasher
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect())
+        .collect();
+    Ok((digest, format.to_owned()))
 }
 
 fn validate_archive(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<(), DocsightError> {

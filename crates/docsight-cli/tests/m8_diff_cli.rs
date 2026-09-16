@@ -82,7 +82,7 @@ fn diff_docx_summary_matches_specification_layout() -> Result<(), Box<dyn std::e
 
     let text = String::from_utf8(output.stdout)?;
     assert!(text.contains("Pages"));
-    assert!(text.contains("3 → 2"));
+    assert!(text.contains("4 → 2"));
     assert!(text.contains("Semantic changes"));
     assert!(text.contains("Layout changes"));
     assert!(text.contains("Images"));
@@ -128,7 +128,7 @@ fn diff_docx_json_envelope_and_projections() -> Result<(), Box<dyn std::error::E
         .output()?;
     assert!(projected.status.success());
     let proj_val: serde_json::Value = serde_json::from_slice(&projected.stdout)?;
-    assert_eq!(proj_val["result"]["summary"]["pages_before"], 3);
+    assert_eq!(proj_val["result"]["summary"]["pages_before"], 4);
     assert_eq!(proj_val["result"]["summary"]["pages_after"], 2);
     assert!(proj_val["result"].get("semantic").is_none());
 
@@ -198,10 +198,11 @@ fn diff_visual_docx_is_deterministic_and_evidence_limited() -> Result<(), Box<dy
             .any(|code| code == "DOCX_FONT_SUBSTITUTED")
     );
     let pages = visual["page_diffs"].as_array().ok_or("page diffs")?;
-    assert_eq!(pages.len(), 3);
+    assert_eq!(pages.len(), 4);
     assert!(pages.iter().all(|page| page["authoritative"] == false));
-    assert_eq!(pages[2]["change_fraction"], 1.0);
-    assert_eq!(pages[2]["changed_pixels"], pages[2]["total_pixels"]);
+    let last = pages.last().ok_or("last page diff")?;
+    assert_eq!(last["change_fraction"], 1.0);
+    assert_eq!(last["changed_pixels"], last["total_pixels"]);
     assert!(
         value["warnings"]
             .as_array()
@@ -339,14 +340,14 @@ fn diff_visual_ndjson_streams_complete_verifiable_evidence()
     assert_eq!(records[2]["type"], "diff.visual");
     assert_eq!(records[2]["dpi"], 36);
     assert_eq!(records[2]["threshold"], 4);
-    assert_eq!(records[2]["page_diff_count"], 3);
+    assert_eq!(records[2]["page_diff_count"], 4);
     assert_eq!(records[2]["authoritative"], false);
 
     let visual_pages = records
         .iter()
         .filter(|record| record["type"] == "diff.visual.page")
         .collect::<Vec<_>>();
-    assert_eq!(visual_pages.len(), 3);
+    assert_eq!(visual_pages.len(), 4);
     for (index, record) in visual_pages.iter().enumerate() {
         let page = index + 1;
         let relative_path = format!("diff_p{page:04}.png");

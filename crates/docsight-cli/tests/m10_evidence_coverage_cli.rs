@@ -167,7 +167,9 @@ fn coverage_docx_reports_measured_penalties() -> Result<(), Box<dyn std::error::
 
 #[test]
 fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::error::Error>> {
-    let doc_path = fixture("sample_features.docx");
+    let directory = tempfile::tempdir()?;
+    let doc_path = directory.path().join("jpeg_figure.docx");
+    std::fs::write(&doc_path, package_with_jpeg_figure()?)?;
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
 
     let output = docsight()
@@ -176,7 +178,6 @@ fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::er
     assert!(output.status.success());
     let val: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     let result = &val["result"];
-    assert_eq!(result["affected_objects_count"], 8);
 
     let mut unsupported_regions = 0;
     for page in result["pages"].as_array().ok_or("pages")? {
@@ -184,7 +185,6 @@ fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::er
             if region["reason_code"] == "DOCX_FIGURE_RASTER_PLACEHOLDER" {
                 unsupported_regions += 1;
                 assert_eq!(region["status"], "unsupported");
-                assert_eq!(region["reason_code"], "DOCX_FIGURE_RASTER_PLACEHOLDER");
                 assert!(
                     region["object_id"]
                         .as_str()
@@ -201,6 +201,39 @@ fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::er
             .ok_or("codes")?
             .iter()
             .any(|code| code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+    );
+    assert!(
+        result["global"]["resource"]["score"]
+            .as_f64()
+            .ok_or("resource score")?
+            < 1.0,
+        "an unrasterizable figure must reduce resource coverage"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coverage_counts_affected_objects_for_a_rasterizable_document()
+-> Result<(), Box<dyn std::error::Error>> {
+    let doc_path = fixture("sample_features.docx");
+    let doc_str = doc_path.to_str().ok_or("invalid path")?;
+
+    let output = docsight()
+        .args(["coverage", doc_str, "--regions", "--json"])
+        .output()?;
+    assert!(output.status.success());
+    let val: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let result = &val["result"];
+
+    assert_eq!(result["affected_objects_count"], 8);
+    assert!(
+        !result["reason_codes"]
+            .as_array()
+            .ok_or("codes")?
+            .iter()
+            .any(|code| code == "DOCX_FIGURE_RASTER_PLACEHOLDER"),
+        "a PNG figure must not be reported as an unrasterized placeholder"
     );
 
     Ok(())
@@ -337,4 +370,28 @@ fn schemas_stay_in_sync_with_serialized_contracts() -> Result<(), Box<dyn std::e
     );
 
     Ok(())
+}
+
+fn package_with_jpeg_figure() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::{Cursor, Write};
+    use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="1270000" cy="635000"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rId9"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/photo.jpg"/></Relationships>"#;
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    writer.start_file("word/_rels/document.xml.rels", options)?;
+    writer.write_all(rels.as_bytes())?;
+    writer.start_file("word/media/photo.jpg", options)?;
+    writer.write_all(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46])?;
+    Ok(writer.finish()?.into_inner())
 }

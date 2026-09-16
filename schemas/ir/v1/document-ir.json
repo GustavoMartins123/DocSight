@@ -3,7 +3,7 @@
   "$id": "https://docsight.dev/schemas/ir/v1/document-ir.json",
   "title": "DocSight Document IR",
   "description": "Normalized, format-independent representation produced by DOCX and PDF ingestion. Every high-level operation reads this contract instead of parser-specific structures.",
-  "x-ir-schema-version": "1.0",
+  "x-ir-schema-version": "1.1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,70 +24,212 @@
     "warnings"
   ],
   "properties": {
-    "version": { "$ref": "#/$defs/irVersion" },
-    "id": { "type": "string" },
-    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "format": { "enum": ["docx", "pdf"] },
-    "size_bytes": { "type": "integer", "minimum": 0 },
-    "metadata": { "$ref": "#/$defs/documentMetadata" },
-    "styles": { "type": "array", "items": { "$ref": "#/$defs/style" } },
-    "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } },
-    "pages": { "type": "array", "items": { "$ref": "#/$defs/page" } },
-    "blocks": { "type": "array", "items": { "$ref": "#/$defs/block" } },
-    "resources": { "type": "array", "items": { "$ref": "#/$defs/resource" } },
-    "links": { "type": "array", "items": { "$ref": "#/$defs/hyperlink" } },
-    "comments": { "type": "array", "items": { "$ref": "#/$defs/comment" } },
-    "tracked_changes": { "$ref": "#/$defs/trackedChanges" },
-    "warnings": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+    "version": {
+      "$ref": "#/$defs/irVersion"
+    },
+    "id": {
+      "type": "string"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "format": {
+      "enum": [
+        "docx",
+        "pdf"
+      ]
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "metadata": {
+      "$ref": "#/$defs/documentMetadata"
+    },
+    "styles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/style"
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/section"
+      }
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/page"
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/block"
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/hyperlink"
+      }
+    },
+    "comments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/comment"
+      }
+    },
+    "tracked_changes": {
+      "$ref": "#/$defs/trackedChanges"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
   },
   "$defs": {
-    "objectId": { "type": "string", "minLength": 1 },
-    "nullableNumber": { "type": ["number", "null"] },
-    "nullableString": { "type": ["string", "null"] },
-    "nullableBoolean": { "type": ["boolean", "null"] },
-    "nullablePage": { "type": ["integer", "null"], "minimum": 1 },
+    "objectId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nullableNumber": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nullableBoolean": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "nullablePage": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
     "irVersion": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "engine_version"],
+      "required": [
+        "schema_version",
+        "engine_version"
+      ],
       "properties": {
-        "schema_version": { "const": "1.0" },
-        "engine_version": { "type": "string", "minLength": 1 }
+        "schema_version": {
+          "const": "1.1"
+        },
+        "engine_version": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "rect": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["x0", "y0", "x1", "y1"],
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
       "properties": {
-        "x0": { "type": "number" },
-        "y0": { "type": "number" },
-        "x1": { "type": "number" },
-        "y1": { "type": "number" }
+        "x0": {
+          "type": "number"
+        },
+        "y0": {
+          "type": "number"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        }
       }
     },
     "nullableRect": {
-      "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }]
+      "oneOf": [
+        {
+          "$ref": "#/$defs/rect"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "sourceSpan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "offset", "length"],
+      "required": [
+        "path",
+        "offset",
+        "length"
+      ],
       "properties": {
-        "path": { "type": "string" },
-        "offset": { "type": ["integer", "null"], "minimum": 0 },
-        "length": { "type": ["integer", "null"], "minimum": 0 }
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
       }
     },
     "documentMetadata": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "author", "subject", "producer"],
+      "required": [
+        "title",
+        "author",
+        "subject",
+        "producer"
+      ],
       "properties": {
-        "title": { "$ref": "#/$defs/nullableString" },
-        "author": { "$ref": "#/$defs/nullableString" },
-        "subject": { "$ref": "#/$defs/nullableString" },
-        "producer": { "$ref": "#/$defs/nullableString" }
+        "title": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "author": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "subject": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "producer": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "style": {
@@ -103,13 +245,27 @@
         "italic"
       ],
       "properties": {
-        "id": { "type": "string" },
-        "name": { "$ref": "#/$defs/nullableString" },
-        "based_on": { "$ref": "#/$defs/nullableString" },
-        "font_family": { "$ref": "#/$defs/nullableString" },
-        "font_size_pt": { "$ref": "#/$defs/nullableNumber" },
-        "bold": { "$ref": "#/$defs/nullableBoolean" },
-        "italic": { "$ref": "#/$defs/nullableBoolean" }
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "based_on": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "font_family": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "font_size_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "bold": {
+          "$ref": "#/$defs/nullableBoolean"
+        },
+        "italic": {
+          "$ref": "#/$defs/nullableBoolean"
+        }
       }
     },
     "section": {
@@ -128,53 +284,131 @@
         "footer_text"
       ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
-        "section_index": { "type": "integer", "minimum": 1 },
-        "page_width_pt": { "$ref": "#/$defs/nullableNumber" },
-        "page_height_pt": { "$ref": "#/$defs/nullableNumber" },
-        "margin_top_pt": { "$ref": "#/$defs/nullableNumber" },
-        "margin_right_pt": { "$ref": "#/$defs/nullableNumber" },
-        "margin_bottom_pt": { "$ref": "#/$defs/nullableNumber" },
-        "margin_left_pt": { "$ref": "#/$defs/nullableNumber" },
-        "header_text": { "$ref": "#/$defs/nullableString" },
-        "footer_text": { "$ref": "#/$defs/nullableString" }
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "section_index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "page_width_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "page_height_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "margin_top_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "margin_right_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "margin_bottom_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "margin_left_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "header_text": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "footer_text": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "page": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["number", "width_pt", "height_pt", "block_ids", "overlays"],
+      "required": [
+        "number",
+        "width_pt",
+        "height_pt",
+        "block_ids",
+        "overlays"
+      ],
       "properties": {
-        "number": { "type": "integer", "minimum": 1 },
-        "width_pt": { "type": "number", "exclusiveMinimum": 0 },
-        "height_pt": { "type": "number", "exclusiveMinimum": 0 },
-        "block_ids": { "type": "array", "items": { "$ref": "#/$defs/objectId" } },
-        "overlays": { "type": "array", "items": { "$ref": "#/$defs/overlay" } }
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "width_pt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height_pt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "block_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/objectId"
+          }
+        },
+        "overlays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/overlay"
+          }
+        }
       }
     },
     "overlay": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "page", "bbox", "text", "source"],
+      "required": [
+        "id",
+        "kind",
+        "page",
+        "bbox",
+        "text",
+        "source"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
-        "kind": {
-          "enum": ["header", "footer", "watermark", "comment_marker", "annotation"]
+        "id": {
+          "$ref": "#/$defs/objectId"
         },
-        "page": { "type": "integer", "minimum": 1 },
-        "bbox": { "$ref": "#/$defs/nullableRect" },
-        "text": { "type": "string" },
-        "source": { "$ref": "#/$defs/sourceSpan" }
+        "kind": {
+          "enum": [
+            "header",
+            "footer",
+            "watermark",
+            "comment_marker",
+            "annotation"
+          ]
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "$ref": "#/$defs/nullableRect"
+        },
+        "text": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceSpan"
+        }
       }
     },
     "layoutFlags": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "page_break_before": { "type": "boolean" },
-        "break_after": { "type": "boolean" },
-        "keep_with_next": { "type": "boolean" },
-        "keep_lines": { "type": "boolean" }
+        "page_break_before": {
+          "type": "boolean"
+        },
+        "break_after": {
+          "type": "boolean"
+        },
+        "keep_with_next": {
+          "type": "boolean"
+        },
+        "keep_lines": {
+          "type": "boolean"
+        }
       }
     },
     "block": {
@@ -192,7 +426,9 @@
         "content"
       ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
         "kind": {
           "enum": [
             "paragraph",
@@ -205,47 +441,110 @@
             "unknown"
           ]
         },
-        "page": { "$ref": "#/$defs/nullablePage" },
-        "bbox": { "$ref": "#/$defs/nullableRect" },
-        "z_index": { "type": "integer" },
-        "reading_order": { "type": "integer", "minimum": 0 },
-        "source": { "$ref": "#/$defs/sourceSpan" },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "flags": { "$ref": "#/$defs/layoutFlags" },
-        "content": { "$ref": "#/$defs/blockContent" }
+        "page": {
+          "$ref": "#/$defs/nullablePage"
+        },
+        "bbox": {
+          "$ref": "#/$defs/nullableRect"
+        },
+        "z_index": {
+          "type": "integer"
+        },
+        "reading_order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "$ref": "#/$defs/sourceSpan"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "flags": {
+          "$ref": "#/$defs/layoutFlags"
+        },
+        "content": {
+          "$ref": "#/$defs/blockContent"
+        },
+        "format": {
+          "$ref": "#/$defs/paragraphFormat"
+        }
       }
     },
     "blockContent": {
       "oneOf": [
-        { "$ref": "#/$defs/paragraphContent" },
-        { "$ref": "#/$defs/headingContent" },
-        { "$ref": "#/$defs/listItemContent" },
-        { "$ref": "#/$defs/tableContent" },
-        { "$ref": "#/$defs/figureContent" },
-        { "$ref": "#/$defs/shapeContent" },
-        { "$ref": "#/$defs/noteContent" },
-        { "$ref": "#/$defs/unknownContent" }
+        {
+          "$ref": "#/$defs/paragraphContent"
+        },
+        {
+          "$ref": "#/$defs/headingContent"
+        },
+        {
+          "$ref": "#/$defs/listItemContent"
+        },
+        {
+          "$ref": "#/$defs/tableContent"
+        },
+        {
+          "$ref": "#/$defs/figureContent"
+        },
+        {
+          "$ref": "#/$defs/shapeContent"
+        },
+        {
+          "$ref": "#/$defs/noteContent"
+        },
+        {
+          "$ref": "#/$defs/unknownContent"
+        }
       ]
     },
     "paragraphContent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "text", "style_id"],
+      "required": [
+        "type",
+        "text",
+        "style_id"
+      ],
       "properties": {
-        "type": { "const": "paragraph" },
-        "text": { "type": "string" },
-        "style_id": { "$ref": "#/$defs/nullableString" }
+        "type": {
+          "const": "paragraph"
+        },
+        "text": {
+          "type": "string"
+        },
+        "style_id": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "headingContent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "level", "text", "style_id"],
+      "required": [
+        "type",
+        "level",
+        "text",
+        "style_id"
+      ],
       "properties": {
-        "type": { "const": "heading" },
-        "level": { "type": "integer", "minimum": 1, "maximum": 9 },
-        "text": { "type": "string" },
-        "style_id": { "$ref": "#/$defs/nullableString" }
+        "type": {
+          "const": "heading"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9
+        },
+        "text": {
+          "type": "string"
+        },
+        "style_id": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "listItemContent": {
@@ -262,28 +561,74 @@
         "style_id"
       ],
       "properties": {
-        "type": { "const": "list_item" },
-        "level": { "type": "integer", "minimum": 0 },
-        "marker": { "$ref": "#/$defs/nullableString" },
-        "format": { "$ref": "#/$defs/nullableString" },
-        "pattern": { "$ref": "#/$defs/nullableString" },
-        "ordered": { "$ref": "#/$defs/nullableBoolean" },
-        "text": { "type": "string" },
-        "style_id": { "$ref": "#/$defs/nullableString" }
+        "type": {
+          "const": "list_item"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "marker": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "format": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "pattern": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "ordered": {
+          "$ref": "#/$defs/nullableBoolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "style_id": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "tableContent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "rows", "columns", "header_rows", "cells"],
+      "required": [
+        "type",
+        "rows",
+        "columns",
+        "header_rows",
+        "cells"
+      ],
       "properties": {
-        "type": { "const": "table" },
-        "rows": { "type": "integer", "minimum": 0 },
-        "columns": { "type": "integer", "minimum": 0 },
-        "header_rows": { "type": "integer", "minimum": 0 },
-        "cells": { "type": "array", "items": { "$ref": "#/$defs/tableCell" } },
-        "column_widths_pt": { "type": "array", "items": { "type": "number" } },
-        "detector": { "type": "string" }
+        "type": {
+          "const": "table"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "header_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tableCell"
+          }
+        },
+        "column_widths_pt": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "detector": {
+          "type": "string"
+        }
       }
     },
     "tableCell": {
@@ -301,15 +646,40 @@
         "source"
       ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
-        "row": { "type": "integer", "minimum": 0 },
-        "column": { "type": "integer", "minimum": 0 },
-        "row_span": { "type": "integer", "minimum": 1 },
-        "column_span": { "type": "integer", "minimum": 1 },
-        "bbox": { "$ref": "#/$defs/nullableRect" },
-        "text": { "type": "string" },
-        "blocks": { "type": "array", "items": { "$ref": "#/$defs/block" } },
-        "source": { "$ref": "#/$defs/sourceSpan" }
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "row": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "row_span": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column_span": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "$ref": "#/$defs/nullableRect"
+        },
+        "text": {
+          "type": "string"
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/block"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/sourceSpan"
+        }
       }
     },
     "figureContent": {
@@ -324,57 +694,132 @@
         "height_pt"
       ],
       "properties": {
-        "type": { "const": "figure" },
-        "alt_text": { "$ref": "#/$defs/nullableString" },
-        "caption": { "$ref": "#/$defs/nullableString" },
-        "resource_id": { "$ref": "#/$defs/nullableString" },
-        "width_pt": { "$ref": "#/$defs/nullableNumber" },
-        "height_pt": { "$ref": "#/$defs/nullableNumber" }
+        "type": {
+          "const": "figure"
+        },
+        "alt_text": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "caption": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "width_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "height_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        }
       }
     },
     "shapeContent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "shape_type", "label"],
+      "required": [
+        "type",
+        "shape_type",
+        "label"
+      ],
       "properties": {
-        "type": { "const": "shape" },
-        "shape_type": { "type": "string" },
-        "label": { "$ref": "#/$defs/nullableString" }
+        "type": {
+          "const": "shape"
+        },
+        "shape_type": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "noteContent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "kind", "note_id", "text", "anchor_path"],
+      "required": [
+        "type",
+        "kind",
+        "note_id",
+        "text",
+        "anchor_path"
+      ],
       "properties": {
-        "type": { "const": "note" },
-        "kind": { "enum": ["footnote", "endnote"] },
-        "note_id": { "type": "string" },
-        "text": { "type": "string" },
-        "anchor_path": { "$ref": "#/$defs/nullableString" }
+        "type": {
+          "const": "note"
+        },
+        "kind": {
+          "enum": [
+            "footnote",
+            "endnote"
+          ]
+        },
+        "note_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "anchor_path": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "unknownContent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "raw_tag", "details"],
+      "required": [
+        "type",
+        "raw_tag",
+        "details"
+      ],
       "properties": {
-        "type": { "const": "unknown" },
-        "raw_tag": { "type": "string" },
-        "details": { "$ref": "#/$defs/nullableString" }
+        "type": {
+          "const": "unknown"
+        },
+        "raw_tag": {
+          "type": "string"
+        },
+        "details": {
+          "$ref": "#/$defs/nullableString"
+        }
       }
     },
     "resource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "name", "target", "mime_type"],
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "target",
+        "mime_type"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
-        "kind": { "enum": ["font", "image", "relationship", "embedded_object"] },
-        "name": { "type": "string" },
-        "target": { "type": "string" },
-        "mime_type": { "$ref": "#/$defs/nullableString" },
-        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "kind": {
+          "enum": [
+            "font",
+            "image",
+            "relationship",
+            "embedded_object"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "mime_type": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "hyperlink": {
@@ -390,49 +835,154 @@
         "source"
       ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
-        "text": { "type": "string" },
-        "target": { "type": "string" },
-        "is_external": { "type": "boolean" },
-        "page": { "$ref": "#/$defs/nullablePage" },
-        "anchor_path": { "$ref": "#/$defs/nullableString" },
-        "source": { "$ref": "#/$defs/sourceSpan" }
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "text": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "is_external": {
+          "type": "boolean"
+        },
+        "page": {
+          "$ref": "#/$defs/nullablePage"
+        },
+        "anchor_path": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceSpan"
+        }
       }
     },
     "comment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "author", "date", "text", "page", "anchor_path", "source"],
+      "required": [
+        "id",
+        "author",
+        "date",
+        "text",
+        "page",
+        "anchor_path",
+        "source"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/objectId" },
-        "author": { "$ref": "#/$defs/nullableString" },
-        "date": { "$ref": "#/$defs/nullableString" },
-        "text": { "type": "string" },
-        "page": { "$ref": "#/$defs/nullablePage" },
-        "anchor_path": { "$ref": "#/$defs/nullableString" },
-        "source": { "$ref": "#/$defs/sourceSpan" }
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "author": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "date": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "text": {
+          "type": "string"
+        },
+        "page": {
+          "$ref": "#/$defs/nullablePage"
+        },
+        "anchor_path": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceSpan"
+        }
       }
     },
     "trackedChanges": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["insertions", "deletions"],
+      "required": [
+        "insertions",
+        "deletions"
+      ],
       "properties": {
-        "insertions": { "type": "integer", "minimum": 0 },
-        "deletions": { "type": "integer", "minimum": 0 }
+        "insertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "diagnostic": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "severity", "message", "effect"],
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "effect"
+      ],
       "properties": {
-        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
-        "severity": { "enum": ["error", "warning"] },
-        "message": { "type": "string" },
-        "effect": { "type": "string" },
-        "object": { "$ref": "#/$defs/objectId" },
-        "page": { "type": "integer", "minimum": 1 }
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "effect": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/objectId"
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "textAlignment": {
+      "enum": [
+        "left",
+        "center",
+        "right",
+        "justify"
+      ]
+    },
+    "paragraphFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alignment": {
+          "$ref": "#/$defs/textAlignment"
+        },
+        "space_before_pt": {
+          "type": "number",
+          "minimum": 0
+        },
+        "space_after_pt": {
+          "type": "number",
+          "minimum": 0
+        },
+        "line_spacing": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "indent_left_pt": {
+          "type": "number"
+        },
+        "indent_right_pt": {
+          "type": "number"
+        },
+        "indent_first_line_pt": {
+          "type": "number"
+        }
       }
     }
   }

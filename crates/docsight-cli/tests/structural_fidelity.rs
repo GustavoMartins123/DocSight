@@ -105,7 +105,8 @@ fn unsupported_feature_count_matches_the_reported_diagnostics()
 }
 
 #[test]
-fn resource_coverage_accounts_for_placeholder_figures() -> Result<(), Box<dyn std::error::Error>> {
+fn resource_coverage_is_exact_for_a_rasterizable_figure() -> Result<(), Box<dyn std::error::Error>>
+{
     let source = DocumentSource::open(fixture("sample_features.docx"))?;
     let document = ingest(&source)?;
     let coverage = compute_coverage(&document, &source, None, false, 1.0)?;
@@ -115,18 +116,14 @@ fn resource_coverage_accounts_for_placeholder_figures() -> Result<(), Box<dyn st
         "the fixture no longer exercises figure resources"
     );
     assert!(
-        coverage.global.resource.score < 1.0,
-        "a placeholder figure must reduce resource coverage"
-    );
-    assert!(
-        coverage
-            .global
-            .resource
-            .reason_codes
+        !document
+            .warnings
             .iter()
-            .any(|code| code == "DOCX_FIGURE_RASTER_PLACEHOLDER"),
-        "resource coverage must name the diagnostic that caused the loss"
+            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"),
+        "a PNG figure must not be reported as a placeholder"
     );
+    assert_eq!(coverage.global.resource.status, CoverageStatus::Exact);
+    assert_eq!(coverage.global.resource.score, 1.0);
     Ok(())
 }
 
