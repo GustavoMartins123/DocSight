@@ -77,6 +77,7 @@ pub(crate) enum VisualIssue {
     BlendMode(String),
     ColorSpace(String),
     Pattern(String),
+    Shading(String),
     TextClip,
     NegativeFontSize,
     NonUniformStroke,
@@ -178,30 +179,52 @@ struct ToUnicodeMap {
     code_lengths: Vec<usize>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum XObjectEntry {
+    Image,
+    Form(Box<FormXObject>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FormXObject {
+    pub content: Vec<u8>,
+    pub matrix: [f32; 6],
+    pub resources: ContentResources,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContentResources {
+    pub fonts: BTreeMap<String, FontInfo>,
+    pub xobjects: BTreeMap<String, XObjectEntry>,
+    pub ext_graphics_states: BTreeMap<String, ExtGraphicsState>,
+}
+
 pub(crate) struct ParsedContent {
     pub commands: Vec<DisplayCommand>,
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
     pub omitted_xobjects: bool,
     pub unmapped_text_codes: bool,
+    pub operations: usize,
+    pub page_visual_issues: Vec<VisualIssue>,
 }
+
+pub(crate) const MAX_FORM_XOBJECT_DEPTH: usize = 12;
 
 pub(crate) fn parse_content(
     bytes: &[u8],
     page_left: f32,
     page_height: f32,
-    fonts: &BTreeMap<String, FontInfo>,
-    xobjects: &BTreeSet<String>,
-    ext_graphics_states: &BTreeMap<String, ExtGraphicsState>,
+    resources: &ContentResources,
 ) -> Result<ParsedContent, DocsightError> {
     let mut error_location = ErrorLocation::default();
     parse_content_inner(
         bytes,
         page_left,
         page_height,
-        fonts,
-        xobjects,
-        ext_graphics_states,
+        resources,
+        GraphicsState::default(),
+        0,
         &mut error_location,
     )
     .map_err(|error| error.with_error_location(error_location))
@@ -212,14 +235,16 @@ fn parse_content_inner(
     bytes: &[u8],
     page_left: f32,
     page_height: f32,
-    fonts: &BTreeMap<String, FontInfo>,
-    xobjects: &BTreeSet<String>,
-    ext_graphics_states: &BTreeMap<String, ExtGraphicsState>,
+    content_resources: &ContentResources,
+    initial_state: GraphicsState,
+    depth: usize,
     error_location: &mut ErrorLocation,
 ) -> Result<ParsedContent, DocsightError> {
+    let fonts = &content_resources.fonts;
+    let ext_graphics_states = &content_resources.ext_graphics_states;
     let mut lexer = ContentLexer::new(bytes);
     let mut operands = Vec::new();
-    let mut state = GraphicsState::default();
+    let mut state = initial_state;
     let mut stack = Vec::new();
     let mut path = Vec::new();
     let mut commands = Vec::new();
@@ -230,6 +255,7 @@ fn parse_content_inner(
     let mut approximated_font = false;
     let mut unmapped_text_codes = false;
     let mut omitted_xobjects = false;
+    let mut page_visual_issues: BTreeSet<VisualIssue> = BTreeSet::new();
     let mut inline_image = false;
     loop {
         let token_offset = lexer.cursor as u64;
@@ -754,6 +780,26 @@ fn parse_content_inner(
                         }
                         marked_content_depth += 1;
                     }
+                    "MP" => {
+                        if operands.len() != 1 {
+                            return Err(malformed("MP requires one tag name"));
+                        }
+                        name(&operands[0], &operator)?;
+                    }
+                    "DP" => {
+                        if operands.len() != 2 {
+                            return Err(malformed("DP requires a tag name and property-list name"));
+                        }
+                        name(&operands[0], &operator)?;
+                        if !matches!(
+                            operands[1],
+                            ContentValue::Name(_) | ContentValue::Dictionary
+                        ) {
+                            return Err(malformed(
+                                "DP property list must be a name or inline dictionary",
+                            ));
+                        }
+                    }
                     "EMC" => {
                         require_empty(&operands, &operator)?;
                         marked_content_depth = marked_content_depth
@@ -824,17 +870,71 @@ fn parse_content_inner(
                             return Err(malformed("Do requires one XObject name"));
                         }
                         let resource_name = name(&operands[0], &operator)?.to_owned();
-                        if !xobjects.contains(&resource_name) {
+                        let Some(entry) = content_resources.xobjects.get(&resource_name) else {
                             return Err(malformed("Do references an unknown XObject resource"));
+                        };
+                        match entry {
+                            XObjectEntry::Image => {
+                                let bbox =
+                                    transformed_unit_bbox(&state.ctm, page_left, page_height)?;
+                                commands.push(DisplayCommand::Figure {
+                                    bbox,
+                                    resource_name,
+                                    clips: state.clips.clone(),
+                                    visual_issues: state.visual_issues(PaintScope::Common),
+                                });
+                                omitted_xobjects = true;
+                            }
+                            XObjectEntry::Form(form) => {
+                                if depth >= MAX_FORM_XOBJECT_DEPTH {
+                                    return Err(DocsightError::ResourceLimit {
+                                        resource: "PDF form XObject nesting".to_owned(),
+                                        limit: MAX_FORM_XOBJECT_DEPTH as u64,
+                                    });
+                                }
+                                let mut nested_state = state.clone();
+                                nested_state.ctm = Matrix::new(
+                                    form.matrix[0],
+                                    form.matrix[1],
+                                    form.matrix[2],
+                                    form.matrix[3],
+                                    form.matrix[4],
+                                    form.matrix[5],
+                                )
+                                .concat(state.ctm);
+                                if !nested_state.ctm.is_finite() {
+                                    return Err(malformed(
+                                        "form XObject matrix produced a non-finite transform",
+                                    ));
+                                }
+                                let mut nested_location = ErrorLocation::default();
+                                let nested = parse_content_inner(
+                                    &form.content,
+                                    page_left,
+                                    page_height,
+                                    &form.resources,
+                                    nested_state,
+                                    depth + 1,
+                                    &mut nested_location,
+                                )?;
+                                operations = operations
+                                    .checked_add(nested.operations)
+                                    .ok_or_else(operation_limit)?;
+                                if operations > MAX_OPERATIONS {
+                                    return Err(operation_limit());
+                                }
+                                commands.extend(nested.commands);
+                                for mut run in nested.text_runs {
+                                    run.source_offset = token_offset;
+                                    run.source_length = 1;
+                                    text_runs.push(run);
+                                }
+                                approximated_font |= nested.approximated_font;
+                                unmapped_text_codes |= nested.unmapped_text_codes;
+                                omitted_xobjects |= nested.omitted_xobjects;
+                                page_visual_issues.extend(nested.page_visual_issues);
+                            }
                         }
-                        let bbox = transformed_unit_bbox(&state.ctm, page_left, page_height)?;
-                        commands.push(DisplayCommand::Figure {
-                            bbox,
-                            resource_name,
-                            clips: state.clips.clone(),
-                            visual_issues: state.visual_issues(PaintScope::Common),
-                        });
-                        omitted_xobjects = true;
                     }
                     "gs" => {
                         if operands.len() != 1 {
@@ -854,10 +954,8 @@ fn parse_content_inner(
                         if operands.len() != 1 {
                             return Err(malformed("sh requires one shading name"));
                         }
-                        let resource_name = name(&operands[0], &operator)?;
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: format!("PDF shading resource {resource_name}"),
-                        });
+                        let resource_name = name(&operands[0], &operator)?.to_owned();
+                        page_visual_issues.insert(VisualIssue::Shading(resource_name));
                     }
                     "W" | "W*" => {
                         require_empty(&operands, &operator)?;
@@ -905,7 +1003,16 @@ fn parse_content_inner(
         approximated_font,
         omitted_xobjects,
         unmapped_text_codes,
+        operations,
+        page_visual_issues: page_visual_issues.into_iter().collect(),
     })
+}
+
+fn operation_limit() -> DocsightError {
+    DocsightError::ResourceLimit {
+        resource: "PDF content operations".to_owned(),
+        limit: MAX_OPERATIONS as u64,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2438,9 +2545,7 @@ pub(crate) fn ext_graphics_states_from_resources(
                 "AIS" => match resolve(&value)? {
                     Value::Bool(false) => {}
                     Value::Bool(true) => {
-                        return Err(DocsightError::UnsupportedFeature {
-                            feature: "PDF alpha-is-shape transparency".to_owned(),
-                        });
+                        state.ignored_keys.insert(key);
                     }
                     _ => return Err(malformed("ExtGState AIS must be boolean")),
                 },
@@ -2700,16 +2805,12 @@ impl FontDecoder {
         match self {
             Self::Ascii => decode_ascii(bytes),
             Self::WinAnsi => decode_win_ansi(bytes),
-            Self::Simple(encoding) => bytes
+            Self::Simple(encoding) => Ok(bytes
                 .iter()
                 .map(|byte| {
-                    encoding.characters[usize::from(*byte)].ok_or_else(|| {
-                        DocsightError::UnsupportedFeature {
-                            feature: format!("PDF font encoding has no glyph for code {byte}"),
-                        }
-                    })
+                    encoding.characters[usize::from(*byte)].unwrap_or(char::REPLACEMENT_CHARACTER)
                 })
-                .collect(),
+                .collect()),
             Self::GlyphIdentity(program) => {
                 if !bytes.len().is_multiple_of(2) {
                     return Err(malformed(
