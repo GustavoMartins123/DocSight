@@ -12,6 +12,7 @@ members = [
     "crates/docsight-tables",
     "crates/docsight-diff",
     "crates/docsight-worker",
+    "xtask",
 ]
 resolver = "3"
 

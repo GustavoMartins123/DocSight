@@ -12,6 +12,9 @@ pub fn ingest_with_password(
     password: &[u8],
 ) -> Result<Document, DocsightError> {
     match source.format() {
+        DocumentFormat::Docx if !password.is_empty() => Err(DocsightError::InvalidArgument {
+            message: "a PDF password cannot be applied to a DOCX document".to_owned(),
+        }),
         DocumentFormat::Docx => Ok(ingest_docx(source)?.document),
         DocumentFormat::Pdf => PdfDocument::open_with_password(source, password)?.to_document(),
     }

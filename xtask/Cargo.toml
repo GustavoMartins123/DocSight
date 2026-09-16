@@ -1,0 +1,21 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+docsight-core = { path = "../crates/docsight-core" }
+docsight-layout = { path = "../crates/docsight-layout" }
+docsight-ooxml = { path = "../crates/docsight-ooxml" }
+docsight-pdf = { path = "../crates/docsight-pdf" }
+docsight-render = { path = "../crates/docsight-render" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+name: performance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  ds9-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - run: cargo run --release -p xtask -- benchmark --check --output target/ds9-performance.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ds9-performance-linux-x86_64
+          path: target/ds9-performance.json
+          if-no-files-found: error

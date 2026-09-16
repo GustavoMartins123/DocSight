@@ -273,6 +273,8 @@ dependencies = [
  "docsight-search",
  "docsight-tables",
  "docsight-worker",
+ "md-5",
+ "rc4",
  "serde",
  "serde_json",
  "sha2",
@@ -769,6 +771,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.4"
+dependencies = [
+ "docsight-core",
+ "docsight-layout",
+ "docsight-ooxml",
+ "docsight-pdf",
+ "docsight-render",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]

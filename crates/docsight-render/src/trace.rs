@@ -1,9 +1,9 @@
-use crate::{RenderRequest, RenderTarget, render_document};
+use crate::{RenderRequest, RenderTarget, render_document_with_password};
 use docsight_core::{
     BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
     DocumentSource, EvidenceRecord, ObjectId, Rect, ResourceKind, compute_evidence, write_all,
 };
-use docsight_ingest::{ingest as load_document, ingest_docx};
+use docsight_ingest::{ingest_docx, ingest_with_password as load_document};
 use docsight_layout::LaidOutPage;
 use docsight_pdf::{
     PdfDocument, PdfTraceClip, PdfTraceDisplayOperation, PdfTraceFillRule, PdfTraceLineCap,
@@ -342,7 +342,15 @@ pub fn record_trace(
     source: &DocumentSource,
     request: &RenderRequest,
 ) -> Result<TraceArtifact, DocsightError> {
-    let rendered = render_document(source, request)?;
+    record_trace_with_password(source, request, b"")
+}
+
+pub fn record_trace_with_password(
+    source: &DocumentSource,
+    request: &RenderRequest,
+    password: &[u8],
+) -> Result<TraceArtifact, DocsightError> {
+    let rendered = render_document_with_password(source, request, password)?;
     let selector = TraceSelector::from_render_target(&request.target);
     let target = TraceTarget {
         selector,
@@ -350,7 +358,7 @@ pub fn record_trace(
         bbox: rendered.metadata.bbox,
         dpi: rendered.metadata.dpi,
     };
-    let material = trace_material(source, rendered.metadata.page)?;
+    let material = trace_material(source, rendered.metadata.page, password)?;
     let mut warnings = material.document().warnings.clone();
     for warning in &rendered.warnings {
         if !warnings.contains(warning) {
@@ -424,8 +432,17 @@ pub fn create_proof_bundle(
     request: &RenderRequest,
     include_crop: bool,
 ) -> Result<ProofBundle, DocsightError> {
-    let trace = record_trace(source, request)?;
-    let document = load_document(source)?;
+    create_proof_bundle_with_password(source, request, include_crop, b"")
+}
+
+pub fn create_proof_bundle_with_password(
+    source: &DocumentSource,
+    request: &RenderRequest,
+    include_crop: bool,
+    password: &[u8],
+) -> Result<ProofBundle, DocsightError> {
+    let trace = record_trace_with_password(source, request, password)?;
+    let document = load_document(source, password)?;
     let glyph_coverage = document_glyph_coverage(&document, source);
     let evidence = selected_evidence(
         &document,
@@ -435,7 +452,7 @@ pub fn create_proof_bundle(
         glyph_coverage,
     )?;
     let crop_png = if include_crop {
-        let rendered = render_document(source, request)?;
+        let rendered = render_document_with_password(source, request, password)?;
         let actual = sha256_hex(rendered.png());
         if actual != trace.manifest.raster.sha256 {
             return Err(DocsightError::VerificationFailed {
@@ -479,9 +496,17 @@ pub fn read_proof_bundle(path: &Path) -> Result<ProofBundle, DocsightError> {
 }
 
 pub fn verify_trace(trace: &TraceArtifact) -> Result<ReplayVerification, DocsightError> {
+    verify_trace_with_password(trace, b"")
+}
+
+pub fn verify_trace_with_password(
+    trace: &TraceArtifact,
+    password: &[u8],
+) -> Result<ReplayVerification, DocsightError> {
     validate_trace_manifest(&trace.manifest)?;
     let source = DocumentSource::from_bytes(trace.source_bytes.clone())?;
-    let reproduced = record_trace(&source, &trace.manifest.target.to_request())?;
+    let reproduced =
+        record_trace_with_password(&source, &trace.manifest.target.to_request(), password)?;
     if trace.manifest != reproduced.manifest {
         return Err(DocsightError::VerificationFailed {
             message: "trace manifest differs from deterministic replay".to_owned(),
@@ -499,12 +524,20 @@ pub fn verify_trace(trace: &TraceArtifact) -> Result<ReplayVerification, Docsigh
 }
 
 pub fn verify_proof_bundle(bundle: &ProofBundle) -> Result<ProofVerification, DocsightError> {
+    verify_proof_bundle_with_password(bundle, b"")
+}
+
+pub fn verify_proof_bundle_with_password(
+    bundle: &ProofBundle,
+    password: &[u8],
+) -> Result<ProofVerification, DocsightError> {
     validate_proof_manifest(&bundle.manifest)?;
     let source = DocumentSource::from_bytes(bundle.source_bytes.clone())?;
-    let reproduced = create_proof_bundle(
+    let reproduced = create_proof_bundle_with_password(
         &source,
         &bundle.manifest.trace.target.to_request(),
         bundle.crop_png.is_some(),
+        password,
     )?;
     if bundle.manifest != reproduced.manifest {
         return Err(DocsightError::VerificationFailed {
@@ -885,7 +918,11 @@ fn trace_pdf_operation(operation: &PdfTraceDisplayOperation) -> TraceDisplayOper
     }
 }
 
-fn trace_material(source: &DocumentSource, page: u32) -> Result<TraceMaterial, DocsightError> {
+fn trace_material(
+    source: &DocumentSource,
+    page: u32,
+    password: &[u8],
+) -> Result<TraceMaterial, DocsightError> {
     match source.format() {
         DocumentFormat::Docx => {
             let laid_out = ingest_docx(source)?;
@@ -895,7 +932,7 @@ fn trace_material(source: &DocumentSource, page: u32) -> Result<TraceMaterial, D
             })
         }
         DocumentFormat::Pdf => {
-            let pdf = PdfDocument::open(source)?;
+            let pdf = PdfDocument::open_with_password(source, password)?;
             let document = pdf.to_document()?;
             let page = pdf.trace_page(page)?;
             Ok(TraceMaterial::Pdf { document, page })

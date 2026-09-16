@@ -390,6 +390,17 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
         "reject"
     );
     assert_eq!(value["result"]["sandbox"]["failure_mode"], "fail_closed");
+    assert_eq!(value["result"]["pdf_password"]["flag"], "--password-file");
+    assert_eq!(
+        value["result"]["pdf_password"]["applies_to"],
+        serde_json::json!(["pdf"])
+    );
+    assert_eq!(
+        value["result"]["pdf_password"]["maximum_password_bytes"],
+        127
+    );
+    assert_eq!(value["result"]["pdf_password"]["secret_in_argv"], false);
+    assert_eq!(value["result"]["pdf_password"]["secret_persisted"], false);
     let commands = value["result"]["commands"]
         .as_array()
         .ok_or("missing commands")?;

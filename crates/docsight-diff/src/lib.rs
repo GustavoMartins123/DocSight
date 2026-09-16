@@ -2,8 +2,8 @@ use docsight_core::{
     Block, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect,
     table_to_tsv_string,
 };
-use docsight_ingest::ingest as load_doc;
-use docsight_render::{RenderRequest, RenderTarget, encode_png, render_document};
+use docsight_ingest::ingest_with_password as load_doc;
+use docsight_render::{RenderRequest, RenderTarget, encode_png, render_document_with_password};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -331,8 +331,18 @@ pub fn diff_documents(
     source_after: &DocumentSource,
     options: &DiffOptions,
 ) -> Result<DocumentDiffResult, DocsightError> {
-    let doc_before = load_doc(source_before)?;
-    let doc_after = load_doc(source_after)?;
+    diff_documents_with_passwords(source_before, source_after, options, b"", b"")
+}
+
+pub fn diff_documents_with_passwords(
+    source_before: &DocumentSource,
+    source_after: &DocumentSource,
+    options: &DiffOptions,
+    password_before: &[u8],
+    password_after: &[u8],
+) -> Result<DocumentDiffResult, DocsightError> {
+    let doc_before = load_doc(source_before, password_before)?;
+    let doc_after = load_doc(source_after, password_after)?;
 
     let package = diff_package(source_before, source_after)?;
     let semantic = diff_semantic(&doc_before, &doc_after)?;
@@ -341,15 +351,17 @@ pub fn diff_documents(
     let pages_after = doc_after.pages.len() as u32;
 
     let visual = if options.visual || options.out_dir.is_some() {
-        Some(diff_visual(
+        Some(diff_visual_with_passwords(VisualDiffInputs {
             source_before,
             source_after,
-            &doc_before,
-            &doc_after,
-            options.dpi,
-            options.threshold,
-            options.out_dir.as_deref(),
-        )?)
+            doc_before: &doc_before,
+            doc_after: &doc_after,
+            dpi: options.dpi,
+            threshold: options.threshold,
+            out_dir: options.out_dir.as_deref(),
+            password_before,
+            password_after,
+        })?)
     } else {
         None
     };
@@ -1771,6 +1783,43 @@ pub fn diff_visual(
     threshold: u8,
     out_dir: Option<&Path>,
 ) -> Result<VisualDiff, DocsightError> {
+    diff_visual_with_passwords(VisualDiffInputs {
+        source_before,
+        source_after,
+        doc_before,
+        doc_after,
+        dpi,
+        threshold,
+        out_dir,
+        password_before: b"",
+        password_after: b"",
+    })
+}
+
+struct VisualDiffInputs<'a> {
+    source_before: &'a DocumentSource,
+    source_after: &'a DocumentSource,
+    doc_before: &'a Document,
+    doc_after: &'a Document,
+    dpi: u16,
+    threshold: u8,
+    out_dir: Option<&'a Path>,
+    password_before: &'a [u8],
+    password_after: &'a [u8],
+}
+
+fn diff_visual_with_passwords(inputs: VisualDiffInputs<'_>) -> Result<VisualDiff, DocsightError> {
+    let VisualDiffInputs {
+        source_before,
+        source_after,
+        doc_before,
+        doc_after,
+        dpi,
+        threshold,
+        out_dir,
+        password_before,
+        password_after,
+    } = inputs;
     let reason_codes = visual_reason_codes(doc_before, doc_after, None);
     let authoritative = reason_codes.is_empty();
     let evidence_status = if authoritative {
@@ -1810,12 +1859,20 @@ pub fn diff_visual(
             dpi,
         };
         let before_image = if p <= pages_before {
-            Some(render_document(source_before, &request)?)
+            Some(render_document_with_password(
+                source_before,
+                &request,
+                password_before,
+            )?)
         } else {
             None
         };
         let after_image = if p <= pages_after {
-            Some(render_document(source_after, &request)?)
+            Some(render_document_with_password(
+                source_after,
+                &request,
+                password_after,
+            )?)
         } else {
             None
         };

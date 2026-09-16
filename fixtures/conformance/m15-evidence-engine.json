@@ -694,12 +694,12 @@
     {
       "file": "capabilities-envelope.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-envelope.json",
-      "sha256": "31867849d6dc73e24b68102491f906275ed6c137647329c9511ca3ebb9e3c6c4"
+      "sha256": "76812376fcbe05a173ae16b3499ae1e8dd772b467538f0ff501fbb5a37c1c728"
     },
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "5e781fac0016878abe6c06177540d53d8eb385cf9175a4f49cc816202400e3a6"
+      "sha256": "669eacd4ac7c09306baf6c930181e13fecf70d113c91b4428259ec1a17288009"
     },
     {
       "file": "context-result.json",

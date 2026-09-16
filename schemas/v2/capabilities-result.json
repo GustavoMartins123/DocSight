@@ -10,6 +10,7 @@
     "error_channel",
     "invocation_prefix",
     "sandbox",
+    "pdf_password",
     "document_formats",
     "output_modes",
     "agent_defaults",
@@ -109,6 +110,56 @@
         "failure_mode": {
           "type": "string",
           "const": "fail_closed"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pdf_password": {
+      "type": "object",
+      "required": [
+        "flag",
+        "applies_to",
+        "transport",
+        "file_format",
+        "maximum_password_bytes",
+        "secret_in_argv",
+        "secret_persisted",
+        "failure_mode"
+      ],
+      "properties": {
+        "flag": {
+          "type": "string",
+          "const": "--password-file"
+        },
+        "applies_to": {
+          "type": "array",
+          "const": [
+            "pdf"
+          ]
+        },
+        "transport": {
+          "type": "string",
+          "const": "file"
+        },
+        "file_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maximum_password_bytes": {
+          "type": "integer",
+          "const": 127
+        },
+        "secret_in_argv": {
+          "type": "boolean",
+          "const": false
+        },
+        "secret_persisted": {
+          "type": "boolean",
+          "const": false
+        },
+        "failure_mode": {
+          "type": "string",
+          "const": "reject"
         }
       },
       "additionalProperties": false
