@@ -4,7 +4,7 @@ Binary releases are built by the release workflow. A source checkout alone does
 not mean these binaries have been published. Until a maintainer publishes a
 release, use the source-build instructions in README.md.
 
-## Supported release targets
+## Configured release targets
 
 | Target | Build and test environment | Archive |
 | --- | --- | --- |
@@ -14,7 +14,9 @@ release, use the source-build instructions in README.md.
 | macOS Intel | macOS 15 | `docsight-VERSION-x86_64-apple-darwin.zip` |
 | macOS Apple Silicon | macOS 15 | `docsight-VERSION-aarch64-apple-darwin.zip` |
 
-These are the tested operating-system baselines, not a promise about every Linux
+These are the configured build and required native-test baselines, not a record
+that those tests have run. A candidate must pass its native checks before these
+targets can be called validated. They do not promise support for every Linux
 distribution or older macOS version. Alpine/musl and 32-bit systems are not release
 targets. Rust, Python, Office and a network connection are not required to run the
 extracted binary. Python is used only by maintainer automation.
@@ -49,8 +51,7 @@ Expand-Archive $archive
 ```
 
 Choose the archive for your architecture. Checksums detect corruption; they do
-not authenticate the publisher. Current artifacts are not code-signed or
-notarized. Do not disable system security checks to work around this limitation.
+not authenticate the publisher. The candidate pipeline does not yet sign or notarize binaries. Do not disable system security checks to work around this limitation.
 Signing and macOS notarization require maintainer credentials and remain a
 release-readiness item.
 
