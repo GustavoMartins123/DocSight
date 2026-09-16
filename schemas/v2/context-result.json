@@ -122,7 +122,9 @@
                 "footer",
                 "watermark",
                 "comment_marker",
-                "annotation"
+                "annotation",
+                "table_cell",
+                "hyperlink"
               ]
             },
             "page": {
@@ -202,7 +204,9 @@
             "footer",
             "watermark",
             "comment_marker",
-            "annotation"
+            "annotation",
+            "table_cell",
+            "hyperlink"
           ]
         },
         "page_range": {
@@ -387,7 +391,9 @@
             "footer",
             "watermark",
             "comment_marker",
-            "annotation"
+            "annotation",
+            "table_cell",
+            "hyperlink"
           ]
         },
         "page": {
@@ -506,6 +512,32 @@
         },
         "section_reason": {
           "type": "string"
+        },
+        "object": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "enum": [
+                "paragraph",
+                "heading",
+                "list_item",
+                "table",
+                "figure",
+                "shape",
+                "note",
+                "unknown"
+              ]
+            }
+          }
         }
       },
       "additionalProperties": false
@@ -683,7 +715,9 @@
             "shape",
             "note",
             "unknown",
-            "overlay"
+            "overlay",
+            "table_cell",
+            "hyperlink"
           ]
         }
       }

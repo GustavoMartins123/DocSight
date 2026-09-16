@@ -145,7 +145,11 @@ impl Document {
             }
         }
         for page in &self.pages {
-            if let Some(overlay) = page.overlays.iter().find(|overlay| overlay.id.as_str() == id) {
+            if let Some(overlay) = page
+                .overlays
+                .iter()
+                .find(|overlay| overlay.id.as_str() == id)
+            {
                 return Some(DocumentObject::Overlay(overlay));
             }
         }
@@ -189,7 +193,10 @@ fn find_in_block<'a>(
     let anchor = top_level.unwrap_or(block);
     for cell in &table.cells {
         if cell.id.as_str() == id {
-            return Some(DocumentObject::TableCell { table: anchor, cell });
+            return Some(DocumentObject::TableCell {
+                table: anchor,
+                cell,
+            });
         }
         for nested in &cell.blocks {
             if let Some(found) = find_in_block(nested, Some(anchor), id, depth + 1) {

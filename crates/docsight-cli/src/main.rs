@@ -21,9 +21,10 @@ use docsight_render::{
     },
 };
 use docsight_search::{
-    PageRange, PeekResult, ResolveCandidate, ResolveReason, ResolveResult, ResolveStatus,
-    SemanticKind, SemanticObject, SemanticViewport, SpatialQueryResult, TextMatch, ViewportObject,
-    ViewportRole, context_neighborhood, execute_spatial_query, focus_object, focus_pages,
+    FindMode, FindObjectKind, FindRequest, FindResult, PageRange, PeekResult, ResolveCandidate,
+    ResolveReason, ResolveResult, ResolveStatus, SemanticKind, SemanticObject, SemanticViewport,
+    SpatialQueryResult, TextMatch, ViewportObject, ViewportRole, context_neighborhood,
+    execute_spatial_query, find as find_occurrences, focus_object, focus_pages,
     overview as document_overview, peek_object, peek_pages, peek_section,
     resolve as resolve_descriptor,
 };
@@ -314,6 +315,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_FIND)]
+    Find {
+        path: PathBuf,
+        pattern: String,
+        #[arg(long)]
+        regex: bool,
+        #[arg(long)]
+        ignore_case: bool,
+        #[arg(long, value_enum, value_delimiter = ',')]
+        kind: Vec<FindKindArg>,
+        #[arg(long, value_parser = parse_page_range)]
+        pages: Option<PageRange>,
+        #[arg(long, value_parser = parse_bbox)]
+        bbox: Option<Rect>,
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = SUMMARY_OVERVIEW)]
     Overview {
         path: PathBuf,
@@ -415,6 +433,47 @@ enum ContextInclude {
     Provenance,
     Heading,
     Related,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum FindKindArg {
+    Paragraph,
+    Heading,
+    ListItem,
+    Table,
+    Figure,
+    Shape,
+    Note,
+    Unknown,
+    TableCell,
+    Header,
+    Footer,
+    Watermark,
+    CommentMarker,
+    Annotation,
+    Hyperlink,
+}
+
+impl FindKindArg {
+    fn to_find_kind(self) -> FindObjectKind {
+        match self {
+            Self::Paragraph => FindObjectKind::Paragraph,
+            Self::Heading => FindObjectKind::Heading,
+            Self::ListItem => FindObjectKind::ListItem,
+            Self::Table => FindObjectKind::Table,
+            Self::Figure => FindObjectKind::Figure,
+            Self::Shape => FindObjectKind::Shape,
+            Self::Note => FindObjectKind::Note,
+            Self::Unknown => FindObjectKind::Unknown,
+            Self::TableCell => FindObjectKind::TableCell,
+            Self::Header => FindObjectKind::Header,
+            Self::Footer => FindObjectKind::Footer,
+            Self::Watermark => FindObjectKind::Watermark,
+            Self::CommentMarker => FindObjectKind::CommentMarker,
+            Self::Annotation => FindObjectKind::Annotation,
+            Self::Hyperlink => FindObjectKind::Hyperlink,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -792,6 +851,45 @@ struct ContextContainers {
     section_status: ContextSectionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     section_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    object: Option<ContextContainerObject>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ContextContainerObject {
+    id: ObjectId,
+    kind: docsight_core::BlockKind,
+}
+
+fn context_content(
+    object: &docsight_core::DocumentObject<'_>,
+) -> Result<serde_json::Value, DocsightError> {
+    use docsight_core::DocumentObject;
+    match object {
+        DocumentObject::Block { block, .. } => {
+            serde_json::to_value(&block.content).map_err(output_serialization_error)
+        }
+        DocumentObject::TableCell { cell, .. } => Ok(serde_json::json!({
+            "type": "table_cell",
+            "row": cell.row,
+            "column": cell.column,
+            "row_span": cell.row_span,
+            "column_span": cell.column_span,
+            "text": cell.text,
+            "blocks": cell.blocks,
+        })),
+        DocumentObject::Overlay(overlay) => Ok(serde_json::json!({
+            "type": "overlay",
+            "kind": overlay.kind,
+            "text": overlay.text
+        })),
+        DocumentObject::Hyperlink(link) => Ok(serde_json::json!({
+            "type": "hyperlink",
+            "target": link.target,
+            "is_external": link.is_external,
+            "text": link.text,
+        })),
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1226,6 +1324,29 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
+        Command::Find {
+            path,
+            pattern,
+            regex,
+            ignore_case,
+            kind,
+            pages,
+            bbox,
+            json,
+        } => find_command(FindArgs {
+            path,
+            pattern,
+            regex: *regex,
+            ignore_case: *ignore_case,
+            kinds: kind,
+            pages: *pages,
+            bbox: *bbox,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+        }),
         Command::Query {
             path,
             expression,
@@ -1348,6 +1469,8 @@ const SUMMARY_VERIFY: &str = "verify a self-contained proof bundle offline";
 const SUMMARY_COVERAGE: &str = "return per-dimension fidelity and reason codes";
 const SUMMARY_HIT: &str = "resolve a point or region to document objects";
 const SUMMARY_QUERY: &str = "run constrained structural and spatial DQL selectors in page points";
+const SUMMARY_FIND: &str =
+    "find every literal or regex occurrence at object granularity with page-local geometry";
 const SUMMARY_OVERVIEW: &str =
     "return bounded headings, tables and figures for document navigation";
 const SUMMARY_FOCUS: &str = "return a bounded semantic neighborhood around an object or page range";
@@ -1645,6 +1768,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/spatial-query-result.json"),
                 result_root: None,
+            },
+            CommandCapability {
+                name: "find",
+                summary: SUMMARY_FIND,
+                invocation: "find <path> <pattern> [--regex] [--ignore-case] [--kind <kinds>] [--pages <start..end>] [--bbox <x0,y0,x1,y1>]",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                ndjson_events: &["find.summary", "find.match"],
+                bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/find-result.json"),
+                result_root: Some("matches"),
             },
             CommandCapability {
                 name: "overview",
@@ -3218,6 +3352,167 @@ fn continuation_scope(command: &str, parameter: &str) -> String {
     format!("{command}_{}", &digest[..16])
 }
 
+struct FindArgs<'a> {
+    path: &'a Path,
+    pattern: &'a str,
+    regex: bool,
+    ignore_case: bool,
+    kinds: &'a [FindKindArg],
+    pages: Option<PageRange>,
+    bbox: Option<Rect>,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct FindNdjsonSummary {
+    pattern: String,
+    mode: FindMode,
+    ignore_case: bool,
+    total_matches: usize,
+    searched_objects: usize,
+    geometry_unavailable_matches: usize,
+}
+
+fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source)?;
+    let request = FindRequest {
+        pattern: args.pattern.to_owned(),
+        mode: if args.regex {
+            FindMode::Regex
+        } else {
+            FindMode::Literal
+        },
+        ignore_case: args.ignore_case,
+        kinds: args.kinds.iter().map(|kind| kind.to_find_kind()).collect(),
+        pages: args.pages.map(|range| (range.start, range.end)),
+        region: args.bbox,
+    };
+    let result = find_occurrences(&document, &request)?;
+    let warnings = document.warnings;
+    let scope = continuation_scope(
+        "find",
+        &format!(
+            "{}|{:?}|{}|{:?}|{:?}|{:?}",
+            request.pattern,
+            request.mode,
+            request.ignore_case,
+            request.kinds,
+            request.pages,
+            request.region
+        ),
+    );
+    let limits = bounded_machine_limits(args.limits, DEFAULT_QUERY_ITEMS);
+
+    if args.ndjson {
+        let stdout = io::stdout();
+        let mut writer = NdjsonWriter::new(
+            stdout.lock(),
+            limits.clone(),
+            scope,
+            source.sha256().to_owned(),
+            1 + result.matches.len(),
+        )?;
+        writer.write_meta(&(&source).into())?;
+        let summary = serde_json::to_value(FindNdjsonSummary {
+            pattern: result.pattern.clone(),
+            mode: result.mode,
+            ignore_case: result.ignore_case,
+            total_matches: result.total_matches,
+            searched_objects: result.searched_objects,
+            geometry_unavailable_matches: result.geometry_unavailable_matches,
+        })
+        .map_err(output_serialization_error)?;
+        let offset = writer.continuation_offset();
+        if offset == 0 && !writer.write_item("find.summary", &summary)? {
+            for warning in &warnings {
+                writer.write_warning(warning)?;
+            }
+            writer.finish()?;
+            return Ok(());
+        }
+        for (index, item) in result.matches.iter().enumerate() {
+            if index + 1 < offset {
+                continue;
+            }
+            let item = serde_json::to_value(item).map_err(output_serialization_error)?;
+            if !writer.write_item("find.match", &item)? {
+                break;
+            }
+        }
+        for warning in &warnings {
+            writer.write_warning(warning)?;
+        }
+        writer.finish()?;
+        return Ok(());
+    }
+
+    if args.json {
+        let FindResult {
+            pattern,
+            mode,
+            ignore_case,
+            total_matches,
+            searched_objects,
+            geometry_unavailable_matches,
+            matches,
+        } = result;
+        let envelope =
+            apply_bounded_collection(&matches, &limits, &scope, &source, warnings, |returned| {
+                serde_json::to_value(FindResult {
+                    pattern: pattern.clone(),
+                    mode,
+                    ignore_case,
+                    total_matches,
+                    searched_objects,
+                    geometry_unavailable_matches,
+                    matches: returned,
+                })
+                .map_err(output_serialization_error)
+            })?;
+        return write_envelope(&envelope);
+    }
+
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "Find {:?} ({:?}{}): {} matches in {} objects",
+        result.pattern,
+        result.mode,
+        if result.ignore_case {
+            ", ignore case"
+        } else {
+            ""
+        },
+        result.total_matches,
+        result.searched_objects
+    )
+    .map_err(stdout_error)?;
+    for found in &result.matches {
+        let page = found
+            .page
+            .map(|page| page.to_string())
+            .unwrap_or_else(|| "unplaced".to_owned());
+        writeln!(
+            writer,
+            "[{}] {:?} page {}: ...{}[{}]{}...",
+            found.object_id,
+            found.kind,
+            page,
+            found.context_before,
+            found.matched.text,
+            found.context_after
+        )
+        .map_err(stdout_error)?;
+    }
+    emit_warnings(&warnings, args.quiet, args.json_errors)
+}
+
 struct QueryArgs<'a> {
     path: &'a Path,
     expression: &'a str,
@@ -4030,17 +4325,11 @@ fn build_context_package(
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: target_id.to_string(),
         })?;
-    let block = document.find_block(target_id.as_str());
-    let overlay = document
-        .pages
-        .iter()
-        .flat_map(|page| page.overlays.iter())
-        .find(|overlay| overlay.id == *target_id);
-    if block.is_none() && overlay.is_none() {
-        return Err(DocsightError::ObjectNotFound {
+    let resolved = document.resolve_object(target_id.as_str()).ok_or_else(|| {
+        DocsightError::ObjectNotFound {
             object: target_id.to_string(),
-        });
-    }
+        }
+    })?;
     let page = target
         .page
         .and_then(|number| document.page(number))
@@ -4086,41 +4375,21 @@ fn build_context_package(
         }
     };
     let content = if include.contains(&ContextInclude::Content) {
-        match (block, overlay) {
-            (Some(block), _) => {
-                Some(serde_json::to_value(&block.content).map_err(output_serialization_error)?)
-            }
-            (None, Some(overlay)) => Some(serde_json::json!({
-                "type": "overlay",
-                "kind": overlay.kind,
-                "text": overlay.text
-            })),
-            (None, None) => None,
-        }
+        Some(context_content(&resolved)?)
     } else {
         None
     };
-    let provenance = if include.contains(&ContextInclude::Provenance) {
-        match (block, overlay) {
-            (Some(block), _) => Some(ContextProvenance {
-                source_path: block.source.path.clone(),
-                source_offset: block.source.offset,
-                source_length: block.source.length,
-                confidence: block.confidence,
-            }),
-            (None, Some(overlay)) => Some(ContextProvenance {
-                source_path: overlay.source.path.clone(),
-                source_offset: overlay.source.offset,
-                source_length: overlay.source.length,
-                confidence: 1.0,
-            }),
-            (None, None) => None,
+    let provenance = include.contains(&ContextInclude::Provenance).then(|| {
+        let span = resolved.source();
+        ContextProvenance {
+            source_path: span.path.clone(),
+            source_offset: span.offset,
+            source_length: span.length,
+            confidence: resolved.confidence(),
         }
-    } else {
-        None
-    };
+    });
     let fidelity = if include.contains(&ContextInclude::Fidelity) {
-        match block {
+        match resolved.anchor_block() {
             Some(_) => {
                 let glyph_coverage = document_glyph_coverage(document, source);
                 let evidence = compute_evidence(document, source, target_id, None, glyph_coverage)?;
@@ -4137,7 +4406,7 @@ fn build_context_package(
                 warnings.push(Diagnostic {
                     code: "CONTEXT_FIDELITY_UNAVAILABLE".to_owned(),
                     severity: DiagnosticSeverity::Warning,
-                    message: "object-level fidelity is unavailable for this overlay".to_owned(),
+                    message: "object-level fidelity is unavailable for an object outside the reading flow".to_owned(),
                     effect: "context exposes provenance and geometry but no fidelity scores"
                         .to_owned(),
                     object: Some(target_id.clone()),
@@ -4182,6 +4451,12 @@ fn build_context_package(
             &[ViewportRole::RelatedCaption, ViewportRole::RelatedNote],
         )
     });
+    let container = resolved
+        .container()
+        .map(|container| ContextContainerObject {
+            id: container.id.clone(),
+            kind: container.kind,
+        });
     Ok(ContextPackage {
         target,
         containers: ContextContainers {
@@ -4189,6 +4464,7 @@ fn build_context_package(
             section,
             section_status,
             section_reason,
+            object: container,
         },
         heading,
         neighbors,

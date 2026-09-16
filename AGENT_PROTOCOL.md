@@ -34,6 +34,16 @@ docsight --agent focus input.pdf --pages 20..22 --max-items 40
 
 `overview` returns headings, tables, and figures in canonical page/reading order. `focus` returns the target or page range plus nearby reading-order objects and explicitly-labelled relationship provenance. `--related` adds deterministic caption and source-anchor note relations for an object target. Semantic-object text is a 240-character snippet; `text_truncated` tells the caller when the source text is longer. Use `table`, `text`, or `page` when complete content is required. Machine results default to 64 viewport objects and 100 query matches; continuation tokens retrieve the remainder. A focus page range is capped at 32 existing pages.
 
+Find every occurrence of a string before deciding which object to inspect:
+
+```text
+docsight --agent find input.pdf "invoice number" --ignore-case
+docsight --agent find input.pdf "\d{3}\.\d{3}\.\d{3}-\d{2}" --regex --kind paragraph,table_cell
+docsight --agent find input.pdf total --pages 3..3 --bbox 0,600,612,792
+```
+
+`find` searches each object at its finest granularity: a table is searched cell by cell, so a match returns the cell's own identifier and bounding box with `container_id` naming the table. Each match carries `matched` (character range and text), `context_before` and `context_after`, page, bounding box, source, confidence and the diagnostic codes that affect that object. Every returned identifier is accepted directly by `evidence`, `context` and `crop`. `--bbox` requires a single page selected with `--pages`. Regular expressions use a linear-time engine with bounded compiled size; an invalid expression fails with `USAGE`. Machine results default to 100 matches with deterministic continuation.
+
 Spatial DQL uses only canonical page-local points. It never infers coordinates from pixels:
 
 ```text

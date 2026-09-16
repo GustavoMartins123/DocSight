@@ -405,7 +405,7 @@
   },
   "version": {
     "engine_version": "<engine>",
-    "schema_version": "1.1"
+    "schema_version": "1.2"
   },
   "warnings": [
     {

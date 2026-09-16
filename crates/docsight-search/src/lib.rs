@@ -1,6 +1,13 @@
+mod find;
+
+pub use find::{
+    FindMatch, FindMode, FindObjectKind, FindRequest, FindResult, MAX_FIND_MATCHES,
+    MAX_FIND_PATTERN_BYTES, find,
+};
+
 use docsight_core::{
-    BlockContent, BlockKind, Diagnostic, DocsightError, Document, DocumentFormat, ObjectId,
-    OverlayKind, Rect,
+    BlockContent, BlockKind, Diagnostic, DocsightError, Document, DocumentFormat, DocumentObject,
+    ObjectId, OverlayKind, Rect,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -32,6 +39,8 @@ pub enum SemanticKind {
     Watermark,
     CommentMarker,
     Annotation,
+    TableCell,
+    Hyperlink,
 }
 
 impl From<BlockKind> for SemanticKind {
@@ -1513,12 +1522,24 @@ pub fn context_neighborhood(
     include_related: bool,
 ) -> Result<SemanticViewport, DocsightError> {
     let candidates = candidates(document)?;
-    let target_index = candidates
+    match candidates
         .iter()
         .position(|candidate| candidate.object.id.as_str() == object_id)
-        .ok_or_else(|| DocsightError::ObjectNotFound {
-            object: object_id.to_owned(),
-        })?;
+    {
+        Some(target_index) => Ok(candidate_neighborhood(
+            &candidates,
+            target_index,
+            include_related,
+        )),
+        None => resolved_object_neighborhood(document, &candidates, object_id, include_related),
+    }
+}
+
+fn candidate_neighborhood(
+    candidates: &[Candidate],
+    target_index: usize,
+    include_related: bool,
+) -> SemanticViewport {
     let target = &candidates[target_index];
     let mut selected = BTreeMap::new();
     add_viewport_entry(
@@ -1618,7 +1639,7 @@ pub fn context_neighborhood(
         .geometry()
         .map(|(page, bbox)| vec![visual_reference(page, bbox)])
         .unwrap_or_default();
-    Ok(SemanticViewport {
+    SemanticViewport {
         target: ViewportTarget::Object {
             id: target.object.id.clone(),
         },
@@ -1626,7 +1647,168 @@ pub fn context_neighborhood(
         total_objects: objects.len(),
         objects,
         visual_references,
+    }
+}
+
+fn resolved_object_neighborhood(
+    document: &Document,
+    candidates: &[Candidate],
+    object_id: &str,
+    include_related: bool,
+) -> Result<SemanticViewport, DocsightError> {
+    let object =
+        document
+            .resolve_object(object_id)
+            .ok_or_else(|| DocsightError::ObjectNotFound {
+                object: object_id.to_owned(),
+            })?;
+    let anchor_index = anchor_candidate_index(document, candidates, &object);
+    let target = resolved_semantic_object(document, candidates, &object, anchor_index)?;
+
+    let mut viewport = match anchor_index {
+        Some(index) => candidate_neighborhood(candidates, index, include_related),
+        None => SemanticViewport {
+            target: ViewportTarget::Object {
+                id: target.id.clone(),
+            },
+            scope_pages: Vec::new(),
+            total_objects: 0,
+            objects: Vec::new(),
+            visual_references: Vec::new(),
+        },
+    };
+
+    for entry in &mut viewport.objects {
+        entry
+            .relationships
+            .retain(|relationship| relationship.role != ViewportRole::Target);
+    }
+    viewport
+        .objects
+        .retain(|entry| !entry.relationships.is_empty());
+    viewport.objects.push(ViewportObject {
+        object: target.clone(),
+        relationships: vec![ViewportRelationship {
+            role: ViewportRole::Target,
+            confidence: 1.0,
+            provenance: "explicit_object_id".to_owned(),
+        }],
+    });
+    viewport.objects.sort_by(|left, right| {
+        left.object
+            .page
+            .unwrap_or(u32::MAX)
+            .cmp(&right.object.page.unwrap_or(u32::MAX))
+            .then_with(|| left.object.reading_order.cmp(&right.object.reading_order))
+            .then_with(|| left.object.id.cmp(&right.object.id))
+    });
+    viewport.target = ViewportTarget::Object {
+        id: target.id.clone(),
+    };
+    viewport.scope_pages = target.page.into_iter().collect();
+    viewport.total_objects = viewport.objects.len();
+    viewport.visual_references = match (target.page, target.bbox) {
+        (Some(page), Some(bbox)) => vec![visual_reference(page, bbox)],
+        _ => Vec::new(),
+    };
+    Ok(viewport)
+}
+
+fn anchor_candidate_index(
+    document: &Document,
+    candidates: &[Candidate],
+    object: &DocumentObject<'_>,
+) -> Option<usize> {
+    if let Some(anchor) = object.anchor_block() {
+        return candidates
+            .iter()
+            .position(|candidate| candidate.object.id == anchor.id);
+    }
+    let DocumentObject::Hyperlink(link) = object else {
+        return None;
+    };
+    let anchor_path = link.anchor_path.as_deref()?;
+    let block = document
+        .blocks
+        .iter()
+        .find(|block| block.source.path == anchor_path)?;
+    candidates
+        .iter()
+        .position(|candidate| candidate.object.id == block.id)
+}
+
+fn resolved_semantic_object(
+    document: &Document,
+    candidates: &[Candidate],
+    object: &DocumentObject<'_>,
+    anchor_index: Option<usize>,
+) -> Result<SemanticObject, DocsightError> {
+    let anchor = anchor_index.and_then(|index| candidates.get(index));
+    let (z_index, reading_order) = match anchor {
+        Some(anchor) => (anchor.object.z_index, anchor.object.reading_order),
+        None => (1, floating_reading_order(document, object)?),
+    };
+    let text = object.text();
+    let (text_snippet, text_truncated) = semantic_snippet(&text);
+    Ok(SemanticObject {
+        id: object.id().clone(),
+        kind: semantic_kind_of(object),
+        page: object
+            .page()
+            .or_else(|| anchor.and_then(|anchor| anchor.object.page)),
+        bbox: object.bbox(),
+        z_index,
+        reading_order,
+        source: object.source().path.clone(),
+        confidence: object.confidence(),
+        text_snippet,
+        text_truncated,
     })
+}
+
+fn floating_reading_order(
+    document: &Document,
+    object: &DocumentObject<'_>,
+) -> Result<u32, DocsightError> {
+    let page = object.page().unwrap_or(0);
+    let block_order = document
+        .page_blocks(page)
+        .map(|block| block.reading_order)
+        .max()
+        .unwrap_or(0);
+    let overlays = document
+        .page(page)
+        .map(|record| record.overlays.len())
+        .unwrap_or(0);
+    let link_position = document
+        .links
+        .iter()
+        .filter(|link| link.page == Some(page))
+        .position(|link| link.id == *object.id())
+        .unwrap_or(0);
+    let offset = overlays
+        .checked_add(link_position)
+        .and_then(|value| value.checked_add(1))
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "page floating object reading order".to_owned(),
+            limit: u64::from(u32::MAX),
+        })?;
+    block_order
+        .checked_add(offset)
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "page floating object reading order".to_owned(),
+            limit: u64::from(u32::MAX),
+        })
+}
+
+fn semantic_kind_of(object: &DocumentObject<'_>) -> SemanticKind {
+    match object {
+        DocumentObject::Block { block, .. } => block.kind.into(),
+        DocumentObject::TableCell { .. } => SemanticKind::TableCell,
+        DocumentObject::Overlay(overlay) => overlay.kind.into(),
+        DocumentObject::Hyperlink(_) => SemanticKind::Hyperlink,
+    }
 }
 
 fn nearest_caption<'a>(

@@ -310,6 +310,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         target: "https://example.com".to_owned(),
         is_external: true,
         page: None,
+        bbox: None,
         anchor_path: Some("/word/document.xml::fig[1]".to_owned()),
         source: SourceSpan::new("link[1]"),
     });
