@@ -122,6 +122,53 @@ fn every_declared_command_appears_in_the_product_scope() -> Result<(), Box<dyn s
     Ok(())
 }
 
+fn cli_subcommands() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let output = Command::new(env!("CARGO_BIN_EXE_docsight"))
+        .arg("--help")
+        .output()?;
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout)?;
+    let section = help
+        .split("Commands:")
+        .nth(1)
+        .and_then(|rest| rest.split("Options:").next())
+        .ok_or("help output has no Commands section")?;
+    Ok(section
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .map(str::to_owned)
+        .collect())
+}
+
+#[test]
+fn every_cli_subcommand_is_declared_by_capabilities() -> Result<(), Box<dyn std::error::Error>> {
+    let declared = declared_commands()?;
+    let subcommands = cli_subcommands()?;
+    assert!(
+        subcommands.len() >= 20,
+        "the help parser found only {} subcommands",
+        subcommands.len()
+    );
+    let undeclared: Vec<&String> = subcommands
+        .iter()
+        .filter(|name| !declared.contains(name))
+        .collect();
+    let phantom: Vec<&String> = declared
+        .iter()
+        .filter(|name| !subcommands.contains(name))
+        .collect();
+    assert!(
+        undeclared.is_empty(),
+        "subcommands exist but capabilities does not declare them: {undeclared:?}"
+    );
+    assert!(
+        phantom.is_empty(),
+        "capabilities declares commands the CLI does not implement: {phantom:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn no_declared_command_contradicts_the_out_of_scope_boundaries()
 -> Result<(), Box<dyn std::error::Error>> {

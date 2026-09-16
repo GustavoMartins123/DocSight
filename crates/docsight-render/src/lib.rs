@@ -210,13 +210,41 @@ fn object_crop_target(document: &Document, id: &str) -> Result<(u32, Rect), Docs
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: id.to_owned(),
         })?;
-    let page = object.page().ok_or_else(|| DocsightError::UnsupportedFeature {
-        feature: format!("object {id} has no page placement"),
-    })?;
-    let bbox = object.bbox().ok_or_else(|| DocsightError::UnsupportedFeature {
-        feature: format!("object {id} has no crop geometry"),
-    })?;
+    let page = object
+        .page()
+        .ok_or_else(|| DocsightError::UnsupportedFeature {
+            feature: format!("object {id} has no page placement"),
+        })?;
+    let bbox = object
+        .bbox()
+        .ok_or_else(|| missing_crop_geometry(document, &object, id))?;
     Ok((page, bbox))
+}
+
+fn missing_crop_geometry(
+    document: &Document,
+    object: &docsight_core::DocumentObject<'_>,
+    id: &str,
+) -> DocsightError {
+    let anchor = match object {
+        docsight_core::DocumentObject::Hyperlink(link) => {
+            link.anchor_path.as_deref().and_then(|path| {
+                document
+                    .blocks
+                    .iter()
+                    .find(|block| block.source.path == path)
+            })
+        }
+        other => other.anchor_block(),
+    };
+    let feature = match anchor {
+        Some(block) if block.bbox.is_some() => format!(
+            "object {id} has no crop geometry of its own; crop its anchoring block {} instead",
+            block.id
+        ),
+        _ => format!("object {id} has no crop geometry"),
+    };
+    DocsightError::UnsupportedFeature { feature }
 }
 
 fn clipped_crop_warning(object: &str, page: u32) -> Diagnostic {

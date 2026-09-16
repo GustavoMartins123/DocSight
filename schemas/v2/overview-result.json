@@ -95,7 +95,9 @@
             "footer",
             "watermark",
             "comment_marker",
-            "annotation"
+            "annotation",
+            "table_cell",
+            "hyperlink"
           ]
         },
         "page": {
