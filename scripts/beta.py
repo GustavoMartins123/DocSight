@@ -72,7 +72,12 @@ def validate_report(report: Any, allowed: set[str] | None = None) -> dict[str, A
     if (not isinstance(codes, list) or not all(isinstance(code, str) and code in allowed for code in codes)
             or len(codes) > 512 or codes != sorted(set(codes))):
         raise ToolError('INVALID_DIAGNOSTIC_CODES', 'Only sorted documented diagnostic codes may be shared')
-    if (report['outcome'] == 'success') != (report['exit_code'] == 0 and report['outcome'] not in ('invalid_protocol', 'output_limit', 'timeout')):
+    code, outcome = report['exit_code'], report['outcome']
+    abnormal_exit = code < 0 or code > 65535
+    if ((outcome == 'success' and code != 0)
+            or (outcome == 'error' and not 1 <= code <= 65535)
+            or (outcome == 'crash' and not abnormal_exit)
+            or (outcome == 'invalid_protocol' and abnormal_exit)):
         raise ToolError('INCONSISTENT_BETA_OUTCOME', 'Beta outcome conflicts with the process exit code')
     return report
 
@@ -188,6 +193,8 @@ def collect_report(archive: Path, participant: str, operation: str, experience: 
 
 def aggregate_reports(directory: Path) -> dict[str, Any]:
     paths = sorted(directory.glob('*.json'))
+    if not paths:
+        raise ToolError('NO_BETA_REPORTS', 'No beta observations were collected for this campaign')
     bounded_integer(len(paths), 1, 10_000, 'beta report count')
     reports = [validate_report(read_json(path, 262_144)) for path in paths]
     digests = [sha256_file(path) for path in paths]

@@ -59,6 +59,13 @@ class BetaTests(ReleaseFixture):
             with self.subTest(expected=expected):
                 self.assertEqual(self.summarize(result)['outcome'], expected)
 
+    def test_shared_report_cannot_relabel_a_crash_as_a_typed_error(self):
+        for exit_code, outcome in ((-11, 'error'), (3221225477, 'error'), (10, 'crash'), (-9, 'invalid_protocol')):
+            report = self.summarize()
+            report.update(exit_code=exit_code, outcome=outcome)
+            with self.subTest(exit_code=exit_code, outcome=outcome), self.assertRaises(ToolError):
+                validate_report(report, self.allowed)
+
     def test_zero_exit_alone_cannot_be_success(self):
         for output in (b'not JSON', b'{}', b'{"schema":"docsight.agent/v2"}'):
             self.assertEqual(self.summarize(ProcessResult(0, output, b'', 1))['outcome'], 'invalid_protocol')
@@ -164,8 +171,9 @@ class BetaTests(ReleaseFixture):
     def test_empty_campaign_is_not_reported_as_success(self):
         directory = self.root / 'empty'
         directory.mkdir()
-        with self.assertRaises(ToolError):
+        with self.assertRaises(ToolError) as raised:
             aggregate_reports(directory)
+        self.assertEqual(raised.exception.code, 'NO_BETA_REPORTS')
 
 
 if __name__ == '__main__':
