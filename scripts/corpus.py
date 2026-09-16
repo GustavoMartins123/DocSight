@@ -20,14 +20,14 @@ ORIGINS = ('synthetic', 'consented-real')
 FORMATS = ('docx', 'pdf', 'invalid')
 
 
-def load_manifest(path: Path, root: Path) -> dict[str, Any]:
+def load_manifest(path: Path, root: Path | None) -> dict[str, Any]:
     manifest = read_json(path)
     exact_keys(manifest, {'schema', 'cases'}, 'corpus manifest')
     if manifest['schema'] != 'docsight.corpus/v1' or not isinstance(manifest['cases'], list):
         raise ToolError('INVALID_CORPUS_MANIFEST', 'A versioned corpus manifest is required')
     bounded_integer(len(manifest['cases']), 1, 10_000, 'case count')
     identities = set()
-    base = root.resolve(strict=True)
+    base = root.resolve(strict=True) if root is not None else None
     for case in manifest['cases']:
         exact_keys(case, {'id', 'file', 'sha256', 'origin', 'format', 'operation', 'expected'}, 'corpus case')
         identity = case['id']
@@ -38,14 +38,17 @@ def load_manifest(path: Path, root: Path) -> dict[str, Any]:
             if case[key] not in choices:
                 raise ToolError('INVALID_CORPUS_VALUE', f'Unsupported corpus {key}')
         member = safe_member(case['file'])
-        selected = base / member
-        if (not selected.resolve(strict=True).is_relative_to(base) or not selected.is_file()
-                or any(part.is_symlink() for part in [selected, *selected.parents] if part != base and part.is_relative_to(base))):
-            raise ToolError('INVALID_CORPUS_PATH', 'Corpus input must be a regular contained file without symlinks')
-        if selected.stat().st_size > 268_435_456:
-            raise ToolError('CORPUS_INPUT_LIMIT', 'Corpus documents are limited to 256 MiB')
-        if case['sha256'] != sha256_file(selected):
-            raise ToolError('CORPUS_DIGEST_MISMATCH', 'Corpus file differs from its reviewed digest')
+        if not isinstance(case['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', case['sha256']):
+            raise ToolError('INVALID_CORPUS_DIGEST', 'Corpus input must have a SHA-256 digest')
+        if base is not None:
+            selected = base / member
+            if (not selected.resolve(strict=True).is_relative_to(base) or not selected.is_file()
+                    or any(part.is_symlink() for part in [selected, *selected.parents] if part != base and part.is_relative_to(base))):
+                raise ToolError('INVALID_CORPUS_PATH', 'Corpus input must be a regular contained file without symlinks')
+            if selected.stat().st_size > 268_435_456:
+                raise ToolError('CORPUS_INPUT_LIMIT', 'Corpus documents are limited to 256 MiB')
+            if case['sha256'] != sha256_file(selected):
+                raise ToolError('CORPUS_DIGEST_MISMATCH', 'Corpus file differs from its reviewed digest')
         expected = exact_keys(case['expected'], {'exit_code', 'diagnostic_codes', 'pointer_equals', 'repeat'}, 'case expectation')
         bounded_integer(expected['exit_code'], 0, 255, 'expected exit code')
         bounded_integer(expected['repeat'], 1, 3, 'repeat count')
