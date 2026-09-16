@@ -149,6 +149,18 @@ class ReleaseTests(ReleaseFixture):
         with self.assertRaisesRegex(ToolError, 'digest'):
             verify_archive(path)
 
+    def test_corrupt_deflate_stream_is_a_typed_archive_error(self):
+        path = self.package()
+        with zipfile.ZipFile(path) as archive:
+            info = next(item for item in archive.infolist() if item.filename.endswith('/docsight'))
+        data = bytearray(path.read_bytes())
+        filename_length, extra_length = struct.unpack_from('<HH', data, info.header_offset + 26)
+        start = info.header_offset + 30 + filename_length + extra_length
+        data[start] = 7
+        path.write_bytes(data)
+        with self.assertRaisesRegex(ToolError, 'corrupt'):
+            verify_archive(path)
+
     def test_extra_archive_members_are_rejected(self):
         path = self.package()
         def add(entries):
