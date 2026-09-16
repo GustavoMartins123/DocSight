@@ -48,6 +48,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Text extraction with encoding and `ToUnicode` resolution, embedded TrueType outlines, `Identity-H` CID fonts and CID-to-GID mapping.
 - Paragraph and heading reconstruction with per-object confidence.
 - Table inference with an explicit detector name and confidence score.
+- Form XObjects are traversed: their content stream is parsed with the invoking graphics state composed with the form `/Matrix`, and their text, geometry and nested forms reach the IR. Cycles and nesting beyond 12 levels fail closed.
 - Document information from the trailer `/Info` dictionary, decoding both UTF-16BE and PDFDocEncoding strings. An absent dictionary is reported as unknown rather than filled in with the engine's own name.
 - Page annotations: `/Link` annotations with a `/URI` action or a `/Dest` destination become hyperlinks with page-local geometry, and every other annotation subtype becomes an `Annotation` overlay carrying its `/Contents` text. Link targets are never fetched.
 
@@ -104,7 +105,9 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 
 | Limitation | Diagnostic |
 | --- | --- |
-| Form XObjects are not traversed; they are placed as a figure placeholder and their text is not extracted | `PDF_XOBJECT_PLACEHOLDER` |
+| An image XObject is placed as a figure box; its pixels are not decoded | `PDF_XOBJECT_PLACEHOLDER` |
+| A page paints only images and carries no text operators, so there is nothing to extract without OCR | `PDF_PAGE_HAS_NO_TEXT_LAYER` |
+| A shading resource (`sh`) is not painted | `PDF_SHADING_UNSUPPORTED` |
 | Text without an embedded outline uses the deterministic fallback glyph set | `APPROXIMATED_PDF_FONT` |
 | Codes the `ToUnicode` CMap does not map are extracted as the replacement character | `PDF_TEXT_CODE_UNMAPPED` |
 | Unsupported `ExtGState` entries are ignored for painting | `PDF_EXTGSTATE_IGNORED` |
@@ -113,7 +116,7 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 | Negative font sizes extract text but do not reproduce the signed transform | `PDF_NEGATIVE_FONT_SIZE_VISUAL` |
 | Strokes under a non-uniform transform use an area-preserving mean width | `PDF_NON_UNIFORM_STROKE_VISUAL` |
 
-Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Shading resources (`sh`), unsupported content operators and unsupported font programs fail closed with exit code `20` rather than painting something approximate.
+Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators and unsupported font programs fail closed with exit code `20` rather than guessing; features that only affect painting reduce visual fidelity and are reported, but never veto text or structure.
 
 ### Operation-level diagnostics
 

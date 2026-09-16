@@ -6,9 +6,9 @@ mod reconstruction;
 mod syntax;
 
 use content::{
-    ClipRegion, DisplayCommand, ExtGraphicsState, FontInfo, LineCap, LineJoin, Paint, PathSegment,
-    Point, TextRun, VisualIssue, ext_graphics_states_from_resources, fonts_from_resources,
-    parse_content,
+    ClipRegion, ContentResources, DisplayCommand, ExtGraphicsState, FontInfo, FormXObject, LineCap,
+    LineJoin, MAX_FORM_XOBJECT_DEPTH, Paint, PathSegment, Point, TextRun, VisualIssue,
+    XObjectEntry, ext_graphics_states_from_resources, fonts_from_resources, parse_content,
 };
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
@@ -468,6 +468,103 @@ impl<'a> PdfDocument<'a> {
         )
     }
 
+    fn xobject_entries(
+        &self,
+        resources: &BTreeMap<String, Value>,
+        depth: usize,
+        visited: &mut BTreeSet<ObjectRef>,
+    ) -> Result<BTreeMap<String, XObjectEntry>, DocsightError> {
+        let Some(value) = resources.get("XObject") else {
+            return Ok(BTreeMap::new());
+        };
+        if depth > MAX_FORM_XOBJECT_DEPTH {
+            return Err(DocsightError::ResourceLimit {
+                resource: "PDF form XObject nesting".to_owned(),
+                limit: MAX_FORM_XOBJECT_DEPTH as u64,
+            });
+        }
+        let dictionary = self.store.resolve_dict(value)?;
+        let mut entries = BTreeMap::new();
+        for (name, entry) in dictionary {
+            let reference = match entry {
+                Value::Ref(reference) => Some(reference),
+                _ => None,
+            };
+            let resolved = self.store.resolve(&entry)?;
+            let Value::Stream(stream) = resolved else {
+                entries.insert(name, XObjectEntry::Image);
+                continue;
+            };
+            let subtype = match stream.dict.get("Subtype") {
+                Some(Value::Name(subtype)) => subtype.as_str(),
+                _ => "",
+            };
+            if subtype != "Form" {
+                entries.insert(name, XObjectEntry::Image);
+                continue;
+            }
+            if let Some(reference) = reference
+                && !visited.insert(reference)
+            {
+                return Err(malformed("cycle detected between PDF form XObjects"));
+            }
+            let content = decode_stream(&stream)?;
+            let matrix = match stream.dict.get("Matrix") {
+                Some(value) => match self.store.resolve(value)? {
+                    Value::Array(values) if values.len() == 6 => {
+                        let mut matrix = [0.0_f32; 6];
+                        for (slot, value) in matrix.iter_mut().zip(values.iter()) {
+                            *slot = pdf_number(value)?;
+                        }
+                        matrix
+                    }
+                    _ => return Err(malformed("form XObject Matrix must hold six numbers")),
+                },
+                None => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            };
+            if !matrix.iter().all(|value| value.is_finite()) {
+                return Err(malformed("form XObject Matrix is not finite"));
+            }
+            let nested_resources = match stream.dict.get("Resources") {
+                Some(value) => self.store.resolve_dict(value)?,
+                None => resources.clone(),
+            };
+            let fonts = fonts_from_resources(
+                &nested_resources,
+                |value| self.store.resolve(value),
+                |value| match self.store.resolve(value)? {
+                    Value::Stream(stream) => decode_stream(&stream),
+                    _ => Err(malformed("ToUnicode must resolve to a stream")),
+                },
+            )?;
+            let graphics_states = ext_graphics_states_from_resources(
+                &nested_resources,
+                |value| self.store.resolve(value),
+                |value| match self.store.resolve(value)? {
+                    Value::Stream(stream) => decode_stream(&stream),
+                    _ => Err(malformed("font program must resolve to a stream")),
+                },
+            )?;
+            let xobjects = self.xobject_entries(&nested_resources, depth + 1, visited)?;
+            if let Some(reference) = reference {
+                visited.remove(&reference);
+            }
+            entries.insert(
+                name,
+                XObjectEntry::Form(Box::new(FormXObject {
+                    content,
+                    matrix,
+                    resources: ContentResources {
+                        fonts,
+                        xobjects,
+                        ext_graphics_states: graphics_states.states,
+                    },
+                })),
+            );
+        }
+        Ok(entries)
+    }
+
     fn document_info(&self) -> Result<DocumentMetadata, DocsightError> {
         let Some(info) = self.store.xref.trailer.get("Info") else {
             return Ok(DocumentMetadata::default());
@@ -513,6 +610,9 @@ impl<'a> PdfDocument<'a> {
             }
             if parsed.unmapped_text_codes {
                 all_warnings.push(unmapped_text_warning(page_num));
+            }
+            if parsed.text_runs.is_empty() && parsed.omitted_xobjects {
+                all_warnings.push(no_text_layer_warning(page_num));
             }
             let reconstructed = reconstruction::reconstruct_page_semantics(
                 page_num,
@@ -631,10 +731,6 @@ impl<'a> PdfDocument<'a> {
                 }
             },
         )?;
-        let xobjects = match resources.get("XObject") {
-            Some(value) => self.store.resolve_dict(value)?.into_keys().collect(),
-            None => BTreeSet::new(),
-        };
         let graphics_states = ext_graphics_states_from_resources(
             &resources,
             |value| self.store.resolve(value),
@@ -646,15 +742,21 @@ impl<'a> PdfDocument<'a> {
                 }
             },
         )?;
+        let mut visited = BTreeSet::new();
+        let xobject_entries = self.xobject_entries(&resources, 0, &mut visited)?;
+        let xobjects: BTreeSet<String> = xobject_entries.keys().cloned().collect();
+        let content_resources = ContentResources {
+            fonts: fonts.clone(),
+            xobjects: xobject_entries,
+            ext_graphics_states: graphics_states.states.clone(),
+        };
         let trace_resources = trace_resources(&fonts, &xobjects, &graphics_states.states);
         let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(
             &content.bytes,
             page.media_box.x0,
             page.media_box.y1,
-            &fonts,
-            &xobjects,
-            &graphics_states.states,
+            &content_resources,
         )
         .map_err(|error| {
             let mut location = ErrorLocation {
@@ -675,6 +777,7 @@ impl<'a> PdfDocument<'a> {
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
             omitted_xobjects: parsed.omitted_xobjects,
+            page_visual_issues: parsed.page_visual_issues,
             unmapped_text_codes: parsed.unmapped_text_codes,
             trace_resources,
         })
@@ -771,6 +874,7 @@ struct ParsedPage {
     approximated_font: bool,
     omitted_xobjects: bool,
     unmapped_text_codes: bool,
+    page_visual_issues: Vec<VisualIssue>,
     trace_resources: Vec<PdfTraceResource>,
 }
 
@@ -1237,6 +1341,18 @@ fn pdf_number(value: &Value) -> Result<f32, DocsightError> {
     }
 }
 
+fn no_text_layer_warning(page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "PDF_PAGE_HAS_NO_TEXT_LAYER".to_owned(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("page {page} paints only images and carries no text operators"),
+        effect: "the page is a raster scan; recovering its text would require OCR, which this engine does not perform"
+            .to_owned(),
+        object: None,
+        page: Some(page),
+    }
+}
+
 fn unmapped_text_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "PDF_TEXT_CODE_UNMAPPED".to_owned(),
@@ -1264,10 +1380,9 @@ fn xobject_placeholder_warning(page: u32) -> Diagnostic {
     Diagnostic {
         code: "PDF_XOBJECT_PLACEHOLDER".to_owned(),
         severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "page {page} contains XObject content represented as a figure placeholder"
-        ),
-        effect: "embedded image or form pixels are not decoded by the initial renderer".to_owned(),
+        message: format!("page {page} places an image XObject as a figure placeholder"),
+        effect: "the image pixels are not decoded; form XObjects are traversed and their text is extracted"
+            .to_owned(),
         object: None,
         page: Some(page),
     }
@@ -1279,6 +1394,9 @@ fn graphics_state_visual_warnings(
     objects: &[(ObjectId, Rect)],
 ) -> Vec<Diagnostic> {
     let mut warning_targets = BTreeSet::new();
+    for issue in &parsed.page_visual_issues {
+        warning_targets.insert((issue.clone(), None));
+    }
     for command in &parsed.commands {
         let (issues, bbox) = command_visual_evidence(command);
         for issue in issues {
@@ -1383,6 +1501,11 @@ fn visual_warning(page: u32, issue: VisualIssue, object: Option<ObjectId>) -> Di
             "PDF_PATTERN_PAINT_UNSUPPORTED",
             format!("page {page} paints content with unsupported pattern {name}"),
             "the affected object's pixels use the previous flat color instead of the pattern",
+        ),
+        VisualIssue::Shading(name) => (
+            "PDF_SHADING_UNSUPPORTED",
+            format!("page {page} paints an unsupported shading resource {name}"),
+            "the shaded area is left unpainted; text and structure on the page are unaffected",
         ),
         VisualIssue::TextClip => (
             "PDF_CLIP_TEXT_VISUAL",

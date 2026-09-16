@@ -1406,3 +1406,161 @@ fn rejects_page_boxes_without_area() -> Result<(), Box<dyn std::error::Error>> {
     ));
     Ok(())
 }
+
+fn form_xobject_objects(form_content: &str, page_content: &str) -> Vec<String> {
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /XObject << /Fm0 6 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{page_content}\nendstream",
+            page_content.len()
+        ),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Matrix [1 0 0 1 0 20] /Resources << /Font << /F1 4 0 R >> >> /Length {} >>\nstream\n{form_content}\nendstream",
+            form_content.len()
+        ),
+    ]
+}
+
+#[test]
+fn extracts_text_from_inside_a_form_xobject() -> Result<(), Box<dyn std::error::Error>> {
+    let objects = form_xobject_objects(
+        "BT /F1 12 Tf 10 10 Td (Inside form) Tj ET",
+        "BT /F1 12 Tf 20 70 Td (On page) Tj ET q 1 0 0 1 0 0 cm /Fm0 Do Q",
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+
+    let text: String = page.spans.iter().map(|span| span.text.as_str()).collect();
+    assert!(text.contains("On page"), "page text missing: {text}");
+    assert!(text.contains("Inside form"), "form text missing: {text}");
+    Ok(())
+}
+
+#[test]
+fn applies_the_form_matrix_to_nested_geometry() -> Result<(), Box<dyn std::error::Error>> {
+    let nested_text = "BT /F1 12 Tf 10 10 Td (Inside form) Tj ET";
+    let translated = form_xobject_objects(nested_text, "q /Fm0 Do Q");
+    let mut identity = form_xobject_objects(nested_text, "q /Fm0 Do Q");
+    identity[5] = identity[5].replace("/Matrix [1 0 0 1 0 20] ", "");
+
+    let translated_span = form_span(&translated, "Inside form")?;
+    let identity_span = form_span(&identity, "Inside form")?;
+
+    assert!(
+        (identity_span.bbox.y0 - translated_span.bbox.y0 - 20.0).abs() < 0.01,
+        "the 20pt form Matrix translation was not applied: {:?} vs {:?}",
+        translated_span.bbox,
+        identity_span.bbox
+    );
+    assert!((identity_span.bbox.x0 - translated_span.bbox.x0).abs() < 0.01);
+    Ok(())
+}
+
+fn form_span(
+    objects: &[String],
+    needle: &str,
+) -> Result<docsight_pdf::PdfTextSpan, Box<dyn std::error::Error>> {
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(objects))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+    page.spans
+        .into_iter()
+        .find(|span| span.text.contains(needle))
+        .ok_or_else(|| "form span missing".into())
+}
+
+#[test]
+fn rejects_cycles_between_form_xobjects() -> Result<(), Box<dyn std::error::Error>> {
+    let form = "q /Fm0 Do Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Fm0 5 0 R >> >> /Contents 4 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{form}\nendstream", form.len()),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Resources << /XObject << /Fm0 5 0 R >> >> /Length {} >>\nstream\n{form}\nendstream",
+            form.len()
+        ),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+
+    assert!(matches!(
+        document.to_document(),
+        Err(DocsightError::MalformedDocument { .. })
+            | Err(DocsightError::MalformedDocumentAt { .. })
+            | Err(DocsightError::ResourceLimit { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn shading_operators_reduce_visual_fidelity_without_vetoing_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let content = "BT /F1 12 Tf 20 70 Td (Readable) Tj ET q /Sh0 sh Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /Shading << /Sh0 6 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 200 100] >>".to_owned(),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert!(
+        document
+            .blocks
+            .iter()
+            .any(|block| block.text().contains("Readable")),
+        "a shading resource must not veto text extraction"
+    );
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_SHADING_UNSUPPORTED"),
+        "the unsupported shading must still be reported"
+    );
+    assert_eq!(
+        docsight_core::document_capabilities(&document).render,
+        docsight_core::CoverageStatus::Approximated
+    );
+    Ok(())
+}
+
+#[test]
+fn marked_content_points_are_inert() -> Result<(), Box<dyn std::error::Error>> {
+    let content = "/Span MP BT /F1 12 Tf 20 70 Td (Marked) Tj ET /Span << /MCID 0 >> DP";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let page = PdfDocument::open(&source)?.page(1)?;
+
+    assert_eq!(page.spans.len(), 1);
+    assert_eq!(page.spans[0].text, "Marked");
+    Ok(())
+}
+
+#[test]
+fn reports_a_scanned_page_as_having_no_text_layer() -> Result<(), Box<dyn std::error::Error>> {
+    let content = "q 200 0 0 100 0 0 cm /Im0 Do Q";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x00\x00\x00\nendstream".to_owned(),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    let warning = document
+        .warnings
+        .iter()
+        .find(|warning| warning.code == "PDF_PAGE_HAS_NO_TEXT_LAYER")
+        .ok_or("scanned-page diagnostic missing")?;
+    assert!(warning.effect.contains("OCR"));
+    Ok(())
+}
