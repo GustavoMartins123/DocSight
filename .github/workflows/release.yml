@@ -54,8 +54,7 @@ jobs:
       BINARY: ${{ matrix.binary }}
       VERSION: ${{ needs.configuration.outputs.version }}
       CARGO_TERM_COLOR: never
-      RUSTFLAGS: "-D warnings"
-      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-D warnings -C target-feature=+crt-static"
+      RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-D warnings -C target-feature=+crt-static' || '-D warnings' }}
       MACOSX_DEPLOYMENT_TARGET: "15.0"
     steps:
       - uses: actions/checkout@v4
