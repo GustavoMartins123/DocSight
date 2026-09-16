@@ -43,9 +43,17 @@ def _reject_constant(value: str) -> None:
     raise ToolError('INVALID_JSON_NUMBER', 'JSON numbers must be finite')
 
 
+def _finite_json_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ToolError('INVALID_JSON_NUMBER', 'JSON numbers must be finite')
+    return result
+
+
 def parse_json(data: bytes | str) -> Any:
     try:
-        return json.loads(data, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+        return json.loads(data, object_pairs_hook=_unique_object, parse_constant=_reject_constant,
+                          parse_float=_finite_json_float)
     except (ValueError, UnicodeError, RecursionError) as error:
         raise ToolError('INVALID_JSON', 'Input is not valid bounded JSON') from error
 

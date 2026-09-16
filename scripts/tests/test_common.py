@@ -21,6 +21,10 @@ class CommonTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ToolError):
                 parse_json(value)
 
+    def test_exponential_overflow_is_rejected(self):
+        with self.assertRaises(ToolError):
+            parse_json('{"elapsed_ms": 1e999}')
+
     def test_boolean_is_not_an_integer(self):
         with self.assertRaises(ToolError):
             bounded_integer(True, 0, 10, 'count')
