@@ -190,6 +190,10 @@
       "id": "sample-headings-diff",
       "operation": "diff",
       "origin": "synthetic",
+      "reference": {
+        "file": "fixtures/validation/sample_headings.docx",
+        "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+      },
       "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
     }
   ],

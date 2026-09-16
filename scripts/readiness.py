@@ -131,6 +131,7 @@ def corpus_evidence(directory: Path, packages: dict[str, str], revision: str, ve
             if (outcome.get('passed') is not True or outcome.get('error_code') is not None
                     or type(outcome.get('attempts')) is not int or outcome['attempts'] != case['expected']['repeat']
                     or outcome.get('document_sha256') != case['sha256']
+                    or outcome.get('reference_sha256') != case.get('reference', {}).get('sha256')
                     or any(outcome.get(field) != case[field] for field in ('origin', 'format', 'operation'))):
                 raise ToolError('FAILED_CORPUS_CASE', 'A corpus case lacks complete passing execution evidence')
     return cases
@@ -181,6 +182,7 @@ def regression_evidence(directory: Path, cases: dict[str, dict[str, Any]], root:
         if (len(failures) != 1 or failures[0].get('passed') is not False
                 or type(failures[0].get('attempts')) is not int or failures[0]['attempts'] < 1
                 or failures[0].get('document_sha256') != cases[issue['regression_case']]['sha256']
+                or failures[0].get('reference_sha256') != cases[issue['regression_case']].get('reference', {}).get('sha256')
                 or failures[0].get('error_code') not in ('CORPUS_ASSERTION', 'CORPUS_DIAGNOSTIC', 'CORPUS_CRASH',
                    'CORPUS_EXIT_CODE', 'CORPUS_NONDETERMINISTIC', 'CORPUS_PROCESS_LIMIT', 'SMOKE_INVALID_PNG')):
             raise ToolError('MISSING_PRE_FIX_FAILURE', 'Resolved beta issue must have a reproduced failure before its fix')

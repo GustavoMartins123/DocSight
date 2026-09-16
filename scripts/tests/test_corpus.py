@@ -105,6 +105,31 @@ class CorpusTests(ReleaseFixture):
         self.assertTrue(report['cases'][1]['passed'])
         self.assertNotIn('private crash stack', json.dumps(report))
 
+    def test_diff_uses_the_explicit_second_document_and_records_its_digest(self):
+        reference = self.root / 'revised.docx'
+        reference.write_bytes(b'different synthetic document')
+        self.case.update(operation='diff', reference={'file': reference.name, 'sha256': sha256_file(reference)})
+        self.write_manifest()
+        report = self.run_campaign()
+        self.assertTrue(report['passed'])
+        self.assertEqual(report['cases'][0]['reference_sha256'], sha256_file(reference))
+        self.assertEqual(self.calls[-1][-2:], [str(self.root / 'case.docx'), str(reference)])
+
+    def test_second_document_digest_is_verified_before_execution(self):
+        reference = self.root / 'revised.docx'
+        reference.write_bytes(b'different synthetic document')
+        self.case.update(operation='diff', reference={'file': reference.name, 'sha256': '0' * 64})
+        self.write_manifest()
+        with self.assertRaisesRegex(ToolError, 'digest'):
+            self.run_campaign()
+        self.assertEqual(self.calls, [])
+
+    def test_non_diff_cases_reject_unused_reference_inputs(self):
+        self.case['reference'] = {'file': 'case.docx', 'sha256': self.case['sha256']}
+        self.write_manifest()
+        with self.assertRaisesRegex(ToolError, 'second document'):
+            load_manifest(self.manifest_path, self.root)
+
     def test_render_is_checked_and_repeated(self):
         self.case['operation'] = 'render'
         self.write_manifest()

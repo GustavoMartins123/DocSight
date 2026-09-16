@@ -20,6 +20,22 @@ ORIGINS = ('synthetic', 'consented-real')
 FORMATS = ('docx', 'pdf', 'invalid')
 
 
+def checked_input(value: Any, base: Path | None) -> None:
+    exact_keys(value, {'file', 'sha256'}, 'corpus input')
+    member = safe_member(value['file'])
+    if not isinstance(value['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', value['sha256']):
+        raise ToolError('INVALID_CORPUS_DIGEST', 'Corpus input must have a SHA-256 digest')
+    if base is not None:
+        selected = base / member
+        if (not selected.resolve(strict=True).is_relative_to(base) or not selected.is_file()
+                or any(part.is_symlink() for part in [selected, *selected.parents] if part != base and part.is_relative_to(base))):
+            raise ToolError('INVALID_CORPUS_PATH', 'Corpus input must be a regular contained file without symlinks')
+        if selected.stat().st_size > 268_435_456:
+            raise ToolError('CORPUS_INPUT_LIMIT', 'Corpus documents are limited to 256 MiB')
+        if value['sha256'] != sha256_file(selected):
+            raise ToolError('CORPUS_DIGEST_MISMATCH', 'Corpus file differs from its reviewed digest')
+
+
 def load_manifest(path: Path, root: Path | None) -> dict[str, Any]:
     manifest = read_json(path)
     exact_keys(manifest, {'schema', 'cases'}, 'corpus manifest')
@@ -29,7 +45,10 @@ def load_manifest(path: Path, root: Path | None) -> dict[str, Any]:
     identities = set()
     base = root.resolve(strict=True) if root is not None else None
     for case in manifest['cases']:
-        exact_keys(case, {'id', 'file', 'sha256', 'origin', 'format', 'operation', 'expected'}, 'corpus case')
+        keys = {'id', 'file', 'sha256', 'origin', 'format', 'operation', 'expected'}
+        if isinstance(case, dict) and 'reference' in case:
+            keys.add('reference')
+        exact_keys(case, keys, 'corpus case')
         identity = case['id']
         if not isinstance(identity, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,79}', identity) or identity in identities:
             raise ToolError('INVALID_CORPUS_ID', 'Case identifiers must be unique portable slugs')
@@ -37,18 +56,11 @@ def load_manifest(path: Path, root: Path | None) -> dict[str, Any]:
         for key, choices in (('origin', ORIGINS), ('format', FORMATS), ('operation', OPERATIONS)):
             if case[key] not in choices:
                 raise ToolError('INVALID_CORPUS_VALUE', f'Unsupported corpus {key}')
-        member = safe_member(case['file'])
-        if not isinstance(case['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', case['sha256']):
-            raise ToolError('INVALID_CORPUS_DIGEST', 'Corpus input must have a SHA-256 digest')
-        if base is not None:
-            selected = base / member
-            if (not selected.resolve(strict=True).is_relative_to(base) or not selected.is_file()
-                    or any(part.is_symlink() for part in [selected, *selected.parents] if part != base and part.is_relative_to(base))):
-                raise ToolError('INVALID_CORPUS_PATH', 'Corpus input must be a regular contained file without symlinks')
-            if selected.stat().st_size > 268_435_456:
-                raise ToolError('CORPUS_INPUT_LIMIT', 'Corpus documents are limited to 256 MiB')
-            if case['sha256'] != sha256_file(selected):
-                raise ToolError('CORPUS_DIGEST_MISMATCH', 'Corpus file differs from its reviewed digest')
+        checked_input({'file': case['file'], 'sha256': case['sha256']}, base)
+        if 'reference' in case:
+            if case['operation'] != 'diff':
+                raise ToolError('UNUSED_CORPUS_REFERENCE', 'Only a diff case accepts a second document')
+            checked_input(case['reference'], base)
         expected = exact_keys(case['expected'], {'exit_code', 'diagnostic_codes', 'pointer_equals', 'repeat'}, 'case expectation')
         bounded_integer(expected['exit_code'], 0, 255, 'expected exit code')
         bounded_integer(expected['repeat'], 1, 3, 'repeat count')
@@ -131,15 +143,18 @@ def run_corpus(archive: Path, manifest_path: Path, root: Path = ROOT,
         for case in corpus['cases']:
             output = work / f"{case['id']}.png"
             document = (root / case['file']).resolve()
+            reference = (root / case['reference']['file']).resolve() if 'reference' in case else document
+            reference_digest = case['reference']['sha256'] if 'reference' in case else None
             arguments = [str(binary), '--agent', '--sandbox', case['operation'], str(document)]
             if case['operation'] == 'render':
                 arguments += ['--page', '1', '--dpi', '72', '--out', str(output)]
             if case['operation'] == 'diff':
-                arguments.append(str(document))
+                arguments.append(str(reference))
             attempts, elapsed, codes, digest, error_code = 0, 0, [], None, None
             try:
                 for _ in range(case['expected']['repeat']):
-                    if sha256_file(document) != case['sha256']:
+                    if (sha256_file(document) != case['sha256']
+                            or reference_digest is not None and sha256_file(reference) != reference_digest):
                         raise ToolError('CORPUS_DIGEST_MISMATCH', 'Corpus input changed during the campaign')
                     output.unlink(missing_ok=True)
                     result = runner(arguments, cwd=work, timeout=45, output_limit=8_388_608, env=environment)
@@ -157,7 +172,8 @@ def run_corpus(archive: Path, manifest_path: Path, root: Path = ROOT,
             except (ToolError, OSError, ValueError) as error:
                 error_code = error.code if isinstance(error, ToolError) else 'CORPUS_IO_ERROR'
             outcomes.append({'id': case['id'], 'origin': case['origin'], 'format': case['format'],
-                             'document_sha256': case['sha256'], 'operation': case['operation'],
+                             'document_sha256': case['sha256'], 'reference_sha256': reference_digest,
+                             'operation': case['operation'],
                              'passed': error_code is None, 'error_code': error_code, 'attempts': attempts,
                              'elapsed_ms': elapsed, 'output_sha256': digest, 'diagnostic_codes': codes})
     return {'schema': 'docsight.corpus-report/v1', 'version': manifest['version'],
