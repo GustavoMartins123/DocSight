@@ -124,6 +124,31 @@ class CorpusTests(ReleaseFixture):
             self.run_campaign()
         self.assertEqual(self.calls, [])
 
+    def test_input_changes_during_the_final_attempt_fail_closed(self):
+        for changed in ('document', 'reference'):
+            with self.subTest(changed=changed):
+                document = self.root / 'case.docx'
+                reference = self.root / 'revised.docx'
+                document.write_bytes(b'synthetic document')
+                reference.write_bytes(b'synthetic reference')
+                self.case.update(operation='diff', sha256=sha256_file(document),
+                                 reference={'file': reference.name, 'sha256': sha256_file(reference)})
+                self.case['expected']['repeat'] = 1
+                self.write_manifest()
+                original_engine = self.engine
+
+                def changing_engine(arguments, **options):
+                    result = original_engine(arguments, **options)
+                    if '--version' not in arguments:
+                        (document if changed == 'document' else reference).write_bytes(b'changed during execution')
+                    return result
+
+                with patch('scripts.corpus.native_target', return_value='x86_64-unknown-linux-gnu'):
+                    report = run_corpus(self.package(out=f"changed-{changed}"), self.manifest_path, self.root, changing_engine)
+                self.assertFalse(report['passed'])
+                self.assertEqual(report['cases'][0]['error_code'], 'CORPUS_DIGEST_MISMATCH')
+                self.assertEqual(report['cases'][0]['attempts'], 1)
+
     def test_non_diff_cases_reject_unused_reference_inputs(self):
         self.case['reference'] = {'file': 'case.docx', 'sha256': self.case['sha256']}
         self.write_manifest()

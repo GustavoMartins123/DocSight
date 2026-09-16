@@ -160,6 +160,9 @@ def run_corpus(archive: Path, manifest_path: Path, root: Path = ROOT,
                     result = runner(arguments, cwd=work, timeout=45, output_limit=8_388_608, env=environment)
                     attempts += 1
                     elapsed += result.elapsed_ms
+                    if (sha256_file(document) != case['sha256']
+                            or reference_digest is not None and sha256_file(reference) != reference_digest):
+                        raise ToolError('CORPUS_DIGEST_MISMATCH', 'Corpus input changed during command execution')
                     codes = evaluate(result, case['expected'])
                     digest_input = result.stdout + b'\x00' + result.stderr
                     if case['operation'] == 'render' and result.returncode == 0:
