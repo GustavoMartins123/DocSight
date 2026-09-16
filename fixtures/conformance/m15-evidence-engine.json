@@ -15,6 +15,11 @@
         },
         "overall_fidelity": 0.5,
         "page": 0,
+        "resource": {
+          "reason_codes": [],
+          "score": 1.0,
+          "status": "exact"
+        },
         "structure": {
           "reason_codes": [],
           "score": 1.0,
@@ -59,6 +64,11 @@
               "status": "approximated"
             }
           ],
+          "resource": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
           "structure": {
             "reason_codes": [],
             "score": 1.0,
@@ -102,6 +112,11 @@
               "status": "approximated"
             }
           ],
+          "resource": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
           "structure": {
             "reason_codes": [],
             "score": 1.0,
@@ -145,6 +160,11 @@
               "status": "approximated"
             }
           ],
+          "resource": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
           "structure": {
             "reason_codes": [],
             "score": 1.0,
@@ -168,7 +188,8 @@
         "DOCX_FONT_SUBSTITUTED",
         "DOCX_LAYOUT_PAGINATED",
         "DOCX_PAGINATION_BLOCK_GRANULAR"
-      ]
+      ],
+      "unsupported_feature_count": 2
     },
     "evidence": {
       "document": {
@@ -434,6 +455,11 @@
         },
         "overall_fidelity": 0.4977499842643738,
         "page": 0,
+        "resource": {
+          "reason_codes": [],
+          "score": 1.0,
+          "status": "exact"
+        },
         "structure": {
           "reason_codes": [],
           "score": 0.99099999666214,
@@ -469,6 +495,11 @@
               "status": "unsupported"
             }
           ],
+          "resource": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
           "structure": {
             "reason_codes": [],
             "score": 0.99099999666214,
@@ -490,7 +521,8 @@
       ],
       "reason_codes": [
         "APPROXIMATED_PDF_FONT"
-      ]
+      ],
+      "unsupported_feature_count": 1
     },
     "evidence": {
       "document": {
@@ -614,12 +646,12 @@
     {
       "file": "capabilities-envelope.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-envelope.json",
-      "sha256": "3b68dc82592c07f7cf8890cdf58429c9929550389f6ddafd5127da3ac7ba459b"
+      "sha256": "610754e1895fe37aeb83c92fe76e1be7ebfaf6049ca77d3f78fc30e1a6cb5840"
     },
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "1c573ec0fb1e1d7aaf19de180d2e22c82b320747ba8b0ec9857228562aa0267c"
+      "sha256": "cd609b8078083b67d61fa0e942dc4f816c0d4058da45926f1506406b375554d9"
     },
     {
       "file": "context-result.json",
@@ -629,7 +661,7 @@
     {
       "file": "coverage-report.json",
       "id": "https://docsight.dev/schemas/v2/coverage-report.json",
-      "sha256": "7a67786653d1c32bd903199d7e7c2de1df80647d69beb412aa0cab0afd32b775"
+      "sha256": "f7ab590b32456e0008e2744133be795df603c0dff150c8d37c21343f5e1b8c51"
     },
     {
       "file": "diagnostic.json",

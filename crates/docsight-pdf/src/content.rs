@@ -4,7 +4,7 @@ use docsight_core::{DocsightError, ErrorLocation, Rect};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-const MAX_OPERATIONS: usize = 1_000_000;
+pub const MAX_OPERATIONS: usize = 1_000_000;
 const MAX_CID_TO_GID_ENTRIES: usize = 65_536;
 const MAX_GRAPHICS_DEPTH: usize = 64;
 const MAX_PATH_SEGMENTS: usize = 100_000;

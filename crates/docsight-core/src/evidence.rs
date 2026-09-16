@@ -8,6 +8,14 @@ const TEXT_LOSS_CODES: &[&str] = &["DOCX_RUN_ELEMENT_UNSUPPORTED"];
 
 const GLOBAL_TEXT_LOSS_CODES: &[&str] = &["PDF_TEXT_CODE_UNMAPPED"];
 
+const RESOURCE_LOSS_CODES: &[&str] = &[
+    "DOCX_FIGURE_RASTER_PLACEHOLDER",
+    "DOCX_IMAGE_UNRESOLVED",
+    "DOCX_EMBEDDED_OBJECT_INERT",
+    "DOCX_ACTIVE_CONTENT_INERT",
+    "PDF_XOBJECT_PLACEHOLDER",
+];
+
 const GEOMETRY_WARNING_CODES: &[&str] = &[
     "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
     "DOCX_BLOCK_TALLER_THAN_PAGE",
@@ -349,6 +357,7 @@ pub struct PageCoverage {
     pub structure: CoverageMetric,
     pub geometry: CoverageMetric,
     pub visual: CoverageMetric,
+    pub resource: CoverageMetric,
     pub overall_fidelity: f32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<CoverageRegion>,
@@ -361,6 +370,7 @@ pub struct CoverageReport {
     pub global: PageCoverage,
     pub pages: Vec<PageCoverage>,
     pub affected_objects_count: usize,
+    pub unsupported_feature_count: usize,
     pub reason_codes: Vec<String>,
 }
 
@@ -470,15 +480,22 @@ fn coverage_metric(
     }
 }
 
+struct CoverageAccumulator<'a> {
+    affected_ids: &'a mut BTreeSet<String>,
+    reason_codes: &'a mut BTreeSet<String>,
+}
+
 fn page_coverage(
     doc: &Document,
     page: u32,
     page_blocks: &[&Block],
     glyph_coverage: f32,
     include_regions: bool,
-    affected_ids: &mut BTreeSet<String>,
-    all_reason_codes: &mut BTreeSet<String>,
+    is_global: bool,
+    accumulator: &mut CoverageAccumulator<'_>,
 ) -> PageCoverage {
+    let affected_ids = &mut *accumulator.affected_ids;
+    let all_reason_codes = &mut *accumulator.reason_codes;
     let fidelity = measured_fidelity(
         doc,
         &FidelityInputs {
@@ -676,9 +693,86 @@ fn page_coverage(
             visual_reasons,
             visual_unsupported,
         ),
+        resource: resource_coverage(doc, page_blocks, is_global),
         overall_fidelity: fidelity.overall(),
         regions,
     }
+}
+
+fn resource_loss_objects(doc: &Document) -> BTreeSet<&ObjectId> {
+    doc.warnings
+        .iter()
+        .filter(|warning| RESOURCE_LOSS_CODES.contains(&warning.code.as_str()))
+        .filter_map(|warning| warning.object.as_ref())
+        .collect()
+}
+
+fn resource_coverage(doc: &Document, page_blocks: &[&Block], is_global: bool) -> CoverageMetric {
+    let lost_objects = resource_loss_objects(doc);
+    let mut total = 0usize;
+    let mut lost = 0usize;
+
+    for block in page_blocks
+        .iter()
+        .filter(|block| block.kind == BlockKind::Figure)
+    {
+        total += 1;
+        if lost_objects.contains(&block.id) {
+            lost += 1;
+        }
+    }
+
+    if is_global {
+        for resource in &doc.resources {
+            total += 1;
+            if lost_objects.contains(&resource.id) || resource.content_sha256.is_none() {
+                lost += 1;
+            }
+        }
+    }
+
+    let reasons: Vec<String> = doc
+        .warnings
+        .iter()
+        .filter(|warning| RESOURCE_LOSS_CODES.contains(&warning.code.as_str()))
+        .map(|warning| warning.code.clone())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+
+    if total == 0 {
+        return CoverageMetric {
+            score: 1.0,
+            status: CoverageStatus::Exact,
+            reason_codes: Vec::new(),
+        };
+    }
+    let score = 1.0 - lost as f32 / total as f32;
+    coverage_metric(
+        score,
+        CoverageStatus::Exact,
+        CoverageStatus::Approximated,
+        reasons,
+        lost == total,
+    )
+}
+
+fn unsupported_feature_count(doc: &Document) -> usize {
+    doc.warnings
+        .iter()
+        .filter(|warning| {
+            let code = warning.code.as_str();
+            RESOURCE_LOSS_CODES.contains(&code)
+                || GLOBAL_VISUAL_UNSUPPORTED_CODES.contains(&code)
+                || GLOBAL_GEOMETRY_APPROXIMATION_CODES.contains(&code)
+                || GLOBAL_TEXT_LOSS_CODES.contains(&code)
+                || TEXT_LOSS_CODES.contains(&code)
+                || GEOMETRY_WARNING_CODES.contains(&code)
+                || code.contains("UNSUPPORTED")
+                || code.contains("INERT")
+                || code.contains("UNRESOLVED")
+        })
+        .count()
 }
 
 pub fn compute_coverage(
@@ -709,8 +803,11 @@ pub fn compute_coverage(
             &page_blocks,
             glyph_coverage,
             include_regions,
-            &mut affected_ids,
-            &mut all_reason_codes,
+            false,
+            &mut CoverageAccumulator {
+                affected_ids: &mut affected_ids,
+                reason_codes: &mut all_reason_codes,
+            },
         ));
     }
 
@@ -721,8 +818,11 @@ pub fn compute_coverage(
         &all_blocks,
         glyph_coverage,
         false,
-        &mut affected_ids,
-        &mut all_reason_codes,
+        true,
+        &mut CoverageAccumulator {
+            affected_ids: &mut affected_ids,
+            reason_codes: &mut all_reason_codes,
+        },
     );
 
     let reason_codes: Vec<String> = all_reason_codes.into_iter().collect();
@@ -733,6 +833,7 @@ pub fn compute_coverage(
         global,
         pages: page_coverages,
         affected_objects_count: affected_ids.len(),
+        unsupported_feature_count: unsupported_feature_count(doc),
         reason_codes,
     })
 }

@@ -34,13 +34,15 @@ Classification:
 | Item | Why it blocks v1 |
 | --- | --- |
 | Content-addressed cache between invocations | An agent workflow re-parses and re-lays-out the same document for every command. Tracked as A13. |
+| Per-invocation overrides for ingestion limits | The enforced values are centralized and published in `capabilities` under `ingestion_limits`, and each boundary is tested, but a caller cannot raise one for a document that legitimately exceeds it. Deferred until a real document forces the question, so the override surface is designed against an actual case rather than guessed. |
 
 ---
 
 ## post-v1
 
 - Real font discovery, loading and shaping instead of the deterministic proportional fallback, with a declared font fingerprint in the reproducibility inputs.
-- PDF annotations, and `Annotation` and `Watermark` overlays in the IR. The entities exist but no parser produces them.
+- Annotation appearance streams: an annotation currently contributes geometry and text to the IR, not its rendered pixels.
+- `Watermark` overlays in the IR. The entity exists but no parser produces it.
 - DOCX floating objects and shapes, and the `Shape` block kind, which is likewise declared but never produced.
 - Per-revision tracked changes: authorship, timestamp and content, rather than insertion and deletion counts.
 - Complex DOCX numbering: multi-level list restarts, custom patterns and style-linked numbering.

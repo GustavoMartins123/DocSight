@@ -10,8 +10,10 @@ docsight-core = { path = "../docsight-core" }
 docsight-layout = { path = "../docsight-layout" }
 docsight-ooxml = { path = "../docsight-ooxml" }
 docsight-pdf = { path = "../docsight-pdf" }
+serde.workspace = true
 
 [dev-dependencies]
+docsight-ooxml = { path = "../docsight-ooxml" }
 serde_json.workspace = true
 
 [lints]

@@ -2,7 +2,7 @@ use docsight_core::DocsightError;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-const MAX_FONT_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_FONT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CMAP_ENTRIES: usize = 1_000_000;
 const MAX_GLYPH_DEPTH: usize = 16;
 

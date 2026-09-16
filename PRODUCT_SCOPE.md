@@ -19,7 +19,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - DOCX (OOXML wordprocessing) and PDF, detected by magic bytes and never by file extension.
 - Content-addressed document identity: `sha256` of the exact bytes, and a `doc_…` identifier derived from it.
 - Deterministic object identifiers derived from the document digest plus a normalized semantic source path. The same bytes produce the same identifiers on every platform, regardless of file name or location.
-- Resource limits on document size, archive entries, compression ratio, XML depth, token size, path segments, pages and layout iterations, each reported as a typed `RESOURCE_LIMIT` error.
+- Resource limits on document size, archive entries, compression ratio, XML depth, token size, path segments, pages, annotations and layout iterations, each reported as a typed `RESOURCE_LIMIT` error. The enforced values are published as a machine-readable catalogue in `capabilities` under `ingestion_limits`, so a caller can see the exact boundary before sending a document.
 
 ### Document IR
 
@@ -36,6 +36,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Table grid with row and column spans, nested tables, cell text and cell geometry.
 - Style definitions with `basedOn` inheritance, section geometry, page size and margins, headers and footers.
 - Hyperlinks, comments and tracked-change counts.
+- Package metadata from `docProps/core.xml` and `docProps/app.xml`: title, author, subject and the authoring application.
 - Deterministic pagination and geometry for a single section, honouring explicit page breaks and `keep-with-next`.
 - Unknown body elements are preserved as opaque nodes with a diagnostic; they are never dropped silently.
 
@@ -46,6 +47,8 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Text extraction with encoding and `ToUnicode` resolution, embedded TrueType outlines, `Identity-H` CID fonts and CID-to-GID mapping.
 - Paragraph and heading reconstruction with per-object confidence.
 - Table inference with an explicit detector name and confidence score.
+- Document information from the trailer `/Info` dictionary, decoding both UTF-16BE and PDFDocEncoding strings. An absent dictionary is reported as unknown rather than filled in with the engine's own name.
+- Page annotations: `/Link` annotations with a `/URI` action or a `/Dest` destination become hyperlinks with page-local geometry, and every other annotation subtype becomes an `Annotation` overlay carrying its `/Contents` text. Link targets are never fetched.
 
 ### Operations
 
@@ -57,7 +60,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Geometry: page-local points at 1/72 inch with the page origin at the top-left, used identically by geometry, render, crop, hit-testing and diff.
 - Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box).
 - Spatial and structural selection: `query` (DQL with `above`, `below`, `inside`, `overlaps`, `nearest`, `distance-to`), `hit` (point or region to objects), `resolve` (ranked descriptor matching with explainable components).
-- Evidence and reproducibility: `evidence`, `coverage`, `fingerprint`, `bundle`, `verify`, `replay`.
+- Evidence and reproducibility: `evidence`, `coverage`, `fingerprint`, `bundle`, `verify`, `replay`. Coverage reports text, structure, geometry, visual and resource fidelity per page and for the whole document, plus `unsupported_feature_count`, so a caller can tell how much of the document was actually interpreted.
 - Comparison: `diff` at package, semantic and visual levels.
 - Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens.
 - Process isolation: `--sandbox` on Linux, macOS and Windows, failing closed on platforms where enforcement is unavailable.
@@ -129,8 +132,10 @@ These are not format limitations. They are the cases where a command can answer,
 
 ### Cross-cutting
 
-- `Shape` blocks and `Watermark` and `Annotation` overlays exist in the IR but no parser produces them yet. PDF annotations are not read.
-- PDF documents produce no overlays; headers, footers and comment markers are DOCX-only and come from layout.
+- `Shape` blocks and `Watermark` overlays exist in the IR but no parser produces them yet.
+- Headers, footers and comment markers are DOCX-only and come from layout; `Annotation` overlays are PDF-only and come from page annotations.
+- Annotation appearance streams are not rendered. An annotation contributes its geometry and text to the IR, not its pixels.
+- Resource coverage counts figures and declared resources. A PDF whose content lives in an untraversed Form XObject therefore reports reduced resource coverage rather than silently reporting none.
 - The `caption` DQL selector is DOCX-only and fails closed for PDF, because caption semantics are not reconstructed there.
 - There is no cache between invocations. Every command re-ingests the document.
 

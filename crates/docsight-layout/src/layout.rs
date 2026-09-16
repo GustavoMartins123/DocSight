@@ -4,7 +4,7 @@ use docsight_core::{
     Overlay, OverlayKind, Page, Rect, SourceSpan, Style, validate_canonical,
 };
 
-const MAX_LAYOUT_PAGES: u32 = 10_000;
+pub const MAX_LAYOUT_PAGES: u32 = 10_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextRunLayout {

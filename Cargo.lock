@@ -248,6 +248,7 @@ dependencies = [
  "docsight-layout",
  "docsight-ooxml",
  "docsight-pdf",
+ "serde",
  "serde_json",
 ]
 

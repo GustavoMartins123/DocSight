@@ -1,4 +1,8 @@
 mod package;
 mod parser;
 
-pub use parser::parse_docx;
+pub use package::{
+    MAX_BINARY_PART_BYTES, MAX_COMPRESSION_RATIO, MAX_PACKAGE_ENTRIES,
+    MAX_TOTAL_UNCOMPRESSED_BYTES, MAX_XML_PART_BYTES,
+};
+pub use parser::{MAX_XML_DEPTH, MAX_XML_NODES, MAX_XML_TOKEN_BYTES, parse_docx};
