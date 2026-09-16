@@ -27,6 +27,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('python -m scripts.release collect dist', self.workflow)
         self.assertIn('needs: [configuration, package]', self.workflow)
 
+    def test_corpus_execution_and_manifest_are_preserved_in_artifacts(self):
+        self.assertIn('python -m scripts.corpus run', self.workflow)
+        self.assertIn('dist/corpus-*.json', self.workflow)
+        self.assertIn('cp release/corpus.json dist/corpus-manifest.json', self.workflow)
+        conformance = (ROOT / '.github/workflows/conformance.yml').read_text()
+        self.assertIn('python -m unittest discover -s scripts/tests -v', conformance)
+        self.assertIn('python -m scripts.corpus validate', conformance)
+
     def test_global_flags_do_not_hide_windows_static_crt(self):
         self.assertNotIn('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS', self.workflow)
         self.assertIn("matrix.target == 'x86_64-pc-windows-msvc'", self.workflow)
