@@ -83,6 +83,8 @@ jobs:
         run: python -m scripts.release package --binary "target/$TARGET/release/$BINARY" --target "$TARGET" --revision "$GITHUB_SHA" --notices target/THIRD_PARTY_NOTICES.md --out dist
       - name: Exercise the extracted archive without Rust on PATH
         run: python -m scripts.smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
+      - name: Execute the reviewed synthetic corpus on the native package
+        run: python -m scripts.corpus run --archive "dist/docsight-$VERSION-$TARGET.zip" --out "dist/corpus-$TARGET.json"
       - uses: actions/upload-artifact@v4
         with:
           name: docsight-package-${{ matrix.target }}
@@ -94,6 +96,7 @@ jobs:
           name: docsight-checks-${{ matrix.target }}
           path: |
             dist/smoke-*.json
+            dist/corpus-*.json
             target/ds9-performance.json
           if-no-files-found: ignore
 
@@ -114,6 +117,8 @@ jobs:
           path: dist
       - name: Verify all platform archives and smoke receipts
         run: python -m scripts.release collect dist
+      - name: Retain the exact executed corpus manifest
+        run: cp release/corpus.json dist/corpus-manifest.json
       - name: Generate release notes
         env:
           PREVIOUS_REVISION: ${{ inputs.previous_revision }}
