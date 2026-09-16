@@ -729,7 +729,7 @@
                 ]
               },
               "stderr_log": {
-                "pattern": "^[a-z_]+\\.stderr\\.log$",
+                "pattern": "^[a-z][a-z0-9_]*\\.stderr\\.log$",
                 "type": "string"
               },
               "stderr_sha256": {
@@ -737,7 +737,7 @@
                 "type": "string"
               },
               "stdout_log": {
-                "pattern": "^[a-z_]+\\.stdout\\.log$",
+                "pattern": "^[a-z][a-z0-9_]*\\.stdout\\.log$",
                 "type": "string"
               },
               "stdout_sha256": {

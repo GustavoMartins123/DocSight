@@ -28,6 +28,15 @@ class ToolingSchemaTests(unittest.TestCase):
             self.assertEqual(specification['maxItems'], len(expected))
             self.assertEqual(specification['items']['properties']['name']['enum'], list(expected))
 
+    def test_validation_log_patterns_accept_every_real_gate_name(self):
+        fields = self.definitions['validation-report']['properties']['checks']['items']['properties']
+        for stream in ('stdout', 'stderr'):
+            pattern = fields[f'{stream}_log']['pattern']
+            for name in CHECK_NAMES:
+                with self.subTest(stream=stream, name=name):
+                    self.assertRegex(f'{name}.{stream}.log', pattern)
+            self.assertNotRegex(f'../private.{stream}.log', pattern)
+
     def test_each_artifact_has_a_unique_versioned_schema_and_closed_fields(self):
         identifiers = []
         for name, definition in self.definitions.items():
