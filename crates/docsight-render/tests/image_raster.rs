@@ -1,10 +1,22 @@
 use docsight_core::{DocsightError, DocumentSource, decode_png, encode_png};
 use docsight_render::{RenderRequest, RenderTarget, render_document};
-use std::io::{Cursor, Write};
-use zip::ZipWriter;
+use std::io::{Cursor, Read, Write};
+use std::path::PathBuf;
 use zip::write::SimpleFileOptions;
+use zip::{ZipArchive, ZipWriter};
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+fn test_jpeg() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let specification = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("Projeto_DOCSIGHT_Especificacao.docx");
+    let mut archive = ZipArchive::new(std::fs::File::open(specification)?)?;
+    let mut part = archive.by_name("docProps/thumbnail.jpeg")?;
+    let mut bytes = Vec::new();
+    part.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 
 fn package_with_image(name: &str, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let document = format!(
@@ -75,6 +87,62 @@ fn draws_an_embedded_png_into_the_figure_box() -> Result<(), Box<dyn std::error:
     assert!(
         (share - expected).abs() < expected * 0.15,
         "a 100x50pt figure on a Letter page must cover about {expected} of it, got {share}"
+    );
+    Ok(())
+}
+
+#[test]
+fn decodes_an_embedded_jpeg_deterministically() -> Result<(), Box<dyn std::error::Error>> {
+    let jpeg = test_jpeg()?;
+    let decoded = docsight_core::decode_jpeg(&jpeg)?;
+    assert!(decoded.width > 0);
+    assert!(decoded.height > 0);
+    let width = usize::try_from(decoded.width)?;
+    let height = usize::try_from(decoded.height)?;
+    assert_eq!(
+        decoded.rgba.len(),
+        width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or("decoded image size overflow")?
+    );
+
+    let package = package_with_image("thumbnail.jpg", &jpeg)?;
+    let source = DocumentSource::from_bytes(package.clone())?;
+    let request = RenderRequest {
+        target: RenderTarget::Page { page: 1 },
+        dpi: 72,
+    };
+    let first = render_document(&source, &request)?;
+    let second = render_document(&DocumentSource::from_bytes(package)?, &request)?;
+
+    assert!(
+        !first
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+    );
+    assert_eq!(first.png(), second.png());
+    Ok(())
+}
+
+#[test]
+fn a_malformed_jpeg_is_reported_as_a_placeholder() -> Result<(), Box<dyn std::error::Error>> {
+    let source =
+        DocumentSource::from_bytes(package_with_image("broken.jpg", &[0xff, 0xd8, 0xff, 0xe0])?)?;
+    let rendered = render_document(
+        &source,
+        &RenderRequest {
+            target: RenderTarget::Page { page: 1 },
+            dpi: 72,
+        },
+    )?;
+
+    assert!(
+        rendered
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
     );
     Ok(())
 }

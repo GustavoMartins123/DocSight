@@ -877,23 +877,19 @@ fn a_png_figure_is_not_reported_as_a_placeholder() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn a_non_png_figure_names_the_format_it_cannot_rasterize() -> Result<(), Box<dyn std::error::Error>>
-{
+fn a_supported_jpeg_figure_is_not_reported_as_a_placeholder()
+-> Result<(), Box<dyn std::error::Error>> {
     let jpeg = [
         0xFF_u8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46,
     ];
     let source = DocumentSource::from_bytes(package_with_image("photo.jpg", &jpeg)?)?;
     let parsed = parse_docx(&source)?;
 
-    let warning = parsed
-        .warnings
-        .iter()
-        .find(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
-        .ok_or("placeholder diagnostic missing")?;
     assert!(
-        warning.message.contains("jpeg"),
-        "the diagnostic must name the format: {}",
-        warning.message
+        !parsed
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
     );
     Ok(())
 }

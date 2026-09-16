@@ -846,7 +846,7 @@ fn figure_warnings<'a>(
             .and_then(|target| formats.get(target))
             .map(String::as_str)
             .unwrap_or("unknown");
-        if format == "png" {
+        if matches!(format, "png" | "jpeg") {
             continue;
         }
         warnings.push(Diagnostic {

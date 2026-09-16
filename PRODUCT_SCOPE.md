@@ -61,13 +61,14 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Text and tables: `text`, `tables`, `table` (JSON, Markdown, CSV, TSV, HTML).
 - Resources and links: `images`, `links`. Link targets are reported, never fetched.
 - Geometry: page-local points at 1/72 inch with the page origin at the top-left, used identically by geometry, render, crop, hit-testing and diff.
-- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box). Embedded PNG images are decoded natively and drawn into their figure box; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
+- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box). Embedded PNG and JPEG images are decoded locally and drawn into their figure box; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
 - Search: `find` returns every literal or regex occurrence at the finest object granularity the IR holds — a table is searched cell by cell — with the matched character range, surrounding context, page, bounding box, source, confidence and the diagnostics that affect that object. Results can be narrowed by object kind, page range and a page region, and are bounded with deterministic continuation. Regular expressions run in guaranteed linear time.
 - Spatial and structural selection: `query` (DQL with `above`, `below`, `inside`, `overlaps`, `nearest`, `distance-to`), `hit` (point or region to objects), `resolve` (ranked descriptor matching with explainable components).
 - Object addressing is closed: every object identifier any command emits — block, table cell, nested block, overlay or hyperlink — is accepted by `evidence`, `context` and `crop`. An object without geometry of its own fails with a typed error that names the anchoring block to use instead.
 - Evidence and reproducibility: `evidence`, `coverage`, `fingerprint`, `bundle`, `verify`, `replay`. Coverage reports text, structure, geometry, visual and resource fidelity per page and for the whole document, plus `unsupported_feature_count`, so a caller can tell how much of the document was actually interpreted.
 - Comparison: `diff` at package, semantic and visual levels.
 - Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens.
+- Interactive setup: `completions` generates deterministic scripts for Bash, Elvish, Fish, PowerShell and Zsh. It is intentionally human-only and rejects agent or machine-output flags instead of mixing a shell script with JSON.
 - Process isolation: `--sandbox` on Linux, macOS and Windows, failing closed on platforms where enforcement is unavailable.
 
 ### Diagnostics and errors
@@ -92,7 +93,7 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | A block taller than the content area overflows the page | `DOCX_BLOCK_TALLER_THAN_PAGE` |
 | Layout is computed rather than read from the source | `DOCX_LAYOUT_PAGINATED` |
 | Text is measured with a deterministic proportional fallback font, not the document's own font | `DOCX_FONT_SUBSTITUTED` |
-| An embedded image is not a PNG this engine can decode, so a placeholder box is rendered instead of its pixels; the diagnostic names the detected format | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
+| An embedded image is neither a supported PNG nor JPEG, or its bytes fail strict decoding, so a placeholder box is rendered instead of its pixels; the diagnostic names the detected format or decoding failure | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
 | An image relationship cannot be resolved | `DOCX_IMAGE_UNRESOLVED` |
 | Numbering definitions or formats cannot be resolved | `DOCX_NUMBERING_UNRESOLVED`, `DOCX_NUMBERING_FORMAT_MISSING` |
 | Unusable table grid widths fall back to equal columns | `DOCX_TABLE_GRID_WIDTHS_UNUSABLE` |
@@ -141,7 +142,7 @@ These are not format limitations. They are the cases where a command can answer,
 
 ### Images
 
-Only PNG is decoded, and only 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG, GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as placeholders. Scaling to the figure box is nearest-neighbour, which is deterministic but does not filter; enlarging a small image shows its pixels rather than a smoothed version.
+PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG is decoded strictly through a pinned pure-Rust adapter with platform-specific acceleration disabled, so malformed or non-conformant data is not accepted as visual evidence. GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as placeholders. Scaling to the figure box is nearest-neighbour, which is deterministic but does not filter; enlarging a small image shows its pixels rather than a smoothed version.
 
 ### Cross-cutting
 

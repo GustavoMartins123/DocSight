@@ -399,9 +399,9 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
         command["invocation"]
             .as_str()
             .is_some_and(|invocation| !invocation.is_empty())
-            && command["ndjson_events"]
-                .as_array()
-                .is_some_and(|events| !events.is_empty())
+            && command["ndjson_events"].as_array().is_some_and(|events| {
+                !command["ndjson"].as_bool().unwrap_or(false) || !events.is_empty()
+            })
     }));
     let diff = commands
         .iter()

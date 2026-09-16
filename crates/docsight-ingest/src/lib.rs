@@ -136,4 +136,18 @@ pub const INGESTION_LIMITS: &[IngestionLimit] = &[
         unit: "pixels",
         effect: "the raster request is rejected before allocation",
     },
+    IngestionLimit {
+        name: "embedded_image_pixels",
+        applies_to: "docx",
+        value: docsight_core::MAX_IMAGE_PIXELS,
+        unit: "pixels",
+        effect: "the embedded image is not decoded and the figure is rendered as a placeholder",
+    },
+    IngestionLimit {
+        name: "jpeg_progressive_scans",
+        applies_to: "docx",
+        value: docsight_core::MAX_JPEG_SCANS as u64,
+        unit: "scans",
+        effect: "the embedded JPEG is not decoded and the figure is rendered as a placeholder",
+    },
 ];

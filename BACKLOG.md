@@ -19,7 +19,6 @@ Classification:
 | Item | Why it blocks v1 |
 | --- | --- |
 | Incremental PDF updates (`Prev` chains from appended revisions) | Common in signed and annotated PDFs. Tracked as A1b. |
-| Decode JPEG images | PNG figures are rasterized natively, but JPEG is the other format real documents use constantly, and it still renders as a placeholder box. |
 
 ### Layout fidelity
 

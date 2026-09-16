@@ -122,6 +122,20 @@ fn every_declared_command_appears_in_the_product_scope() -> Result<(), Box<dyn s
     Ok(())
 }
 
+#[test]
+fn every_declared_command_appears_in_the_readme() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = read_document("README.md")?;
+    let missing: Vec<String> = declared_commands()?
+        .into_iter()
+        .filter(|command| !readme.contains(&format!("`{command}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "commands are declared by capabilities but absent from README.md: {missing:?}"
+    );
+    Ok(())
+}
+
 fn cli_subcommands() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_docsight"))
         .arg("--help")

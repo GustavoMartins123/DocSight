@@ -138,4 +138,12 @@ fn declared_limits_match_the_enforced_constants() {
         declared("pdf_page_annotations"),
         Some(docsight_pdf::MAX_ANNOTATIONS as u64)
     );
+    assert_eq!(
+        declared("embedded_image_pixels"),
+        Some(docsight_core::MAX_IMAGE_PIXELS)
+    );
+    assert_eq!(
+        declared("jpeg_progressive_scans"),
+        Some(docsight_core::MAX_JPEG_SCANS as u64)
+    );
 }

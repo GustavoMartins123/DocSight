@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Generator, Shell};
 use docsight_agent::{
     AgentEnvelope, AgentErrorEnvelope, NdjsonWriter, OutputLimits, ProjectionProfile, QueryLimits,
     adaptive_agent_envelope, apply_bounded_collection, project_json, truncate_json_text_fields,
@@ -146,6 +147,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_COMPLETIONS)]
+    Completions { shell: Shell },
     #[command(about = SUMMARY_INSPECT)]
     Inspect {
         path: PathBuf,
@@ -1070,11 +1073,20 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
+    if matches!(cli.command, Command::Completions { .. })
+        && (cli.is_agent_json(false) || cli.ndjson)
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: "completions emits a shell script for human setup and cannot be combined with --agent, --ndjson or machine-output limits"
+                .to_owned(),
+        });
+    }
     let limits = cli.query_limits();
     let quiet = cli.quiet_mode();
     let json_errors = cli.structured_errors();
     match &cli.command {
         Command::Capabilities { json } => capabilities(cli.is_agent_json(*json), cli.ndjson),
+        Command::Completions { shell } => completions(*shell),
         Command::Inspect { path, json } => inspect(
             path,
             cli.is_agent_json(*json),
@@ -1448,6 +1460,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
 const ERROR_ENVELOPE_SCHEMA: &str = "https://docsight.dev/schemas/v2/error-envelope.json";
 
 const SUMMARY_CAPABILITIES: &str = "discover the machine contract and command surface";
+const SUMMARY_COMPLETIONS: &str = "generate a shell completion script for interactive use";
 const SUMMARY_INSPECT: &str = "summarize format, counts, capabilities and fidelity";
 const SUMMARY_OUTLINE: &str = "return headings in reading order";
 const SUMMARY_TEXT: &str = "return text blocks and deterministic continuation";
@@ -1552,6 +1565,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["capabilities"],
                 bounded: false,
                 result_schema: Some("https://docsight.dev/schemas/v2/capabilities-result.json"),
+                result_root: None,
+            },
+            CommandCapability {
+                name: "completions",
+                summary: SUMMARY_COMPLETIONS,
+                invocation: "completions <bash|elvish|fish|powershell|zsh>",
+                formats: NO_DOCUMENT_FORMATS,
+                ndjson: false,
+                ndjson_events: &[],
+                bounded: false,
+                result_schema: None,
                 result_root: None,
             },
             CommandCapability {
@@ -1901,6 +1925,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
         writeln!(writer, "{}: {}", command.name, command.summary).map_err(stdout_error)?;
     }
     Ok(())
+}
+
+fn completions(shell: Shell) -> Result<(), DocsightError> {
+    let mut command = Cli::command();
+    command.set_bin_name("docsight");
+    command.build();
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    shell
+        .try_generate(&command, &mut writer)
+        .map_err(stdout_error)
 }
 
 fn inspect(
