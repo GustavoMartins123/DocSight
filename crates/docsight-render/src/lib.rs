@@ -129,7 +129,16 @@ fn decode_page_images(
                 continue;
             }
         };
-        match docsight_core::decode_png(&bytes) {
+        let decoded_image = if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
+            docsight_core::decode_png(&bytes)
+        } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+            docsight_core::decode_jpeg(&bytes)
+        } else {
+            Err(DocsightError::UnsupportedFeature {
+                feature: "embedded image format is not rasterizable".to_owned(),
+            })
+        };
+        match decoded_image {
             Ok(image_data) => {
                 decoded.insert(image.target.clone(), image_data);
             }

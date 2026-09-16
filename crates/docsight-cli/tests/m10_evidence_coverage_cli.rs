@@ -168,8 +168,8 @@ fn coverage_docx_reports_measured_penalties() -> Result<(), Box<dyn std::error::
 #[test]
 fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let doc_path = directory.path().join("jpeg_figure.docx");
-    std::fs::write(&doc_path, package_with_jpeg_figure()?)?;
+    let doc_path = directory.path().join("gif_figure.docx");
+    std::fs::write(&doc_path, package_with_unsupported_figure()?)?;
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
 
     let output = docsight()
@@ -372,7 +372,7 @@ fn schemas_stay_in_sync_with_serialized_contracts() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-fn package_with_jpeg_figure() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn package_with_unsupported_figure() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     use std::io::{Cursor, Write};
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
@@ -381,7 +381,7 @@ fn package_with_jpeg_figure() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let document = format!(
         r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="1270000" cy="635000"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rId9"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
     );
-    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/photo.jpg"/></Relationships>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/animation.gif"/></Relationships>"#;
     let cursor = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(cursor);
     let options = SimpleFileOptions::default();
@@ -391,7 +391,7 @@ fn package_with_jpeg_figure() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     writer.write_all(document.as_bytes())?;
     writer.start_file("word/_rels/document.xml.rels", options)?;
     writer.write_all(rels.as_bytes())?;
-    writer.start_file("word/media/photo.jpg", options)?;
-    writer.write_all(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46])?;
+    writer.start_file("word/media/animation.gif", options)?;
+    writer.write_all(b"GIF89a")?;
     Ok(writer.finish()?.into_inner())
 }

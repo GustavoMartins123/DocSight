@@ -694,22 +694,22 @@
     {
       "file": "capabilities-envelope.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-envelope.json",
-      "sha256": "610754e1895fe37aeb83c92fe76e1be7ebfaf6049ca77d3f78fc30e1a6cb5840"
+      "sha256": "31867849d6dc73e24b68102491f906275ed6c137647329c9511ca3ebb9e3c6c4"
     },
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "cd609b8078083b67d61fa0e942dc4f816c0d4058da45926f1506406b375554d9"
+      "sha256": "5e781fac0016878abe6c06177540d53d8eb385cf9175a4f49cc816202400e3a6"
     },
     {
       "file": "context-result.json",
       "id": "https://docsight.dev/schemas/v2/context-result.json",
-      "sha256": "c79fa5e454edb351f30de504c9971acf92e8205d509980f002d65d4f3fa54843"
+      "sha256": "f6a516c2b24fc9885d974526eeb8a336b7538b314653dbf1b751374c5c02dfdb"
     },
     {
       "file": "coverage-report.json",
       "id": "https://docsight.dev/schemas/v2/coverage-report.json",
-      "sha256": "f7ab590b32456e0008e2744133be795df603c0dff150c8d37c21343f5e1b8c51"
+      "sha256": "e293b1458a3f2453729eb409fac11f7448e19d7070150df933cf0eb4ec7277f0"
     },
     {
       "file": "diagnostic.json",
@@ -729,7 +729,12 @@
     {
       "file": "evidence-record.json",
       "id": "https://docsight.dev/schemas/v2/evidence-record.json",
-      "sha256": "2e441fd929d6e0c9d077c608bfb5ef5a1de4362f21f9c065341866673ccb6a9f"
+      "sha256": "e281de6145b3a59e2c2e718f826bd58e3be7b8837169317fa26d011bf7b73fde"
+    },
+    {
+      "file": "find-result.json",
+      "id": "https://docsight.dev/schemas/v2/find-result.json",
+      "sha256": "bf90b13725a12c43bcffff5602643eced3db237c5f6b98b57bf5b7637f2a8aac"
     },
     {
       "file": "fingerprint-result.json",
@@ -739,7 +744,7 @@
     {
       "file": "hit-result.json",
       "id": "https://docsight.dev/schemas/v2/hit-result.json",
-      "sha256": "f69d716914dd0344698e3da26929d455b475404315e00b2d5dc67f790a913e26"
+      "sha256": "9fd6bf9fe5ebb8d449fe44300214bbfc0e444caec6acc977828e74fa3cb50443"
     },
     {
       "file": "images-result.json",
@@ -769,7 +774,7 @@
     {
       "file": "overview-result.json",
       "id": "https://docsight.dev/schemas/v2/overview-result.json",
-      "sha256": "72a775673ab6506ddfc9291cc4165cc096d83199990a7201da4e90ea38ea1df7"
+      "sha256": "05c8effc41e8c371f80386b86847d4e91a8e5812456d1720f8e7a4de336aa4d6"
     },
     {
       "file": "page-result.json",
@@ -779,7 +784,7 @@
     {
       "file": "peek-result.json",
       "id": "https://docsight.dev/schemas/v2/peek-result.json",
-      "sha256": "85a86d174681c34689f3fa74b2fcdb11fe48cc95a94477cb2e3772e0a0f3e229"
+      "sha256": "4d767e91408425b35c6bac00429602a4cd712d29f57c54dd876afc7feca8bda1"
     },
     {
       "file": "projection-selection.json",
@@ -789,7 +794,7 @@
     {
       "file": "proof-bundle-manifest.json",
       "id": "https://docsight.dev/schemas/v2/proof-bundle-manifest.json",
-      "sha256": "50102c52b249cd1732d68cd466728a5bca41d3473512ccd2da9640b80e209f3a"
+      "sha256": "93bddbd7fb6d522f767d0b28d16318551b24df070a3a42a9a71479d3d2199d96"
     },
     {
       "file": "render-result.json",
@@ -804,22 +809,22 @@
     {
       "file": "resolve-result.json",
       "id": "https://docsight.dev/schemas/v2/resolve-result.json",
-      "sha256": "f4628e59ff857ab3477218e9cac75b5dd05948ad894ba359c0a3200063524b85"
+      "sha256": "81ca72acb31d07342da36a980db975e984980d41cb412f5751c50197d93e08fc"
     },
     {
       "file": "semantic-object.json",
       "id": "https://docsight.dev/schemas/v2/semantic-object.json",
-      "sha256": "f52f0f86c559621d04c8f8ed3bef9a7aa519c53b3c9c45f1c856c39f42f549fc"
+      "sha256": "ee9bb30ebca4f2fd348339f221956c46a934b031662d14f93790bc45ef382fcb"
     },
     {
       "file": "semantic-viewport.json",
       "id": "https://docsight.dev/schemas/v2/semantic-viewport.json",
-      "sha256": "fcc4a0438ef093703e7b87151438753b253f996b5aa1360ea9c568d321eea6ad"
+      "sha256": "7d2a7f93aad0f7e6962899caa4db51b6a5d1f8bad024ec33b9fc0c2314001ef1"
     },
     {
       "file": "spatial-query-result.json",
       "id": "https://docsight.dev/schemas/v2/spatial-query-result.json",
-      "sha256": "6e36d2172dc851605ac6f1b761178501627bf674f84d3558e7999046c9b79f48"
+      "sha256": "8780cb754dc71dcf796745621d32be5a3b5c1b92aabec6b7288de9d2d3b0721f"
     },
     {
       "file": "table-result.json",
