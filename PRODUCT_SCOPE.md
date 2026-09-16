@@ -49,7 +49,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Paragraph and heading reconstruction with per-object confidence.
 - Table inference with an explicit detector name and confidence score.
 - Form XObjects are traversed: their content stream is parsed with the invoking graphics state composed with the form `/Matrix`, and their text, geometry and nested forms reach the IR. Cycles and nesting beyond 12 levels fail closed.
-- Encrypted documents through the standard security handler: RC4 40 to 128 bit (revisions 2 to 4), AES-128 (`AESV2`) and AES-256 (`AESV3`, revisions 5 and 6), with per-object keys, crypt filters and decryption of both strings and streams. A document whose user password is empty — the common permission-only case — opens directly; otherwise the correct password must be supplied through the library API.
+- Encrypted documents through the standard security handler: RC4 40 to 128 bit (revisions 2 to 4), AES-128 (`AESV2`) and AES-256 (`AESV3`, revisions 5 and 6), with per-object keys, crypt filters and decryption of both strings and streams. A document whose user password is empty — the common permission-only case — opens directly; otherwise the correct password is supplied through the CLI's bounded `--password-file` or the library API. The secret itself never appears in process arguments, output, traces or proof bundles.
 - Document information from the trailer `/Info` dictionary, decoding both UTF-16BE and PDFDocEncoding strings. An absent dictionary is reported as unknown rather than filled in with the engine's own name.
 - Page annotations: `/Link` annotations with a `/URI` action or a `/Dest` destination become hyperlinks with page-local geometry, and every other annotation subtype becomes an `Annotation` overlay carrying its `/Contents` text. Link targets are never fetched.
 
@@ -67,7 +67,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Object addressing is closed: every object identifier any command emits — block, table cell, nested block, overlay or hyperlink — is accepted by `evidence`, `context` and `crop`. An object without geometry of its own fails with a typed error that names the anchoring block to use instead.
 - Evidence and reproducibility: `evidence`, `coverage`, `fingerprint`, `bundle`, `verify`, `replay`. Coverage reports text, structure, geometry, visual and resource fidelity per page and for the whole document, plus `unsupported_feature_count`, so a caller can tell how much of the document was actually interpreted.
 - Comparison: `diff` at package, semantic and visual levels.
-- Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens.
+- Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens. The discoverable `pdf_password` contract declares the file transport, 127-byte limit and fail-closed behavior for encrypted PDFs.
 - Interactive setup: `completions` generates deterministic scripts for Bash, Elvish, Fish, PowerShell and Zsh. It is intentionally human-only and rejects agent or machine-output flags instead of mixing a shell script with JSON.
 - Process isolation: `--sandbox` on Linux, macOS and Windows, failing closed on platforms where enforcement is unavailable.
 

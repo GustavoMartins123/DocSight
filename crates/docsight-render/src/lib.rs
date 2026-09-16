@@ -64,8 +64,19 @@ pub fn render_document(
     source: &DocumentSource,
     request: &RenderRequest,
 ) -> Result<RenderedImage, DocsightError> {
+    render_document_with_password(source, request, b"")
+}
+
+pub fn render_document_with_password(
+    source: &DocumentSource,
+    request: &RenderRequest,
+    password: &[u8],
+) -> Result<RenderedImage, DocsightError> {
     match source.format() {
-        DocumentFormat::Pdf => render_pdf(source, request),
+        DocumentFormat::Pdf => render_pdf_with_password(source, request, password),
+        DocumentFormat::Docx if !password.is_empty() => Err(DocsightError::InvalidArgument {
+            message: "a PDF password cannot be applied to a DOCX document".to_owned(),
+        }),
         DocumentFormat::Docx => render_docx(source, request),
     }
 }
@@ -182,7 +193,15 @@ pub fn render_pdf(
     source: &DocumentSource,
     request: &RenderRequest,
 ) -> Result<RenderedImage, DocsightError> {
-    let document = PdfDocument::open(source)?;
+    render_pdf_with_password(source, request, b"")
+}
+
+pub fn render_pdf_with_password(
+    source: &DocumentSource,
+    request: &RenderRequest,
+    password: &[u8],
+) -> Result<RenderedImage, DocsightError> {
+    let document = PdfDocument::open_with_password(source, password)?;
     let raster = match &request.target {
         RenderTarget::Page { page } => document.rasterize(*page, request.dpi, None)?,
         RenderTarget::Region { page, bbox } => {

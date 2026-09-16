@@ -11,14 +11,17 @@ use docsight_core::{
     compute_evidence, document_capabilities, table_to_csv, table_to_html, table_to_markdown,
     table_to_tsv, table_to_tsv_string,
 };
-use docsight_diff::{DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents};
-use docsight_ingest::ingest as load_document;
+use docsight_diff::{
+    DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents_with_passwords,
+};
+use docsight_ingest::ingest_with_password as load_document;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{
-    HitQuery, RenderRequest, RenderTarget, render_document,
+    HitQuery, RenderRequest, RenderTarget, render_document_with_password,
     trace::{
-        TraceDecisionCoverage, TraceTarget, create_proof_bundle, read_proof_bundle, read_trace,
-        record_trace, verify_proof_bundle, verify_trace,
+        TraceDecisionCoverage, TraceTarget, create_proof_bundle_with_password, read_proof_bundle,
+        read_trace, record_trace_with_password, verify_proof_bundle_with_password,
+        verify_trace_with_password,
     },
 };
 use docsight_search::{
@@ -32,7 +35,7 @@ use docsight_search::{
 use serde::Serialize;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -101,6 +104,14 @@ struct Cli {
 
     #[arg(short, long, global = true)]
     quiet: bool,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Read the PDF password from a bounded single-line file"
+    )]
+    password_file: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -737,6 +748,18 @@ struct AgentSandboxCapability {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct AgentPdfPasswordCapability {
+    flag: &'static str,
+    applies_to: &'static [&'static str],
+    transport: &'static str,
+    file_format: &'static str,
+    maximum_password_bytes: usize,
+    secret_in_argv: bool,
+    secret_persisted: bool,
+    failure_mode: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AgentErrorContract {
     channel: &'static str,
     schema: &'static str,
@@ -753,6 +776,7 @@ struct AgentCapabilitiesResult {
     errors: AgentErrorContract,
     invocation_prefix: &'static str,
     sandbox: AgentSandboxCapability,
+    pdf_password: AgentPdfPasswordCapability,
     document_formats: &'static [&'static str],
     output_modes: &'static [&'static str],
     agent_defaults: &'static str,
@@ -969,6 +993,85 @@ struct ContextResult {
     candidates: Vec<ResolveCandidate>,
 }
 
+const MAX_PDF_PASSWORD_BYTES: usize = 127;
+
+struct PdfPassword(Vec<u8>);
+
+impl PdfPassword {
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for PdfPassword {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+fn read_pdf_password(path: &Path) -> Result<PdfPassword, DocsightError> {
+    let file = std::fs::File::open(path).map_err(|source| DocsightError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| DocsightError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(DocsightError::InvalidArgument {
+            message: "PDF password path must identify a regular file".to_owned(),
+        });
+    }
+    let maximum_file_bytes =
+        u64::try_from(MAX_PDF_PASSWORD_BYTES + 2).map_err(|_| DocsightError::ResourceLimit {
+            resource: "PDF password file bytes".to_owned(),
+            limit: u64::MAX,
+        })?;
+    if metadata.len() > maximum_file_bytes {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF password file bytes".to_owned(),
+            limit: maximum_file_bytes,
+        });
+    }
+    let mut password = PdfPassword(Vec::with_capacity(MAX_PDF_PASSWORD_BYTES + 2));
+    file.take(maximum_file_bytes + 1)
+        .read_to_end(&mut password.0)
+        .map_err(|source| DocsightError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if password.0.len() > MAX_PDF_PASSWORD_BYTES + 2 {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF password file bytes".to_owned(),
+            limit: maximum_file_bytes,
+        });
+    }
+    if password.0.last() == Some(&b'\n') {
+        password.0.pop();
+        if password.0.last() == Some(&b'\r') {
+            password.0.pop();
+        }
+    }
+    if password.0.is_empty() {
+        return Err(DocsightError::InvalidArgument {
+            message: "PDF password file must contain a non-empty password".to_owned(),
+        });
+    }
+    if password.0.contains(&b'\n') || password.0.contains(&b'\r') {
+        return Err(DocsightError::InvalidArgument {
+            message: "PDF password file must contain exactly one line".to_owned(),
+        });
+    }
+    if password.0.len() > MAX_PDF_PASSWORD_BYTES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF password bytes".to_owned(),
+            limit: MAX_PDF_PASSWORD_BYTES as u64,
+        });
+    }
+    Ok(password)
+}
+
 fn main() -> ExitCode {
     let agent_mode = std::env::args().any(|argument| argument == "--agent");
     let sandbox_json_errors =
@@ -1081,6 +1184,28 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
+    if cli.password_file.is_some()
+        && matches!(
+            cli.command,
+            Command::Capabilities { .. }
+                | Command::Completions { .. }
+                | Command::Fingerprint { .. }
+        )
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: "--password-file applies only to operations that decrypt PDF content"
+                .to_owned(),
+        });
+    }
+    let password_storage = cli
+        .password_file
+        .as_deref()
+        .map(read_pdf_password)
+        .transpose()?;
+    let password = password_storage
+        .as_ref()
+        .map(PdfPassword::as_bytes)
+        .unwrap_or_default();
     let limits = cli.query_limits();
     let quiet = cli.quiet_mode();
     let json_errors = cli.structured_errors();
@@ -1089,6 +1214,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         Command::Completions { shell } => completions(*shell),
         Command::Inspect { path, json } => inspect(
             path,
+            password,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1097,6 +1223,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Outline { path, json } => outline(
             path,
+            password,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1105,6 +1232,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Text { path, json } => document_text(
             path,
+            password,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1113,6 +1241,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Tables { path, json } => tables(
             path,
+            password,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1125,6 +1254,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             format,
         } => table(TableCommandArgs {
             path,
+            password,
             object,
             format: *format,
             json: cli.is_agent_json(*format == TableFormat::Json),
@@ -1133,15 +1263,16 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
-        Command::Page { path, page, json } => page_command(
+        Command::Page { path, page, json } => page_command(PageCommandArgs {
             path,
-            *page,
-            cli.is_agent_json(*json),
-            cli.ndjson,
-            &limits,
+            number: *page,
+            password,
+            json: cli.is_agent_json(*json),
+            ndjson: cli.ndjson,
+            limits: &limits,
             quiet,
             json_errors,
-        ),
+        }),
         Command::Render {
             path,
             page,
@@ -1150,6 +1281,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             trace,
         } => render(RenderCommandArgs {
             path,
+            password,
             target: RenderTarget::Page { page: *page },
             dpi: *dpi,
             out,
@@ -1184,6 +1316,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             };
             render(RenderCommandArgs {
                 path,
+                password,
                 target,
                 dpi: *dpi,
                 out,
@@ -1198,6 +1331,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         }
         Command::Images { path, json } => images(
             path,
+            password,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1206,6 +1340,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Links { path, json } => links(
             path,
+            password,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1224,6 +1359,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         } => diff(DiffCommandArgs {
             before,
             after,
+            password_before: password,
+            password_after: password,
             summary: *summary,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
@@ -1252,6 +1389,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => evidence(EvidenceArgs {
             path,
+            password,
             object,
             render_dpi: *render_dpi,
             json: cli.is_agent_json(*json),
@@ -1271,6 +1409,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => bundle(BundleArgs {
             path,
+            password,
             page: *page,
             bbox: *bbox,
             object: object.as_deref(),
@@ -1289,6 +1428,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => replay(ReplayArgs {
             trace,
+            password,
             verify: *verify,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
@@ -1298,6 +1438,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         }),
         Command::Verify { bundle, json } => verify(VerifyArgs {
             bundle,
+            password,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
@@ -1311,6 +1452,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => coverage(CoverageArgs {
             path,
+            password,
             page: *page,
             regions: *regions,
             json: cli.is_agent_json(*json),
@@ -1327,6 +1469,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => hit(HitArgs {
             path,
+            password,
             page: *page,
             point: point.as_deref(),
             bbox: bbox.as_deref(),
@@ -1347,6 +1490,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => find_command(FindArgs {
             path,
+            password,
             pattern,
             regex: *regex,
             ignore_case: *ignore_case,
@@ -1365,6 +1509,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => query(QueryArgs {
             path,
+            password,
             expression,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
@@ -1374,6 +1519,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         }),
         Command::Overview { path, json } => overview(OverviewArgs {
             path,
+            password,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
@@ -1388,6 +1534,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => focus(FocusArgs {
             path,
+            password,
             target: target.as_deref(),
             pages: *pages,
             related: *related,
@@ -1407,6 +1554,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => peek(PeekArgs {
             path,
+            password,
             page: *page,
             pages: *pages,
             object: object.as_deref(),
@@ -1427,6 +1575,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => context(ContextArgs {
             path,
+            password,
             object: object.as_deref(),
             find: find.as_deref(),
             kind: kind.map(Into::into),
@@ -1445,6 +1594,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => resolve(ResolveArgs {
             path,
+            password,
             text,
             kind: kind.map(Into::into),
             pages: *pages,
@@ -1548,6 +1698,16 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             ],
             unsupported_platform_behavior: "reject",
             failure_mode: "fail_closed",
+        },
+        pdf_password: AgentPdfPasswordCapability {
+            flag: "--password-file",
+            applies_to: &["pdf"],
+            transport: "file",
+            file_format: "one byte string line with an optional LF or CRLF terminator",
+            maximum_password_bytes: MAX_PDF_PASSWORD_BYTES,
+            secret_in_argv: false,
+            secret_persisted: false,
+            failure_mode: "reject",
         },
         document_formats: ALL_DOCUMENT_FORMATS,
         output_modes: OUTPUT_MODES,
@@ -1940,6 +2100,7 @@ fn completions(shell: Shell) -> Result<(), DocsightError> {
 
 fn inspect(
     path: &PathBuf,
+    password: &[u8],
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -1947,7 +2108,7 @@ fn inspect(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let (result, warnings) = inspect_source(&source)?;
+    let (result, warnings) = inspect_source(&source, password)?;
 
     if ndjson {
         let stdout = io::stdout();
@@ -2018,10 +2179,11 @@ fn inspect(
 
 fn inspect_source(
     source: &DocumentSource,
+    password: &[u8],
 ) -> Result<(InspectResult, Vec<Diagnostic>), DocsightError> {
     match source.format() {
         DocumentFormat::Docx => {
-            let document = load_document(source)?;
+            let document = load_document(source, password)?;
             let paragraphs = document.paragraphs().count() + document.list_items().count();
             let tracked = (document.tracked_changes.insertions > 0
                 || document.tracked_changes.deletions > 0)
@@ -2045,12 +2207,13 @@ fn inspect_source(
             };
             Ok((result, document.warnings))
         }
-        DocumentFormat::Pdf => inspect_pdf_source(source),
+        DocumentFormat::Pdf => inspect_pdf_source(source, password),
     }
 }
 
 fn inspect_pdf_source(
     source: &DocumentSource,
+    password: &[u8],
 ) -> Result<(InspectResult, Vec<Diagnostic>), DocsightError> {
     let unavailable = |pages: Option<u32>, error: DocsightError| {
         let mut diagnostic = error.diagnostic();
@@ -2075,7 +2238,7 @@ fn inspect_pdf_source(
         (result, vec![diagnostic])
     };
 
-    let pdf = match PdfDocument::open(source) {
+    let pdf = match PdfDocument::open_with_password(source, password) {
         Ok(pdf) => pdf,
         Err(error @ DocsightError::UnsupportedFeature { .. }) => {
             return Ok(unavailable(None, error));
@@ -2113,6 +2276,7 @@ fn inspect_pdf_source(
 
 fn outline(
     path: &PathBuf,
+    password: &[u8],
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2120,7 +2284,7 @@ fn outline(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, password)?;
     let headings: Vec<HeadingRecord> = document
         .headings()
         .map(|(block, heading)| HeadingRecord {
@@ -2179,33 +2343,36 @@ fn outline(
     emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn page_command(
-    path: &PathBuf,
+struct PageCommandArgs<'a> {
+    path: &'a PathBuf,
     number: u32,
+    password: &'a [u8],
     json: bool,
     ndjson: bool,
-    limits: &QueryLimits,
+    limits: &'a QueryLimits,
     quiet: bool,
     json_errors: bool,
-) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
-    if number == 0 {
+}
+
+fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open(args.path)?;
+    let document = load_document(&source, args.password)?;
+    if args.number == 0 {
         return Err(DocsightError::InvalidArgument {
             message: "page numbers are 1-based".to_owned(),
         });
     }
     let target_page = document
-        .page(number)
+        .page(args.number)
         .ok_or_else(|| DocsightError::ObjectNotFound {
-            object: format!("page {number}"),
+            object: format!("page {}", args.number),
         })?;
     let page_fidelity = docsight_core::page_fidelity(&document);
     let target_page_number = target_page.number;
     let target_page_width = target_page.width_pt;
     let target_page_height = target_page.height_pt;
     let spans: Vec<PageSpanRecord> = document
-        .page_blocks(number)
+        .page_blocks(args.number)
         .filter_map(|block| {
             let bbox = block.bbox?;
             Some(PageSpanRecord {
@@ -2229,17 +2396,17 @@ fn page_command(
         })
         .collect();
 
-    if ndjson {
+    if args.ndjson {
         let stdout = io::stdout();
         let mut writer = NdjsonWriter::new(
             stdout.lock(),
-            limits.clone(),
+            args.limits.clone(),
             "page".into(),
             source.sha256().to_owned(),
             spans.len() + overlays.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        writer.write_page_begin(number)?;
+        writer.write_page_begin(args.number)?;
         let offset = writer.continuation_offset();
         let mut idx = 0;
         for span in &spans {
@@ -2260,7 +2427,7 @@ fn page_command(
             }
             idx += 1;
         }
-        writer.write_page_end(number)?;
+        writer.write_page_end(args.number)?;
         for warning in &document.warnings {
             writer.write_warning(warning)?;
         }
@@ -2268,7 +2435,7 @@ fn page_command(
         return Ok(());
     }
 
-    if json {
+    if args.json {
         #[derive(Clone, Serialize)]
         enum PageItem {
             Span(PageSpanRecord),
@@ -2285,7 +2452,7 @@ fn page_command(
             .collect();
         let envelope = apply_bounded_collection(
             &items,
-            limits,
+            args.limits,
             "page",
             &source,
             document.warnings,
@@ -2350,7 +2517,7 @@ fn page_command(
         )
         .map_err(stdout_error)?;
     }
-    emit_warnings(&document.warnings, quiet, json_errors)
+    emit_warnings(&document.warnings, args.quiet, args.json_errors)
 }
 
 fn text_records(document: &Document) -> Vec<TextRecord> {
@@ -2394,6 +2561,7 @@ fn text_blocks_by_kind(document: &Document) -> BTreeMap<&'static str, usize> {
 
 fn document_text(
     path: &PathBuf,
+    password: &[u8],
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2401,7 +2569,7 @@ fn document_text(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, password)?;
     let blocks = text_records(&document);
 
     if ndjson {
@@ -2446,6 +2614,7 @@ fn document_text(
 
 fn tables(
     path: &PathBuf,
+    password: &[u8],
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2453,7 +2622,7 @@ fn tables(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, password)?;
     let page_fidelity = docsight_core::page_fidelity(&document);
     let tables: Vec<TableSummary> = document
         .tables()
@@ -2552,6 +2721,7 @@ fn tables(
 
 struct TableCommandArgs<'a> {
     path: &'a PathBuf,
+    password: &'a [u8],
     object: &'a str,
     format: TableFormat,
     json: bool,
@@ -2563,7 +2733,7 @@ struct TableCommandArgs<'a> {
 
 fn table(args: TableCommandArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let target = document
         .tables()
         .find(|(block, _)| block.id.to_string() == args.object)
@@ -2615,6 +2785,7 @@ fn table(args: TableCommandArgs<'_>) -> Result<(), DocsightError> {
 
 struct RenderCommandArgs<'a> {
     path: &'a PathBuf,
+    password: &'a [u8],
     target: RenderTarget,
     dpi: u16,
     out: &'a Path,
@@ -2633,11 +2804,11 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
         target: args.target,
         dpi: args.dpi,
     };
-    let rendered = render_document(&source, &request)?;
+    let rendered = render_document_with_password(&source, &request, args.password)?;
     let trace = args
         .trace
         .map(|path| {
-            let trace = record_trace(&source, &request)?;
+            let trace = record_trace_with_password(&source, &request, args.password)?;
             if trace.manifest.raster.sha256 != digest_bytes(rendered.png()) {
                 return Err(DocsightError::VerificationFailed {
                     message: "rendered PNG does not match its deterministic trace".to_owned(),
@@ -2763,6 +2934,7 @@ struct TraceOutput {
 
 struct BundleArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     page: Option<u32>,
     bbox: Option<Rect>,
     object: Option<&'a str>,
@@ -2791,7 +2963,8 @@ fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
         target,
         dpi: args.dpi,
     };
-    let proof = create_proof_bundle(&source, &request, args.include_crop)?;
+    let proof =
+        create_proof_bundle_with_password(&source, &request, args.include_crop, args.password)?;
     let written = proof.write(args.out)?;
     let output_path = args
         .out
@@ -2855,6 +3028,7 @@ fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
 
 struct ReplayArgs<'a> {
     trace: &'a Path,
+    password: &'a [u8],
     verify: bool,
     json: bool,
     ndjson: bool,
@@ -2871,7 +3045,7 @@ fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
     }
     let trace = read_trace(args.trace)?;
     let source = trace.document_source()?;
-    let verification = verify_trace(&trace)?;
+    let verification = verify_trace_with_password(&trace, args.password)?;
     #[derive(Serialize)]
     struct ReplayResult {
         trace_path: String,
@@ -2935,6 +3109,7 @@ fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
 
 struct VerifyArgs<'a> {
     bundle: &'a Path,
+    password: &'a [u8],
     json: bool,
     ndjson: bool,
     limits: &'a QueryLimits,
@@ -2945,7 +3120,7 @@ struct VerifyArgs<'a> {
 fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
     let bundle = read_proof_bundle(args.bundle)?;
     let source = bundle.document_source()?;
-    let verification = verify_proof_bundle(&bundle)?;
+    let verification = verify_proof_bundle_with_password(&bundle, args.password)?;
     #[derive(Serialize)]
     struct VerifyResult {
         bundle_name: String,
@@ -2998,6 +3173,7 @@ fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
 
 fn images(
     path: &PathBuf,
+    password: &[u8],
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -3005,7 +3181,7 @@ fn images(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, password)?;
     let images: Vec<ImageRecord> = document
         .figures()
         .map(|(block, fig)| ImageRecord {
@@ -3083,6 +3259,7 @@ fn images(
 
 fn links(
     path: &PathBuf,
+    password: &[u8],
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -3090,7 +3267,7 @@ fn links(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, password)?;
     let links: Vec<LinkRecord> = document
         .links
         .iter()
@@ -3389,6 +3566,7 @@ fn continuation_scope(command: &str, parameter: &str) -> String {
 
 struct FindArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     pattern: &'a str,
     regex: bool,
     ignore_case: bool,
@@ -3414,7 +3592,7 @@ struct FindNdjsonSummary {
 
 fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let request = FindRequest {
         pattern: args.pattern.to_owned(),
         mode: if args.regex {
@@ -3550,6 +3728,7 @@ fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
 
 struct QueryArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     expression: &'a str,
     json: bool,
     ndjson: bool,
@@ -3560,7 +3739,7 @@ struct QueryArgs<'a> {
 
 fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let execution = execute_spatial_query(&document, args.expression)?;
     let mut warnings = document.warnings;
     warnings.extend(execution.warnings);
@@ -3665,6 +3844,7 @@ fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
 
 struct OverviewArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     json: bool,
     ndjson: bool,
     limits: &'a QueryLimits,
@@ -3674,7 +3854,7 @@ struct OverviewArgs<'a> {
 
 fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let result = document_overview(&document)?;
     let limits = bounded_machine_limits(args.limits, DEFAULT_VIEWPORT_ITEMS);
 
@@ -3767,6 +3947,7 @@ fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
 
 struct FocusArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     target: Option<&'a str>,
     pages: Option<PageRange>,
     related: bool,
@@ -3779,7 +3960,7 @@ struct FocusArgs<'a> {
 
 fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let (result, scope) = match (args.target, args.pages) {
         (Some(target), None) => (
             focus_object(&document, target, args.related)?,
@@ -3907,6 +4088,7 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
 
 struct PeekArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     page: Option<u32>,
     pages: Option<PageRange>,
     object: Option<&'a str>,
@@ -3921,7 +4103,7 @@ struct PeekArgs<'a> {
 
 fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let target_count = [
         args.page.is_some(),
         args.pages.is_some(),
@@ -4045,6 +4227,7 @@ fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
 
 struct ResolveArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     text: &'a str,
     kind: Option<SemanticKind>,
     pages: Option<PageRange>,
@@ -4057,7 +4240,7 @@ struct ResolveArgs<'a> {
 
 fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let result = resolve_descriptor(&document, args.text, args.kind, args.pages)?;
     let query_scope = serde_json::to_string(&result.query).map_err(output_serialization_error)?;
     let scope = continuation_scope("resolve", &query_scope);
@@ -4142,6 +4325,7 @@ fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
 
 struct ContextArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     object: Option<&'a str>,
     find: Option<&'a str>,
     kind: Option<SemanticKind>,
@@ -4161,7 +4345,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
         });
     }
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source)?;
+    let document = load_document(&source, args.password)?;
     let mut warnings = document.warnings.clone();
     let (status, selection, total_candidates, candidates, target) = match (args.object, args.find) {
         (Some(object), None) if args.kind.is_none() => {
@@ -4552,6 +4736,8 @@ fn related_objects(
 struct DiffCommandArgs<'a> {
     before: &'a Path,
     after: &'a Path,
+    password_before: &'a [u8],
+    password_after: &'a [u8],
     summary: bool,
     json: bool,
     ndjson: bool,
@@ -4607,7 +4793,13 @@ impl<'a> From<&'a VisualDiff> for DiffNdjsonVisualSummary<'a> {
 fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
     let source_before = DocumentSource::open(args.before)?;
     let source_after = DocumentSource::open(args.after)?;
-    let diff_result = diff_documents(&source_before, &source_after, &args.options)?;
+    let diff_result = diff_documents_with_passwords(
+        &source_before,
+        &source_after,
+        &args.options,
+        args.password_before,
+        args.password_after,
+    )?;
 
     if args.ndjson {
         let stdout = io::stdout();
@@ -4821,6 +5013,7 @@ fn fingerprint(
 
 struct EvidenceArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     object: &'a str,
     render_dpi: u16,
     json: bool,
@@ -4832,7 +5025,7 @@ struct EvidenceArgs<'a> {
 
 fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let doc = load_document(&source)?;
+    let doc = load_document(&source, args.password)?;
     let obj_id = ObjectId::from_raw(args.object);
     let mut extra_warnings = Vec::new();
 
@@ -4843,7 +5036,7 @@ fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
             },
             dpi: args.render_dpi,
         };
-        match render_document(&source, &req) {
+        match render_document_with_password(&source, &req, args.password) {
             Ok(rendered) => {
                 let mut hasher = sha2::Sha256::new();
                 hasher.update(rendered.png());
@@ -4953,6 +5146,7 @@ fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
 
 struct CoverageArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     page: Option<u32>,
     regions: bool,
     json: bool,
@@ -4964,7 +5158,7 @@ struct CoverageArgs<'a> {
 
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let doc = load_document(&source)?;
+    let doc = load_document(&source, args.password)?;
     let glyph_coverage = document_glyph_coverage(&doc, &source);
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
 
@@ -5073,6 +5267,7 @@ fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
 
 struct HitArgs<'a> {
     path: &'a Path,
+    password: &'a [u8],
     page: u32,
     point: Option<&'a str>,
     bbox: Option<&'a str>,
@@ -5127,7 +5322,7 @@ fn hit(args: HitArgs<'_>) -> Result<(), DocsightError> {
     };
 
     let source = DocumentSource::open(args.path)?;
-    let doc = load_document(&source)?;
+    let doc = load_document(&source, args.password)?;
     let result = docsight_render::hit_test(&doc, args.page, &query)?;
 
     if args.ndjson {

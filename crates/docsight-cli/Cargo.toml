@@ -28,6 +28,8 @@ sha2.workspace = true
 
 [dev-dependencies]
 docsight-ooxml = { path = "../docsight-ooxml" }
+md-5.workspace = true
+rc4.workspace = true
 tempfile.workspace = true
 zip.workspace = true
 

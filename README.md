@@ -49,6 +49,18 @@ docsight --agent crop "$DOC" --object "$OBJECT" --out evidence.png
 
 Successful agent calls write only JSON or NDJSON to stdout. Errors are structured on stderr, leave stdout empty and use the documented exit code. Add `--sandbox` for hostile input after checking the platform policy returned by `capabilities`.
 
+For a password-protected PDF, store the known password in a private single-line file and pass only its path:
+
+```bash
+install -m 600 /dev/null pdf-password.txt
+read -r -s PDF_PASSWORD
+printf '%s' "$PDF_PASSWORD" > pdf-password.txt
+unset PDF_PASSWORD
+docsight --agent --password-file pdf-password.txt inspect "$DOC"
+```
+
+The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes require the same `--password-file`. A wrong or absent password fails with exit code 12; DocSight never guesses it.
+
 ## Command surface
 
 `docsight --agent capabilities` is authoritative for invocation grammar, formats, output modes and result schemas. The commands are:
@@ -99,5 +111,6 @@ docsight completions elvish > docsight.elv
 - [Agent protocol](AGENT_PROTOCOL.md) defines JSON, NDJSON, limits, continuation and error behavior.
 - [Backlog](BACKLOG.md) separates v1 work from post-v1 and experimental ideas.
 - [Fuzzing guide](FUZZING.md) documents parser fuzz targets.
+- [Performance and scale](PERFORMANCE.md) documents the versioned DS-9 workloads, metrics and CI budgets.
 
 DocSight does not edit documents, perform OCR, answer natural-language questions, fetch hyperlinks or run as a daemon. PDF structure is inferred with confidence and provenance; DOCX layout reports every approximation that can affect evidence.
