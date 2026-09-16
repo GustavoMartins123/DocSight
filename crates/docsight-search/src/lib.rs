@@ -1551,7 +1551,7 @@ fn candidate_neighborhood(
             provenance: "explicit_object_id".to_owned(),
         },
     );
-    if let Some(parent) = parent_heading(&candidates, target_index, target) {
+    if let Some(parent) = parent_heading(candidates, target_index, target) {
         add_viewport_entry(
             &mut selected,
             parent,

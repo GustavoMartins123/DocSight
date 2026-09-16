@@ -61,8 +61,6 @@
         "object_id",
         "kind",
         "source_path",
-        "z_index",
-        "reading_order",
         "fidelity",
         "text_fragment"
       ],
@@ -134,7 +132,27 @@
           }
         },
         "kind": {
-          "type": "string"
+          "enum": [
+            "paragraph",
+            "heading",
+            "list_item",
+            "table",
+            "figure",
+            "shape",
+            "note",
+            "unknown",
+            "table_cell",
+            "header",
+            "footer",
+            "watermark",
+            "comment_marker",
+            "annotation",
+            "hyperlink"
+          ]
+        },
+        "container_id": {
+          "type": "string",
+          "minLength": 1
         },
         "object_id": {
           "type": "string",
