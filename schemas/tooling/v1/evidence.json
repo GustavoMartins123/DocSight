@@ -213,6 +213,24 @@
                   "consented-real"
                 ]
               },
+              "reference": {
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file",
+                  "sha256"
+                ],
+                "type": "object"
+              },
               "sha256": {
                 "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
@@ -327,6 +345,17 @@
               },
               "passed": {
                 "type": "boolean"
+              },
+              "reference_sha256": {
+                "anyOf": [
+                  {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
