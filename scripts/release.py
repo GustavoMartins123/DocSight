@@ -34,7 +34,7 @@ TARGETS = {
     'aarch64-apple-darwin': ('docsight', 'macho', 0x0100000C),
 }
 DOCUMENTS = ('README.md', 'INSTALL.md', 'PRODUCT_SCOPE.md', 'AGENT_PROTOCOL.md',
-             'PERFORMANCE.md', 'CHANGELOG.md', 'LICENSE-MIT', 'LICENSE-APACHE')
+             'PERFORMANCE.md', 'CHANGELOG.md', 'BACKLOG.md', 'FUZZING.md', 'LICENSE-MIT', 'LICENSE-APACHE')
 EXAMPLES = ('sample_headings.docx', 'sample_semantic.pdf')
 MAX_FILE_BYTES = 268_435_456
 MAX_TOTAL_BYTES = 536_870_912
@@ -148,11 +148,12 @@ def make_package(binary: Path, target: str, revision: str, notices: Path,
     payload['THIRD_PARTY_NOTICES.md'] = notices
     for example in EXAMPLES:
         payload[f'examples/{example}'] = root / 'fixtures/validation' / example
-    schemas = sorted((root / 'schemas/v2').glob('*.json'))
-    if not schemas:
-        raise ToolError('MISSING_SCHEMAS', 'Release requires the versioned agent schemas')
+    schemas = sorted((root / 'schemas').rglob('*.json'))
+    required_schemas = {'schemas/v2/agent-envelope.json', 'schemas/ir/v1/document-ir.json'}
+    if not required_schemas <= {path.relative_to(root).as_posix() for path in schemas}:
+        raise ToolError('MISSING_SCHEMAS', 'Release requires the versioned agent and IR schemas')
     for schema in schemas:
-        payload[f'schemas/v2/{schema.name}'] = schema
+        payload[schema.relative_to(root).as_posix()] = schema
     records = []
     total_size = 0
     for name, path in sorted(payload.items()):
@@ -252,7 +253,8 @@ def verify_archive(path: Path) -> dict[str, Any]:
             if seen_paths != sorted(seen_paths) or expected != {info.filename for info in members}:
                 raise ToolError('RELEASE_CONTENT_MISMATCH', 'Archive contains missing, extra or unsorted manifest entries')
             required = set(DOCUMENTS) | {executable_name, 'THIRD_PARTY_NOTICES.md'} | {f'examples/{name}' for name in EXAMPLES}
-            if not required <= set(seen_paths) or not any(name.startswith('schemas/v2/') for name in seen_paths):
+            required |= {'schemas/v2/agent-envelope.json', 'schemas/ir/v1/document-ir.json'}
+            if not required <= set(seen_paths):
                 raise ToolError('INCOMPLETE_RELEASE', 'Archive lacks required documentation, examples, licenses or schemas')
             return manifest
     except (zipfile.BadZipFile, zlib.error, KeyError, EOFError, RuntimeError) as error:
