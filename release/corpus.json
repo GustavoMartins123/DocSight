@@ -1,0 +1,197 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "docx"
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_features.docx",
+      "format": "docx",
+      "id": "sample-features-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "f926e034bac29cdd236ac9aac64537528871ede8d4f83078c2f0dbfed8a1a86b"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "docx",
+          "/result/headings": 12,
+          "/result/paragraphs": 38,
+          "/result/tables": 0
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_headings.docx",
+      "format": "docx",
+      "id": "sample-headings-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "pdf"
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_semantic.pdf",
+      "format": "pdf",
+      "id": "sample-semantic-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "pdf"
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_table_alignment.pdf",
+      "format": "pdf",
+      "id": "sample-table-alignment-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "ab3b8b8be43070b15a10f006f4e10d0a3696e48c205ee455c1880821d922af56"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "pdf"
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_table_ruled.pdf",
+      "format": "pdf",
+      "id": "sample-table-ruled-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "19b9fa26a8c14d2fce9cd3cd8e8599f63503a9ecf643ec36beed2b41a2494752"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "pdf"
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_table_two_ruled.pdf",
+      "format": "pdf",
+      "id": "sample-table-two-ruled-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "b25c23fb99e9181a1f07522ba433af5813c0ad5a9db6856357a1dfe9426412dd"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "docx",
+          "/result/tables": 6
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_tables.docx",
+      "format": "docx",
+      "id": "sample-tables-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "ae83cc0410fa35a70f9cac1c19d25e1cf59d6f05822ecf2de05d4b28982611ae"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/format": "pdf"
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/synthetic_table.pdf",
+      "format": "pdf",
+      "id": "synthetic-table-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [
+          "UNSUPPORTED_FORMAT"
+        ],
+        "exit_code": 10,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/validation/unsupported.bin",
+      "format": "invalid",
+      "id": "unsupported-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "c5a2cb611100d8ba7697717bb9622f6726e7b0e17d41828b096a8e9454c1646c"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_headings.docx",
+      "format": "docx",
+      "id": "sample-headings-render",
+      "operation": "render",
+      "origin": "synthetic",
+      "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_semantic.pdf",
+      "format": "pdf",
+      "id": "sample-semantic-render",
+      "operation": "render",
+      "origin": "synthetic",
+      "sha256": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05"
+    },
+    {
+      "expected": {
+        "diagnostic_codes": [],
+        "exit_code": 0,
+        "pointer_equals": {
+          "/result/summary/semantic_changes": 0
+        },
+        "repeat": 2
+      },
+      "file": "fixtures/validation/sample_headings.docx",
+      "format": "docx",
+      "id": "sample-headings-diff",
+      "operation": "diff",
+      "origin": "synthetic",
+      "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+    }
+  ],
+  "schema": "docsight.corpus/v1"
+}
