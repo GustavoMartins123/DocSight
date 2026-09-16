@@ -27,6 +27,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('python -m scripts.release collect dist', self.workflow)
         self.assertIn('needs: [configuration, package]', self.workflow)
 
+    def test_global_flags_do_not_hide_windows_static_crt(self):
+        self.assertNotIn('CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS', self.workflow)
+        self.assertIn("matrix.target == 'x86_64-pc-windows-msvc'", self.workflow)
+        self.assertIn("'-D warnings -C target-feature=+crt-static'", self.workflow)
+
     def test_workflow_does_not_automatically_publish_or_mutate_git(self):
         self.assertNotIn('contents: write', self.workflow)
         self.assertNotIn('git push', self.workflow)
