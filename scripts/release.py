@@ -11,6 +11,7 @@ import sys
 import tomllib
 from typing import Any
 import zipfile
+import zlib
 
 from scripts.common import (
     ROOT, ToolError, bounded_integer, error_json, exact_keys, json_bytes,
@@ -254,7 +255,7 @@ def verify_archive(path: Path) -> dict[str, Any]:
             if not required <= set(seen_paths) or not any(name.startswith('schemas/v2/') for name in seen_paths):
                 raise ToolError('INCOMPLETE_RELEASE', 'Archive lacks required documentation, examples, licenses or schemas')
             return manifest
-    except (zipfile.BadZipFile, KeyError, EOFError, RuntimeError) as error:
+    except (zipfile.BadZipFile, zlib.error, KeyError, EOFError, RuntimeError) as error:
         raise ToolError('CORRUPT_ARCHIVE', 'Release archive is corrupt or missing declared content') from error
 
 
