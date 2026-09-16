@@ -1,7 +1,7 @@
 use crate::{Diagnostic, DocsightError, DocumentFormat, ObjectId, Rect};
 use serde::{Deserialize, Serialize};
 
-pub const IR_SCHEMA_VERSION: &str = "1.0";
+pub const IR_SCHEMA_VERSION: &str = "1.1";
 pub const IR_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -175,6 +175,39 @@ pub enum BlockContent {
     Unknown(UnknownBlock),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAlignment {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ParagraphFormat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<TextAlignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_before_pt: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_after_pt: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_spacing: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_left_pt: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_right_pt: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_first_line_pt: Option<f32>,
+}
+
+impl ParagraphFormat {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LayoutFlags {
     #[serde(default)]
@@ -199,6 +232,8 @@ pub struct Block {
     pub confidence: f32,
     #[serde(default)]
     pub flags: LayoutFlags,
+    #[serde(default, skip_serializing_if = "ParagraphFormat::is_default")]
+    pub format: ParagraphFormat,
     pub content: BlockContent,
 }
 

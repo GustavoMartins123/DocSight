@@ -27,7 +27,7 @@ fn hit_docx_point_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     assert!(stdout.contains("Hit Test on Page 1 at point (100.0, 80.0):"));
     assert!(stdout.contains("Hits: 1"));
     assert!(stdout.contains("[h_515ad605791c12fc496c1c18d79f6526] Heading"));
-    assert!(stdout.contains("BBox:     [90.0, 72.0, 522.0, 100.2]"));
+    assert!(stdout.contains("BBox:     [90.0, 72.0, 522.0, 100.7]"));
 
     let json_out = docsight()
         .args(["hit", doc_str, "--page", "1", "--point", "100,80", "--json"])

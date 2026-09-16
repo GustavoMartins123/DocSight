@@ -52,6 +52,7 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         source: SourceSpan::new("/word/document.xml::body/p[1]"),
         confidence: 1.0,
         flags: Default::default(),
+        format: Default::default(),
         content: BlockContent::Heading(HeadingBlock {
             level: 1,
             text: "Document Title".to_owned(),
@@ -68,6 +69,7 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         source: SourceSpan::new("/word/document.xml::body/p[2]"),
         confidence: 1.0,
         flags: Default::default(),
+        format: Default::default(),
         content: BlockContent::Paragraph(ParagraphBlock {
             text: "This is a sample paragraph describing the deterministic layout implementation."
                 .to_owned(),
@@ -130,6 +132,7 @@ fn paginates_large_content_into_multiple_pages() -> Result<(), Box<dyn std::erro
             source: SourceSpan::new(format!("/word/document.xml::body/p[{i}]")),
             confidence: 1.0,
             flags: Default::default(),
+            format: Default::default(),
             content: BlockContent::Paragraph(ParagraphBlock {
                 text: format!("Paragraph {i}: This is substantial content to fill space on the page and force deterministic pagination breaks."),
                 style_id: None,
@@ -220,6 +223,7 @@ fn lays_out_tables_with_cells_and_borders() -> Result<(), Box<dyn std::error::Er
         source: SourceSpan::new("/word/document.xml::body/tbl[1]"),
         confidence: 1.0,
         flags: Default::default(),
+        format: Default::default(),
         content: BlockContent::Table(TableBlock {
             rows: 2,
             columns: 2,
@@ -257,6 +261,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         source: SourceSpan::new("/word/document.xml::fig[1]"),
         confidence: 1.0,
         flags: Default::default(),
+        format: Default::default(),
         content: BlockContent::Figure(docsight_core::FigureBlock {
             alt_text: Some("Chart Diagram".to_owned()),
             caption: None,
@@ -276,6 +281,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         source: SourceSpan::new("/word/footnotes.xml::fn[1]"),
         confidence: 1.0,
         flags: Default::default(),
+        format: Default::default(),
         content: BlockContent::Note(docsight_core::NoteBlock {
             kind: docsight_core::NoteKind::Footnote,
             note_id: "1".to_owned(),
@@ -342,6 +348,7 @@ fn paragraph_block(index: u32, text: &str, flags: LayoutFlags) -> Block {
         source: SourceSpan::new(source_path),
         confidence: 1.0,
         flags,
+        format: Default::default(),
         content: BlockContent::Paragraph(ParagraphBlock {
             text: text.to_owned(),
             style_id: None,
@@ -481,5 +488,184 @@ fn block_granular_pagination_is_diagnosed() -> Result<(), Box<dyn std::error::Er
             .iter()
             .any(|warning| warning.code == "DOCX_PAGINATION_BLOCK_GRANULAR")
     );
+    Ok(())
+}
+
+fn formatted_paragraph(index: u32, text: &str, format: docsight_core::ParagraphFormat) -> Block {
+    let mut block = paragraph_block(index, text, LayoutFlags::default());
+    block.format = format;
+    block
+}
+
+fn single_run(
+    document: Document,
+) -> Result<docsight_layout::TextRunLayout, Box<dyn std::error::Error>> {
+    let laid_out = layout_docx(document)?;
+    let page = laid_out.pages.first().ok_or("no page")?;
+    Ok(page.runs.first().ok_or("no run")?.clone())
+}
+
+#[test]
+fn centers_a_paragraph_inside_the_content_width() -> Result<(), Box<dyn std::error::Error>> {
+    let plain = single_run(dummy_document(
+        vec![formatted_paragraph(1, "Centered", Default::default())],
+        None,
+    ))?;
+    let centered = single_run(dummy_document(
+        vec![formatted_paragraph(
+            1,
+            "Centered",
+            docsight_core::ParagraphFormat {
+                alignment: Some(docsight_core::TextAlignment::Center),
+                ..Default::default()
+            },
+        )],
+        None,
+    ))?;
+
+    let width = plain.bbox.x1 - plain.bbox.x0;
+    assert!((centered.bbox.x1 - centered.bbox.x0 - width).abs() < 0.01);
+    assert!(
+        centered.bbox.x0 > plain.bbox.x0,
+        "a centered line must start to the right of a left-aligned one"
+    );
+    Ok(())
+}
+
+#[test]
+fn right_aligns_a_paragraph_against_the_right_margin() -> Result<(), Box<dyn std::error::Error>> {
+    let right_format = docsight_core::ParagraphFormat {
+        alignment: Some(docsight_core::TextAlignment::Right),
+        ..Default::default()
+    };
+    let short = single_run(dummy_document(
+        vec![formatted_paragraph(1, "Right", right_format)],
+        None,
+    ))?;
+    let long = single_run(dummy_document(
+        vec![formatted_paragraph(1, "A much longer line", right_format)],
+        None,
+    ))?;
+    let plain = single_run(dummy_document(
+        vec![formatted_paragraph(1, "Right", Default::default())],
+        None,
+    ))?;
+
+    assert!(short.bbox.x1 > plain.bbox.x1);
+    assert!(
+        (short.bbox.x1 - long.bbox.x1).abs() < 0.01,
+        "right-aligned lines of different lengths must share a right edge"
+    );
+    assert!(long.bbox.x0 < short.bbox.x0);
+    Ok(())
+}
+
+#[test]
+fn applies_left_indentation_to_the_line_origin() -> Result<(), Box<dyn std::error::Error>> {
+    let indented = single_run(dummy_document(
+        vec![formatted_paragraph(
+            1,
+            "Indented",
+            docsight_core::ParagraphFormat {
+                indent_left_pt: Some(36.0),
+                ..Default::default()
+            },
+        )],
+        None,
+    ))?;
+    let plain = single_run(dummy_document(
+        vec![formatted_paragraph(1, "Indented", Default::default())],
+        None,
+    ))?;
+
+    assert!((indented.bbox.x0 - plain.bbox.x0 - 36.0).abs() < 0.01);
+    Ok(())
+}
+
+#[test]
+fn applies_spacing_before_and_after_to_block_height() -> Result<(), Box<dyn std::error::Error>> {
+    let plain = layout_docx(dummy_document(
+        vec![formatted_paragraph(1, "Spaced", Default::default())],
+        None,
+    ))?;
+    let spaced = layout_docx(dummy_document(
+        vec![formatted_paragraph(
+            1,
+            "Spaced",
+            docsight_core::ParagraphFormat {
+                space_before_pt: Some(24.0),
+                space_after_pt: Some(24.0),
+                ..Default::default()
+            },
+        )],
+        None,
+    ))?;
+
+    let plain_bbox = plain.document.blocks[0].bbox.ok_or("no geometry")?;
+    let spaced_bbox = spaced.document.blocks[0].bbox.ok_or("no geometry")?;
+    let plain_height = plain_bbox.y1 - plain_bbox.y0;
+    let spaced_height = spaced_bbox.y1 - spaced_bbox.y0;
+
+    assert!(
+        (spaced_height - plain_height - 44.0).abs() < 0.01,
+        "spacing must add 24pt before and replace the 4pt default after with 24pt"
+    );
+    Ok(())
+}
+
+#[test]
+fn automatic_line_spacing_scales_the_line_height() -> Result<(), Box<dyn std::error::Error>> {
+    let long = "word ".repeat(60);
+    let single = layout_docx(dummy_document(
+        vec![formatted_paragraph(1, &long, Default::default())],
+        None,
+    ))?;
+    let double = layout_docx(dummy_document(
+        vec![formatted_paragraph(
+            1,
+            &long,
+            docsight_core::ParagraphFormat {
+                line_spacing: Some(2.0),
+                ..Default::default()
+            },
+        )],
+        None,
+    ))?;
+
+    let single_bbox = single.document.blocks[0].bbox.ok_or("no geometry")?;
+    let double_bbox = double.document.blocks[0].bbox.ok_or("no geometry")?;
+    let single_height = single_bbox.y1 - single_bbox.y0 - 4.0;
+    let double_height = double_bbox.y1 - double_bbox.y0 - 4.0;
+
+    assert!(
+        (double_height - single_height * 2.0).abs() < 0.01,
+        "double line spacing must double the text height"
+    );
+    Ok(())
+}
+
+#[test]
+fn layout_of_formatted_paragraphs_is_deterministic() -> Result<(), Box<dyn std::error::Error>> {
+    let format = docsight_core::ParagraphFormat {
+        alignment: Some(docsight_core::TextAlignment::Center),
+        space_before_pt: Some(8.0),
+        indent_left_pt: Some(24.0),
+        line_spacing: Some(1.5),
+        ..Default::default()
+    };
+    let first = layout_docx(dummy_document(
+        vec![formatted_paragraph(1, "Stable", format)],
+        None,
+    ))?;
+    let second = layout_docx(dummy_document(
+        vec![formatted_paragraph(1, "Stable", format)],
+        None,
+    ))?;
+
+    assert_eq!(
+        first.document.blocks[0].bbox,
+        second.document.blocks[0].bbox
+    );
+    assert_eq!(first.pages[0].runs, second.pages[0].runs);
     Ok(())
 }

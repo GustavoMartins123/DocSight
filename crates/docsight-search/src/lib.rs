@@ -2155,6 +2155,7 @@ mod tests {
             source: source("word/document.xml"),
             confidence: 1.0,
             flags: LayoutFlags::default(),
+            format: Default::default(),
             content,
         }
     }

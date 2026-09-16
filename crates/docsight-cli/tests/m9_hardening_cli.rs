@@ -183,7 +183,7 @@ fn sandbox_worker_inspect_runs_isolated_process() -> Result<(), Box<dyn std::err
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(value["schema"], "docsight.agent/v2");
     assert_eq!(value["result"]["format"], "docx");
-    assert_eq!(value["result"]["pages"], 3);
+    assert_eq!(value["result"]["pages"], 4);
 
     Ok(())
 }

@@ -126,7 +126,52 @@ pub fn render_docx(
             });
         }
     };
-    rasterize_docx_page(&page, request.dpi, crop_box, warnings)
+    let images = decode_page_images(source, &page, &mut warnings);
+    rasterize_docx_page(&page, request.dpi, crop_box, warnings, &images)
+}
+
+fn decode_page_images(
+    source: &DocumentSource,
+    page: &docsight_layout::LaidOutPage,
+    warnings: &mut Vec<Diagnostic>,
+) -> std::collections::BTreeMap<String, docsight_core::DecodedImage> {
+    let mut decoded = std::collections::BTreeMap::new();
+    for image in &page.images {
+        if decoded.contains_key(&image.target) {
+            continue;
+        }
+        let bytes = match docsight_ooxml::read_media_part(source.bytes(), &image.target) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(error) => {
+                warnings.push(image_warning(&image.object_id, &image.target, &error));
+                continue;
+            }
+        };
+        match docsight_core::decode_png(&bytes) {
+            Ok(image_data) => {
+                decoded.insert(image.target.clone(), image_data);
+            }
+            Err(error) => warnings.push(image_warning(&image.object_id, &image.target, &error)),
+        }
+    }
+    decoded
+}
+
+fn image_warning(
+    object: &docsight_core::ObjectId,
+    target: &str,
+    error: &DocsightError,
+) -> Diagnostic {
+    Diagnostic {
+        code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
+        severity: docsight_core::DiagnosticSeverity::Warning,
+        message: format!("embedded image {target} could not be decoded: {error}"),
+        effect: "visual evidence for this figure does not include the original image pixels"
+            .to_owned(),
+        object: Some(object.clone()),
+        page: None,
+    }
 }
 
 fn clip_object_crop(

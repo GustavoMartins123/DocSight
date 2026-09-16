@@ -405,16 +405,9 @@
   },
   "version": {
     "engine_version": "<engine>",
-    "schema_version": "1.0"
+    "schema_version": "1.1"
   },
   "warnings": [
-    {
-      "code": "DOCX_FIGURE_RASTER_PLACEHOLDER",
-      "effect": "visual evidence for this figure does not include the original image pixels",
-      "message": "embedded image for figure fig_14e9484ca1f59fc201f11f6496b278ae is not rasterized; a placeholder box is rendered",
-      "object": "fig_14e9484ca1f59fc201f11f6496b278ae",
-      "severity": "warning"
-    },
     {
       "code": "DOCX_LAYOUT_PAGINATED",
       "effect": "line wrapping and page boundaries are computed approximations",

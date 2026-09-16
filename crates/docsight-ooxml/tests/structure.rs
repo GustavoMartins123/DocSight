@@ -737,3 +737,163 @@ fn ignores_empty_package_property_elements() -> Result<(), Box<dyn std::error::E
     assert_eq!(document.metadata.author, None);
     Ok(())
 }
+
+#[test]
+fn reads_direct_paragraph_alignment_spacing_and_indentation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="240" w:after="120" w:line="360" w:lineRule="auto"/><w:ind w:left="720" w:right="360" w:firstLine="180"/></w:pPr><w:r><w:t>Centered</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, None, None)?)?;
+    let parsed = parse_docx(&source)?;
+    let format = parsed.blocks[0].format;
+
+    assert_eq!(format.alignment, Some(docsight_core::TextAlignment::Center));
+    assert_eq!(format.space_before_pt, Some(12.0));
+    assert_eq!(format.space_after_pt, Some(6.0));
+    assert_eq!(format.line_spacing, Some(1.5));
+    assert_eq!(format.indent_left_pt, Some(36.0));
+    assert_eq!(format.indent_right_pt, Some(18.0));
+    assert_eq!(format.indent_first_line_pt, Some(9.0));
+    Ok(())
+}
+
+#[test]
+fn reads_hanging_indentation_as_a_negative_first_line_offset()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t>Hanging</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, None, None)?)?;
+    let parsed = parse_docx(&source)?;
+
+    assert_eq!(parsed.blocks[0].format.indent_first_line_pt, Some(-18.0));
+    Ok(())
+}
+
+#[test]
+fn paragraph_formatting_follows_the_style_cascade() -> Result<(), Box<dyn std::error::Error>> {
+    let styles = format!(
+        r#"<w:styles xmlns:w="{W_NS}"><w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/><w:pPr><w:jc w:val="right"/><w:spacing w:after="200"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Derived"><w:name w:val="Derived"/><w:basedOn w:val="Base"/><w:pPr><w:spacing w:before="100"/></w:pPr></w:style></w:styles>"#
+    );
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:pStyle w:val="Derived"/></w:pPr><w:r><w:t>Inherited</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, Some(&styles), None)?)?;
+    let parsed = parse_docx(&source)?;
+    let format = parsed.blocks[0].format;
+
+    assert_eq!(format.alignment, Some(docsight_core::TextAlignment::Right));
+    assert_eq!(format.space_after_pt, Some(10.0));
+    assert_eq!(format.space_before_pt, Some(5.0));
+    Ok(())
+}
+
+#[test]
+fn direct_paragraph_properties_win_over_the_style() -> Result<(), Box<dyn std::error::Error>> {
+    let styles = format!(
+        r#"<w:styles xmlns:w="{W_NS}"><w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/><w:pPr><w:jc w:val="right"/></w:pPr></w:style></w:styles>"#
+    );
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:pStyle w:val="Base"/><w:jc w:val="center"/></w:pPr><w:r><w:t>Direct</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, Some(&styles), None)?)?;
+    let parsed = parse_docx(&source)?;
+
+    assert_eq!(
+        parsed.blocks[0].format.alignment,
+        Some(docsight_core::TextAlignment::Center)
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_non_numeric_paragraph_measurements() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:spacing w:after="wide"/></w:pPr><w:r><w:t>Broken</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, None, None)?)?;
+
+    assert!(matches!(
+        parse_docx(&source),
+        Err(DocsightError::MalformedDocument { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn reports_contextual_spacing_as_an_unapplied_declaration() -> Result<(), Box<dyn std::error::Error>>
+{
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:contextualSpacing/></w:pPr><w:r><w:t>Tight</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, None, None)?)?;
+    let parsed = parse_docx(&source)?;
+
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_CONTEXTUAL_SPACING_IGNORED")
+    );
+    Ok(())
+}
+
+fn package_with_image(name: &str, bytes: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="1270000" cy="635000"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rId9"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
+    );
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{name}"/></Relationships>"#
+    );
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    writer.start_file("word/_rels/document.xml.rels", options)?;
+    writer.write_all(rels.as_bytes())?;
+    writer.start_file(format!("word/media/{name}"), options)?;
+    writer.write_all(bytes)?;
+    Ok(writer.finish()?.into_inner())
+}
+
+#[test]
+fn a_png_figure_is_not_reported_as_a_placeholder() -> Result<(), Box<dyn std::error::Error>> {
+    let png = docsight_core::encode_png(2, 2, &[10_u8; 12])?;
+    let source = DocumentSource::from_bytes(package_with_image("logo.png", &png)?)?;
+    let parsed = parse_docx(&source)?;
+
+    assert_eq!(parsed.figures().count(), 1);
+    assert!(
+        !parsed
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+    );
+    Ok(())
+}
+
+#[test]
+fn a_non_png_figure_names_the_format_it_cannot_rasterize() -> Result<(), Box<dyn std::error::Error>>
+{
+    let jpeg = [
+        0xFF_u8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46,
+    ];
+    let source = DocumentSource::from_bytes(package_with_image("photo.jpg", &jpeg)?)?;
+    let parsed = parse_docx(&source)?;
+
+    let warning = parsed
+        .warnings
+        .iter()
+        .find(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+        .ok_or("placeholder diagnostic missing")?;
+    assert!(
+        warning.message.contains("jpeg"),
+        "the diagnostic must name the format: {}",
+        warning.message
+    );
+    Ok(())
+}

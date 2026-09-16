@@ -1214,16 +1214,19 @@ fn parse_box(store: &ObjectStore<'_>, value: &Value) -> Result<NativeBox, Docsig
     let y0 = pdf_number(&values[1])?;
     let x1 = pdf_number(&values[2])?;
     let y1 = pdf_number(&values[3])?;
-    if !x0.is_finite()
-        || !y0.is_finite()
-        || !x1.is_finite()
-        || !y1.is_finite()
-        || x0 >= x1
-        || y0 >= y1
-    {
-        return Err(malformed("page box has invalid geometry"));
+    if !x0.is_finite() || !y0.is_finite() || !x1.is_finite() || !y1.is_finite() {
+        return Err(malformed("page box has non-finite geometry"));
     }
-    Ok(NativeBox { x0, y0, x1, y1 })
+    let normalized = NativeBox {
+        x0: x0.min(x1),
+        y0: y0.min(y1),
+        x1: x0.max(x1),
+        y1: y0.max(y1),
+    };
+    if normalized.width() <= 0.0 || normalized.height() <= 0.0 {
+        return Err(malformed("page box has zero width or height"));
+    }
+    Ok(normalized)
 }
 
 fn pdf_number(value: &Value) -> Result<f32, DocsightError> {

@@ -1,6 +1,7 @@
 use crate::{RenderMetadata, RenderedImage};
-use docsight_core::{Diagnostic, DocsightError, Rect};
+use docsight_core::{DecodedImage, Diagnostic, DocsightError, Rect};
 use docsight_layout::LaidOutPage;
+use std::collections::BTreeMap;
 
 const MIN_DPI: u16 = 36;
 const MAX_DPI: u16 = 600;
@@ -18,6 +19,7 @@ pub(crate) fn rasterize_docx_page(
     dpi: u16,
     crop: Option<Rect>,
     warnings: Vec<Diagnostic>,
+    images: &BTreeMap<String, DecodedImage>,
 ) -> Result<RenderedImage, DocsightError> {
     if !(MIN_DPI..=MAX_DPI).contains(&dpi) {
         return Err(DocsightError::InvalidArgument {
@@ -61,6 +63,12 @@ pub(crate) fn rasterize_docx_page(
         offset_x: target.x0,
         offset_y: target.y0,
     };
+
+    for image in &page.images {
+        if let Some(decoded) = images.get(&image.target) {
+            canvas.draw_image(image.rect, decoded);
+        }
+    }
 
     for border in &page.borders {
         let color = Color {
@@ -138,6 +146,49 @@ struct Canvas {
 }
 
 impl Canvas {
+    fn draw_image(&mut self, rect: Rect, image: &DecodedImage) {
+        let left = ((rect.x0 - self.offset_x) * self.scale).round();
+        let top = ((rect.y0 - self.offset_y) * self.scale).round();
+        let right = ((rect.x1 - self.offset_x) * self.scale).round();
+        let bottom = ((rect.y1 - self.offset_y) * self.scale).round();
+        let target_width = (right - left).max(0.0) as u32;
+        let target_height = (bottom - top).max(0.0) as u32;
+        if target_width == 0 || target_height == 0 {
+            return;
+        }
+        for row in 0..target_height {
+            let device_y = top as i64 + i64::from(row);
+            if device_y < 0 || device_y >= i64::from(self.height) {
+                continue;
+            }
+            let source_y = u64::from(row) * u64::from(image.height) / u64::from(target_height);
+            for column in 0..target_width {
+                let device_x = left as i64 + i64::from(column);
+                if device_x < 0 || device_x >= i64::from(self.width) {
+                    continue;
+                }
+                let source_x = u64::from(column) * u64::from(image.width) / u64::from(target_width);
+                let Some(sample) = image.pixel(source_x as u32, source_y as u32) else {
+                    continue;
+                };
+                let Ok(index) = usize::try_from(
+                    (device_y * i64::from(self.width) + device_x).saturating_mul(3),
+                ) else {
+                    continue;
+                };
+                let Some(slot) = self.pixels.get_mut(index..index + 3) else {
+                    continue;
+                };
+                let alpha = u32::from(sample[3]);
+                for channel in 0..3 {
+                    let source = u32::from(sample[channel]);
+                    let destination = u32::from(slot[channel]);
+                    slot[channel] = ((source * alpha + destination * (255 - alpha)) / 255) as u8;
+                }
+            }
+        }
+    }
+
     fn stroke_rect(&mut self, rect: Rect, color: Color) {
         self.fill_rect(rect.x0, rect.y0, rect.x1, rect.y0 + 1.0, color);
         self.fill_rect(rect.x0, rect.y1 - 1.0, rect.x1, rect.y1, color);
@@ -524,8 +575,15 @@ mod tests {
                     color_argb: 0xff00_0000,
                 }],
                 borders: Vec::new(),
+                images: Vec::new(),
             };
-            let rendered = rasterize_docx_page(&page, 72, None, Vec::new());
+            let rendered = rasterize_docx_page(
+                &page,
+                72,
+                None,
+                Vec::new(),
+                &std::collections::BTreeMap::new(),
+            );
             assert!(rendered.is_ok(), "{text:?} -> {:?}", rendered.err());
         }
         Ok(())
@@ -545,8 +603,15 @@ mod tests {
                 color_argb: 0xff00_0000,
             }],
             borders: Vec::new(),
+            images: Vec::new(),
         };
-        let result = rasterize_docx_page(&page, 72, None, Vec::new());
+        let result = rasterize_docx_page(
+            &page,
+            72,
+            None,
+            Vec::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(matches!(
             result,
             Err(DocsightError::UnsupportedFeature { feature })

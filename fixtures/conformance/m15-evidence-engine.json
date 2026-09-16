@@ -182,6 +182,54 @@
             "score": 0.0,
             "status": "unsupported"
           }
+        },
+        {
+          "geometry": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED",
+              "DOCX_PAGINATION_BLOCK_GRANULAR"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          },
+          "overall_fidelity": 0.5,
+          "page": 4,
+          "regions": [
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 4,
+              "reason_code": "DOCX_FONT_SUBSTITUTED",
+              "status": "unsupported"
+            },
+            {
+              "description": "the page is not backed by source-faithful geometry or rendering",
+              "page": 4,
+              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
+              "status": "approximated"
+            }
+          ],
+          "resource": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "structure": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "text": {
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
+          },
+          "visual": {
+            "reason_codes": [
+              "DOCX_FONT_SUBSTITUTED"
+            ],
+            "score": 0.0,
+            "status": "unsupported"
+          }
         }
       ],
       "reason_codes": [
@@ -201,7 +249,7 @@
           "x0": 90.0,
           "x1": 522.0,
           "y0": 72.0,
-          "y1": 100.25
+          "y1": 100.6875
         },
         "document_digest": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
         "fidelity": {
@@ -219,7 +267,7 @@
         "object_id": "h_515ad605791c12fc496c1c18d79f6526",
         "page": 1,
         "reading_order": 1,
-        "render_fingerprint": "24fcac785f70e2a8882fd10f81eba2448574aa683b9677288f4f70a43b0d015f",
+        "render_fingerprint": "a104c18604b498f2e92b8439bf4d9d6f4c506599d245635a7d7919e82690943f",
         "source_path": "/word/document.xml::body/p[1]",
         "text_fragment": "Application Architecture Guide",
         "z_index": 0
@@ -242,7 +290,7 @@
             "x0": 90.0,
             "x1": 522.0,
             "y0": 72.0,
-            "y1": 100.25
+            "y1": 100.6875
           },
           "kind": "heading",
           "object_id": "h_515ad605791c12fc496c1c18d79f6526",
@@ -282,8 +330,8 @@
             "weight": 0.07999999821186066
           },
           {
-            "after": "p3:90.00,307.58,522.00,330.33",
-            "before": "p3:90.00,307.58,522.00,330.33",
+            "after": "p3:90.00,645.14,522.00,685.10",
+            "before": "p3:90.00,645.14,522.00,685.10",
             "kind": "geometry",
             "score": 1.0,
             "weight": 0.07999999821186066
@@ -320,8 +368,8 @@
         "largest_drift_pt": null,
         "layout_changed_pages": 0,
         "lineage_ambiguous": 0,
-        "pages_after": 3,
-        "pages_before": 3,
+        "pages_after": 4,
+        "pages_before": 4,
         "semantic_changes": 0,
         "tables": {
           "added": 0,
@@ -355,21 +403,21 @@
         "resolved_resources": "verified",
         "table_sizing": "verified"
       },
-      "display_list_sha256": "e66612cb5cd18d75aa4e1ce9ffb79d7ac3b896e2fedef8c34057f7568a194834",
-      "display_operation_count": 39,
+      "display_list_sha256": "f1abe090e70eb265e87e73a5453de3da78b6dc1053881c65248b29ec5ee78ef0",
+      "display_operation_count": 33,
       "document": {
         "id": "doc_4a59107057e1bfd3a83fd83fff868f8b",
         "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
       },
       "dpi": 72,
-      "glyph_run_count": 39,
+      "glyph_run_count": 33,
       "height_px": 792,
       "page": 1,
-      "pagination_decision_count": 17,
-      "raster_sha256": "3a21369311355e117f78daac82020b48254ae77b22a9ebe9931614f7fecdb80f",
+      "pagination_decision_count": 14,
+      "raster_sha256": "8a97f0ce59fc9d93373f96c22ae19732c8aaa1eea0ae7be3f7361b4d56bef03d",
       "resource_count": 0,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "899fc863f0bb225f24ddf0364443189993c0d966674b3a9d1614956c1b875972",
+      "trace_sha256": "b54e7763e9fece82368953aab95bf6ee35e4f6d22f3be66fdd54b68a6b112ac7",
       "warnings": [
         "DOCX_LAYOUT_PAGINATED",
         "DOCX_FONT_SUBSTITUTED",
@@ -402,11 +450,11 @@
       },
       "trace_schema": "docsight.trace/v2",
       "verification": {
-        "display_list_sha256": "e66612cb5cd18d75aa4e1ce9ffb79d7ac3b896e2fedef8c34057f7568a194834",
+        "display_list_sha256": "f1abe090e70eb265e87e73a5453de3da78b6dc1053881c65248b29ec5ee78ef0",
         "document_sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
-        "raster_sha256": "3a21369311355e117f78daac82020b48254ae77b22a9ebe9931614f7fecdb80f",
+        "raster_sha256": "8a97f0ce59fc9d93373f96c22ae19732c8aaa1eea0ae7be3f7361b4d56bef03d",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "899fc863f0bb225f24ddf0364443189993c0d966674b3a9d1614956c1b875972",
+        "trace_sha256": "b54e7763e9fece82368953aab95bf6ee35e4f6d22f3be66fdd54b68a6b112ac7",
         "valid": true
       },
       "warnings": [

@@ -9,8 +9,8 @@
       "omitted_evidence": [],
       "returned_items": 0,
       "selected_profile": "rich",
-      "stdout_bytes": 23685,
-      "stdout_sha256": "4c9ce93f1db4dab1e8c23508a834b85607ae5a2c401cda9a89332c957ffaa1c5",
+      "stdout_bytes": 23996,
+      "stdout_sha256": "7ce20f311d75ca4d43c802ea1c56236e518c52f1f42667d025bf9d1f59fe4411",
       "total_items": 0,
       "truncated": false
     },
@@ -23,8 +23,8 @@
       ],
       "returned_items": 0,
       "selected_profile": "balanced",
-      "stdout_bytes": 3671,
-      "stdout_sha256": "719cfabbf089552f846d7616f1bbe48cb625071db5d78689c832938ff56cae38",
+      "stdout_bytes": 3982,
+      "stdout_sha256": "3909258375d48183fd429119c58070476ff8e6efa5b934d2f5db90d7ad6c0bc5",
       "total_items": 0,
       "truncated": false
     },
@@ -42,8 +42,8 @@
       ],
       "returned_items": 0,
       "selected_profile": "compact",
-      "stdout_bytes": 2223,
-      "stdout_sha256": "850e449b369530daefe48f3479add1e79604e02818e024c1e756fece38793626",
+      "stdout_bytes": 2500,
+      "stdout_sha256": "068101ef4be6b616918f389a864a790ba8530d3257d8c7fd11e6135568c17968",
       "total_items": 0,
       "truncated": false
     },
@@ -52,10 +52,10 @@
       "omitted_evidence": [
         "relationship_hints"
       ],
-      "returned_items": 7,
+      "returned_items": 6,
       "selected_profile": "compact",
-      "stdout_bytes": 4022,
-      "stdout_sha256": "1b1fe2d503799f6f4cd46dc93301e80248feab7ac31942857740333c9cb1413e",
+      "stdout_bytes": 3977,
+      "stdout_sha256": "89eaf0f951939ae250a3608c902a390263a8cbf2a2b864c4e6279995996065df",
       "total_items": 30,
       "truncated": true
     },

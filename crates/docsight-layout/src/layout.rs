@@ -1,7 +1,8 @@
 use crate::font::{text_width, wrap_text};
 use docsight_core::{
     Block, BlockContent, Diagnostic, DiagnosticSeverity, DocsightError, Document, ObjectId,
-    Overlay, OverlayKind, Page, Rect, SourceSpan, Style, validate_canonical,
+    Overlay, OverlayKind, Page, ParagraphFormat, Rect, SourceSpan, Style, TextAlignment,
+    validate_canonical,
 };
 
 pub const MAX_LAYOUT_PAGES: u32 = 10_000;
@@ -28,6 +29,14 @@ pub struct LaidOutPage {
     pub height_pt: f32,
     pub runs: Vec<TextRunLayout>,
     pub borders: Vec<BorderLayout>,
+    pub images: Vec<ImageLayout>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageLayout {
+    pub rect: Rect,
+    pub target: String,
+    pub object_id: ObjectId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,9 +108,10 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
 
     let block_count = doc.blocks.len();
     let styles = doc.styles.clone();
+    let resources = doc.resources.clone();
     let mut heights = Vec::with_capacity(block_count);
     for block in &doc.blocks {
-        heights.push(measure_height(block, content_width, &styles)?);
+        heights.push(measure_height(block, content_width, &styles, &resources)?);
     }
 
     let mut placements: Vec<Placement> = Vec::with_capacity(block_count);
@@ -188,6 +198,7 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             height_pt: page_height,
             runs: Vec::new(),
             borders: Vec::new(),
+            images: Vec::new(),
         });
         doc_pages.push(Page {
             number,
@@ -203,20 +214,21 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
     for (placement_index, (mut block, placement)) in
         source_blocks.into_iter().zip(placements.iter()).enumerate()
     {
-        let (height, runs, borders) = emit_block(
+        let emitted = emit_block(
             &mut block,
             content_width,
             margin_left,
             placement.y,
             &mut warnings,
             &styles,
+            &resources,
         )?;
         block.page = Some(placement.page);
         block.bbox = Some(Rect::new(
             margin_left,
             placement.y,
             margin_left + content_width,
-            placement.y + height,
+            placement.y + emitted.height,
         )?);
         block.reading_order =
             u32::try_from(placement_index + 1).map_err(|_| DocsightError::ResourceLimit {
@@ -247,8 +259,9 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
                         .to_owned(),
                 })?;
         doc_page.block_ids.push(block.id.clone());
-        laid_page.runs.extend(runs);
-        laid_page.borders.extend(borders);
+        laid_page.runs.extend(emitted.runs);
+        laid_page.borders.extend(emitted.borders);
+        laid_page.images.extend(emitted.images);
 
         updated_blocks.push(block);
     }
@@ -455,14 +468,116 @@ fn anchor_links_and_comments(
     }
 }
 
+struct ParagraphMetrics {
+    line_height: f32,
+    space_before: f32,
+    space_after: f32,
+    indent_left: f32,
+    indent_first_line: f32,
+    text_width: f32,
+    alignment: TextAlignment,
+}
+
+fn paragraph_metrics(
+    format: &ParagraphFormat,
+    content_width: f32,
+    default_line_height: f32,
+    default_space_before: f32,
+    default_space_after: f32,
+) -> ParagraphMetrics {
+    let line_height = match format.line_spacing {
+        Some(multiple) if multiple.is_finite() && multiple > 0.0 => default_line_height * multiple,
+        _ => default_line_height,
+    };
+    let indent_left = format.indent_left_pt.unwrap_or(0.0).max(0.0);
+    let indent_right = format.indent_right_pt.unwrap_or(0.0).max(0.0);
+    let text_width = (content_width - indent_left - indent_right).max(1.0);
+    ParagraphMetrics {
+        line_height,
+        space_before: format
+            .space_before_pt
+            .unwrap_or(default_space_before)
+            .max(0.0),
+        space_after: format
+            .space_after_pt
+            .unwrap_or(default_space_after)
+            .max(0.0),
+        indent_left,
+        indent_first_line: format.indent_first_line_pt.unwrap_or(0.0),
+        text_width,
+        alignment: format.alignment.unwrap_or(TextAlignment::Left),
+    }
+}
+
+fn aligned_line_x(
+    metrics: &ParagraphMetrics,
+    margin_left: f32,
+    line_index: usize,
+    line_width: f32,
+) -> f32 {
+    let first_line_offset = if line_index == 0 {
+        metrics.indent_first_line
+    } else {
+        0.0
+    };
+    let left = margin_left + metrics.indent_left + first_line_offset.max(-metrics.indent_left);
+    let available = (metrics.text_width - first_line_offset.max(0.0)).max(1.0);
+    match metrics.alignment {
+        TextAlignment::Left | TextAlignment::Justify => left,
+        TextAlignment::Center => left + ((available - line_width) / 2.0).max(0.0),
+        TextAlignment::Right => left + (available - line_width).max(0.0),
+    }
+}
+
+fn wrap_paragraph(text: &str, font_size: f32, metrics: &ParagraphMetrics) -> Vec<String> {
+    let first_width = (metrics.text_width - metrics.indent_first_line.max(0.0)).max(1.0);
+    if (first_width - metrics.text_width).abs() < f32::EPSILON {
+        return wrap_text(text, font_size, metrics.text_width);
+    }
+    let mut lines = wrap_text(text, font_size, first_width);
+    if lines.len() <= 1 {
+        return lines;
+    }
+    let remainder = lines.split_off(1).join(" ");
+    lines.extend(wrap_text(&remainder, font_size, metrics.text_width));
+    lines
+}
+
 fn measure_height(
     block: &Block,
     content_width: f32,
     styles: &[Style],
+    resources: &[docsight_core::Resource],
 ) -> Result<f32, DocsightError> {
     let mut copy = block.clone();
-    let (height, _, _) = emit_block(&mut copy, content_width, 0.0, 0.0, &mut Vec::new(), styles)?;
-    Ok(height)
+    Ok(emit_block(
+        &mut copy,
+        content_width,
+        0.0,
+        0.0,
+        &mut Vec::new(),
+        styles,
+        resources,
+    )?
+    .height)
+}
+
+struct EmittedBlock {
+    height: f32,
+    runs: Vec<TextRunLayout>,
+    borders: Vec<BorderLayout>,
+    images: Vec<ImageLayout>,
+}
+
+impl EmittedBlock {
+    fn new(height: f32, runs: Vec<TextRunLayout>, borders: Vec<BorderLayout>) -> Self {
+        Self {
+            height,
+            runs,
+            borders,
+            images: Vec::new(),
+        }
+    }
 }
 
 fn emit_block(
@@ -472,28 +587,40 @@ fn emit_block(
     base_y: f32,
     warnings: &mut Vec<Diagnostic>,
     styles: &[Style],
-) -> Result<(f32, Vec<TextRunLayout>, Vec<BorderLayout>), DocsightError> {
+    resources: &[docsight_core::Resource],
+) -> Result<EmittedBlock, DocsightError> {
+    let format = block.format;
+    let block_id = block.id.clone();
     match &mut block.content {
         BlockContent::Paragraph(p) => {
             let style = find_style(styles, p.style_id.as_deref());
             let font_size = style.and_then(|value| value.font_size_pt).unwrap_or(11.0);
             let bold = style.and_then(|value| value.bold).unwrap_or(false);
-            let line_height = (font_size * 1.27).max(font_size + 2.0);
-            let space_after = 4.0_f32;
-            let lines = wrap_text(&p.text, font_size, content_width);
-            let height = (lines.len() as f32 * line_height + space_after).max(1.0);
+            let metrics = paragraph_metrics(
+                &format,
+                content_width,
+                (font_size * 1.27).max(font_size + 2.0),
+                0.0,
+                4.0,
+            );
+            let lines = wrap_paragraph(&p.text, font_size, &metrics);
+            let height = (lines.len() as f32 * metrics.line_height
+                + metrics.space_before
+                + metrics.space_after)
+                .max(1.0);
             let mut runs = Vec::with_capacity(lines.len());
             for (i, line) in lines.into_iter().enumerate() {
                 if line.is_empty() {
                     continue;
                 }
-                let line_y = base_y + i as f32 * line_height;
+                let line_y = base_y + metrics.space_before + i as f32 * metrics.line_height;
                 let line_w = text_width(&line, font_size).max(1.0);
+                let line_x = aligned_line_x(&metrics, margin_left, i, line_w);
                 let bbox = Rect::new(
-                    margin_left,
+                    line_x,
                     line_y,
-                    margin_left + line_w,
-                    line_y + line_height,
+                    line_x + line_w,
+                    line_y + metrics.line_height,
                 )?;
                 runs.push(TextRunLayout {
                     text: line,
@@ -503,7 +630,7 @@ fn emit_block(
                     color_argb: 0xFF000000,
                 });
             }
-            Ok((height, runs, Vec::new()))
+            Ok(EmittedBlock::new(height, runs, Vec::new()))
         }
         BlockContent::Heading(h) => {
             let (default_font_size, default_line_height, space_before, space_after) = match h.level
@@ -521,20 +648,31 @@ fn emit_block(
                 .map(|size| (size * 1.25).max(size + 2.0))
                 .unwrap_or(default_line_height);
             let bold = style.and_then(|value| value.bold).unwrap_or(true);
-            let lines = wrap_text(&h.text, font_size, content_width);
-            let height = (lines.len() as f32 * line_height + space_before + space_after).max(1.0);
+            let metrics = paragraph_metrics(
+                &format,
+                content_width,
+                line_height,
+                space_before,
+                space_after,
+            );
+            let lines = wrap_paragraph(&h.text, font_size, &metrics);
+            let height = (lines.len() as f32 * metrics.line_height
+                + metrics.space_before
+                + metrics.space_after)
+                .max(1.0);
             let mut runs = Vec::with_capacity(lines.len());
             for (i, line) in lines.into_iter().enumerate() {
                 if line.is_empty() {
                     continue;
                 }
-                let line_y = base_y + space_before + i as f32 * line_height;
+                let line_y = base_y + metrics.space_before + i as f32 * metrics.line_height;
                 let line_w = text_width(&line, font_size).max(1.0);
+                let line_x = aligned_line_x(&metrics, margin_left, i, line_w);
                 let bbox = Rect::new(
-                    margin_left,
+                    line_x,
                     line_y,
-                    margin_left + line_w,
-                    line_y + line_height,
+                    line_x + line_w,
+                    line_y + metrics.line_height,
                 )?;
                 runs.push(TextRunLayout {
                     text: line,
@@ -544,7 +682,7 @@ fn emit_block(
                     color_argb: 0xFF000000,
                 });
             }
-            Ok((height, runs, Vec::new()))
+            Ok(EmittedBlock::new(height, runs, Vec::new()))
         }
         BlockContent::ListItem(li) => {
             let style = find_style(styles, li.style_id.as_deref());
@@ -594,7 +732,7 @@ fn emit_block(
                     color_argb: 0xFF000000,
                 });
             }
-            Ok((height, runs, Vec::new()))
+            Ok(EmittedBlock::new(height, runs, Vec::new()))
         }
         BlockContent::Table(tbl) => {
             let cols = tbl.columns.max(1);
@@ -709,7 +847,7 @@ fn emit_block(
                 }
             }
 
-            Ok((total_table_h, runs, borders))
+            Ok(EmittedBlock::new(total_table_h, runs, borders))
         }
         BlockContent::Figure(fig) => {
             let width = fig.width_pt.unwrap_or(240.0).min(content_width).max(20.0);
@@ -737,6 +875,24 @@ fn emit_block(
                 (margin_left + 4.0 + label_w).min(margin_left + width - 2.0),
                 base_y + 22.0,
             )?;
+            let target = fig.resource_id.as_deref().and_then(|id| {
+                resources
+                    .iter()
+                    .find(|resource| resource.name == id)
+                    .map(|resource| resource.target.clone())
+            });
+            if let Some(target) = target {
+                return Ok(EmittedBlock {
+                    height: total_height,
+                    runs: Vec::new(),
+                    borders: vec![border],
+                    images: vec![ImageLayout {
+                        rect: fig_rect,
+                        target,
+                        object_id: block_id,
+                    }],
+                });
+            }
             let run = TextRunLayout {
                 text: label.to_owned(),
                 font_size: 9.0,
@@ -744,7 +900,7 @@ fn emit_block(
                 bbox: label_bbox,
                 color_argb: 0xFF404040,
             };
-            Ok((total_height, vec![run], vec![border]))
+            Ok(EmittedBlock::new(total_height, vec![run], vec![border]))
         }
         BlockContent::Note(note) => {
             let prefix = match note.kind {
@@ -778,11 +934,11 @@ fn emit_block(
                     color_argb: 0xFF404040,
                 });
             }
-            Ok((height, runs, Vec::new()))
+            Ok(EmittedBlock::new(height, runs, Vec::new()))
         }
         BlockContent::Shape(_) | BlockContent::Unknown(_) => {
             let height = 24.0_f32;
-            Ok((height, Vec::new(), Vec::new()))
+            Ok(EmittedBlock::new(height, Vec::new(), Vec::new()))
         }
     }
 }

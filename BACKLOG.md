@@ -20,7 +20,7 @@ Classification:
 | --- | --- |
 | Traverse Form XObjects in PDF content streams | Text inside a Form XObject is currently invisible to every command. On a real corpus this silently emptied 8 of 43 documents. Tracked as A8 in `ACHADOS_CORPUS_REAL.md`. |
 | Incremental PDF updates (`Prev` chains from appended revisions) | Common in signed and annotated PDFs. Tracked as A1b. |
-| Rasterize embedded DOCX images instead of placeholder boxes | `render` and `crop` currently produce visual evidence that omits the actual image (`DOCX_FIGURE_RASTER_PLACEHOLDER`). |
+| Decode JPEG images | PNG figures are rasterized natively, but JPEG is the other format real documents use constantly, and it still renders as a placeholder box. |
 
 ### Layout fidelity
 
@@ -41,6 +41,9 @@ Classification:
 ## post-v1
 
 - Real font discovery, loading and shaping instead of the deterministic proportional fallback, with a declared font fingerprint in the reproducibility inputs.
+- Filtered image scaling. Figure scaling is nearest-neighbour, chosen for determinism; a box or Lanczos filter would look closer to Word at the cost of a defined tolerance in the visual goldens.
+- Remaining PNG variants: 1, 2, 4 and 16 bits per channel, and interlaced images. Each currently fails closed with a diagnostic naming the variant.
+- Contextual spacing (`w:contextualSpacing`), which is parsed and reported but not applied between paragraphs of the same style.
 - Annotation appearance streams: an annotation currently contributes geometry and text to the IR, not its rendered pixels.
 - `Watermark` overlays in the IR. The entity exists but no parser produces it.
 - DOCX floating objects and shapes, and the `Shape` block kind, which is likewise declared but never produced.

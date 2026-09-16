@@ -1380,3 +1380,29 @@ fn rejects_annotations_that_are_not_dictionaries() -> Result<(), Box<dyn std::er
     ));
     Ok(())
 }
+
+#[test]
+fn normalizes_page_boxes_given_by_opposite_corners() -> Result<(), Box<dyn std::error::Error>> {
+    let content = "BT /F1 12 Tf 20 70 Td (Corner) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 100 200 0]", ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    let page = document.pages.first().ok_or("no page")?;
+    assert_eq!(page.width_pt, 200.0);
+    assert_eq!(page.height_pt, 100.0);
+    assert!(!document.blocks.is_empty());
+    Ok(())
+}
+
+#[test]
+fn rejects_page_boxes_without_area() -> Result<(), Box<dyn std::error::Error>> {
+    let content = "BT /F1 12 Tf 20 70 Td (Flat) Tj ET";
+    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 0]", ""))?;
+
+    assert!(matches!(
+        PdfDocument::open(&source),
+        Err(DocsightError::MalformedDocument { .. })
+            | Err(DocsightError::MalformedDocumentAt { .. })
+    ));
+    Ok(())
+}

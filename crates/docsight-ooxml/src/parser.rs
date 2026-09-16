@@ -3,8 +3,8 @@ use docsight_core::{
     Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
     Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
     Hyperlink, IrVersion, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId,
-    ParagraphBlock, Resource, ResourceKind, Section, SourceSpan, Style, TableBlock, TableCell,
-    TrackedChanges, UnknownBlock, validate_canonical,
+    ParagraphBlock, ParagraphFormat, Resource, ResourceKind, Section, SourceSpan, Style,
+    TableBlock, TableCell, TextAlignment, TrackedChanges, UnknownBlock, validate_canonical,
 };
 use roxmltree::{Document as XmlDocument, Node, ParsingOptions};
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +24,8 @@ pub const MAX_XML_TOKEN_BYTES: usize = 1024 * 1024;
 struct StyleDefinition {
     name: Option<String>,
     based_on: Option<String>,
+    paragraph_format: ParagraphFormat,
+    contextual_spacing: bool,
     outline_level: Option<u8>,
     numbering: Option<NumberingProperties>,
     font_family: Option<String>,
@@ -141,7 +143,12 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &parts.binary_part_digests,
                 &mut warnings,
             )?;
-            figure_warnings(child_figures.iter(), &mut warnings);
+            figure_warnings(
+                child_figures.iter(),
+                &resources,
+                &parts.binary_part_formats,
+                &mut warnings,
+            );
             blocks.extend(child_figures);
             collect_anchor_ids(
                 child,
@@ -174,6 +181,27 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut warnings,
             ));
         }
+    }
+
+    if body
+        .children()
+        .filter(Node::is_element)
+        .filter(|child| child.has_tag_name((W_NS, "p")))
+        .any(|paragraph| {
+            declares_contextual_spacing(
+                paragraph,
+                paragraph_property(paragraph, "pStyle")
+                    .and_then(word_value)
+                    .as_deref(),
+                &styles,
+            )
+        })
+    {
+        warnings.push(Diagnostic::warning(
+            "DOCX_CONTEXTUAL_SPACING_IGNORED",
+            "the document declares contextual spacing for at least one paragraph style".to_owned(),
+            "spacing before and after is applied even between paragraphs of the same style, so blocks can sit lower than in Word",
+        ));
     }
 
     if body
@@ -644,6 +672,7 @@ fn extract_figures(
                     source: SourceSpan::new(&source_path),
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
+                    format: Default::default(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -673,6 +702,7 @@ fn extract_figures(
                     source: SourceSpan::new(&source_path),
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
+                    format: Default::default(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -702,6 +732,7 @@ fn extract_figures(
                     source: SourceSpan::new(&source_path),
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
+                    format: Default::default(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -732,6 +763,7 @@ fn extract_figures(
                     source: SourceSpan::new(&source_path),
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
+                    format: Default::default(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -767,6 +799,7 @@ fn extract_figures(
             source: SourceSpan::new(&source_path),
             confidence: 1.0,
             flags: LayoutFlags::default(),
+            format: Default::default(),
             content: BlockContent::Figure(FigureBlock {
                 alt_text,
                 caption: None,
@@ -793,13 +826,34 @@ fn emu_to_points(value: &str, field: &str) -> Result<f32, DocsightError> {
     Ok(emu as f32 / 12_700.0)
 }
 
-fn figure_warnings<'a>(figures: impl Iterator<Item = &'a Block>, warnings: &mut Vec<Diagnostic>) {
+fn figure_warnings<'a>(
+    figures: impl Iterator<Item = &'a Block>,
+    resources: &[Resource],
+    formats: &BTreeMap<String, String>,
+    warnings: &mut Vec<Diagnostic>,
+) {
     for figure in figures {
+        let BlockContent::Figure(content) = &figure.content else {
+            continue;
+        };
+        let target = content.resource_id.as_deref().and_then(|id| {
+            resources
+                .iter()
+                .find(|resource| resource.name == id)
+                .map(|resource| resource.target.as_str())
+        });
+        let format = target
+            .and_then(|target| formats.get(target))
+            .map(String::as_str)
+            .unwrap_or("unknown");
+        if format == "png" {
+            continue;
+        }
         warnings.push(Diagnostic {
             code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
             severity: DiagnosticSeverity::Warning,
             message: format!(
-                "embedded image for figure {} is not rasterized; a placeholder box is rendered",
+                "embedded {format} image for figure {} is not rasterized; a placeholder box is rendered",
                 figure.id
             ),
             effect: "visual evidence for this figure does not include the original image pixels"
@@ -954,6 +1008,7 @@ fn parse_notes(
             source: SourceSpan::new(source_path),
             confidence: 1.0,
             flags: LayoutFlags::default(),
+            format: Default::default(),
             content: BlockContent::Note(NoteBlock {
                 kind: note_kind,
                 note_id: id.to_owned(),
@@ -1052,6 +1107,7 @@ fn parse_unknown_body_element(
         source: SourceSpan::new(source_path),
         confidence: 1.0,
         flags: LayoutFlags::default(),
+        format: Default::default(),
         content: BlockContent::Unknown(UnknownBlock { raw_tag, details }),
     }
 }
@@ -1215,6 +1271,165 @@ fn on_off_value(value: Option<&str>) -> bool {
     }
 }
 
+fn twips_to_points(value: &str, field: &str) -> Result<f32, DocsightError> {
+    let twips: i64 = value
+        .trim()
+        .parse()
+        .map_err(|_| DocsightError::MalformedDocument {
+            message: format!("{field} must be an integer in twentieths of a point"),
+        })?;
+    let points = twips as f32 / 20.0;
+    if !points.is_finite() {
+        return Err(DocsightError::MalformedDocument {
+            message: format!("{field} is not a finite measurement"),
+        });
+    }
+    Ok(points)
+}
+
+fn attribute_points(
+    node: Node<'_, '_>,
+    names: &[&str],
+    field: &str,
+) -> Result<Option<f32>, DocsightError> {
+    for name in names {
+        if let Some(value) = node.attribute((W_NS, *name)) {
+            return Ok(Some(twips_to_points(value, field)?));
+        }
+    }
+    Ok(None)
+}
+
+fn paragraph_format(properties: Node<'_, '_>) -> Result<ParagraphFormat, DocsightError> {
+    let mut format = ParagraphFormat::default();
+
+    if let Some(justification) = child_element(properties, "jc")
+        && let Some(value) = word_value(justification)
+    {
+        format.alignment = match value.as_str() {
+            "left" | "start" => Some(TextAlignment::Left),
+            "center" => Some(TextAlignment::Center),
+            "right" | "end" => Some(TextAlignment::Right),
+            "both" | "distribute" => Some(TextAlignment::Justify),
+            _ => None,
+        };
+    }
+
+    if let Some(spacing) = child_element(properties, "spacing") {
+        format.space_before_pt =
+            attribute_points(spacing, &["before"], "paragraph spacing before")?;
+        format.space_after_pt = attribute_points(spacing, &["after"], "paragraph spacing after")?;
+        if let Some(line) = spacing.attribute((W_NS, "line")) {
+            let rule = spacing
+                .attribute((W_NS, "lineRule"))
+                .unwrap_or("auto")
+                .to_owned();
+            let raw: i64 = line
+                .trim()
+                .parse()
+                .map_err(|_| DocsightError::MalformedDocument {
+                    message: "paragraph line spacing must be an integer".to_owned(),
+                })?;
+            format.line_spacing = match rule.as_str() {
+                "auto" => Some(raw as f32 / 240.0),
+                _ => None,
+            };
+        }
+    }
+
+    if let Some(indent) = child_element(properties, "ind") {
+        format.indent_left_pt = attribute_points(indent, &["left", "start"], "left indent")?;
+        format.indent_right_pt = attribute_points(indent, &["right", "end"], "right indent")?;
+        let first_line = attribute_points(indent, &["firstLine"], "first line indent")?;
+        let hanging = attribute_points(indent, &["hanging"], "hanging indent")?;
+        format.indent_first_line_pt = match (first_line, hanging) {
+            (_, Some(hanging)) => Some(-hanging),
+            (Some(first_line), None) => Some(first_line),
+            (None, None) => None,
+        };
+    }
+
+    Ok(format)
+}
+
+fn declares_contextual_spacing(
+    node: Node<'_, '_>,
+    style_id: Option<&str>,
+    styles: &BTreeMap<String, StyleDefinition>,
+) -> bool {
+    let direct = child_element(node, "pPr")
+        .and_then(|properties| child_element(properties, "contextualSpacing"))
+        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
+    if direct {
+        return true;
+    }
+    let Some(id) = style_id else {
+        return false;
+    };
+    let mut current = Some(id.to_owned());
+    let mut seen = Vec::new();
+    for _ in 0..MAX_STYLE_DEPTH {
+        let Some(key) = current else {
+            return false;
+        };
+        if seen.contains(&key) {
+            return false;
+        }
+        let Some(definition) = styles.get(&key) else {
+            return false;
+        };
+        if definition.contextual_spacing {
+            return true;
+        }
+        seen.push(key);
+        current = definition.based_on.clone();
+    }
+    false
+}
+
+fn resolve_paragraph_format(
+    node: Node<'_, '_>,
+    style_id: Option<&str>,
+    styles: &BTreeMap<String, StyleDefinition>,
+) -> Result<ParagraphFormat, DocsightError> {
+    let mut resolved = ParagraphFormat::default();
+    if let Some(id) = style_id {
+        let mut current = Some(id.to_owned());
+        let mut chain = Vec::new();
+        let mut depth = 0usize;
+        while let Some(key) = current {
+            if depth >= MAX_STYLE_DEPTH || chain.contains(&key) {
+                break;
+            }
+            let Some(definition) = styles.get(&key) else {
+                break;
+            };
+            chain.push(key);
+            current = definition.based_on.clone();
+            depth += 1;
+        }
+        for key in chain.iter().rev() {
+            if let Some(definition) = styles.get(key) {
+                merge_paragraph_format(&mut resolved, &definition.paragraph_format);
+            }
+        }
+    }
+    if let Some(properties) = child_element(node, "pPr") {
+        merge_paragraph_format(&mut resolved, &paragraph_format(properties)?);
+    }
+    Ok(resolved)
+}
+
+fn merge_paragraph_format(target: &mut ParagraphFormat, source: &ParagraphFormat) {
+    target.alignment = source.alignment.or(target.alignment);
+    target.space_before_pt = source.space_before_pt.or(target.space_before_pt);
+    target.space_after_pt = source.space_after_pt.or(target.space_after_pt);
+    target.line_spacing = source.line_spacing.or(target.line_spacing);
+    target.indent_left_pt = source.indent_left_pt.or(target.indent_left_pt);
+    target.indent_right_pt = source.indent_right_pt.or(target.indent_right_pt);
+    target.indent_first_line_pt = source.indent_first_line_pt.or(target.indent_first_line_pt);
+}
+
 fn paragraph_layout_flags(node: Node<'_, '_>) -> LayoutFlags {
     let mut flags = LayoutFlags::default();
     let Some(properties) = child_element(node, "pPr") else {
@@ -1240,6 +1455,7 @@ fn parse_paragraph(
 ) -> Result<Vec<Block>, DocsightError> {
     let base_path = format!("/word/document.xml::body/p[{index}]");
     let style_id = paragraph_property(node, "pStyle").and_then(|property| word_value(property));
+    let block_format = resolve_paragraph_format(node, style_id.as_deref(), styles)?;
     let direct_outline = child_element(node, "pPr")
         .map(outline_level)
         .transpose()?
@@ -1324,6 +1540,7 @@ fn parse_paragraph(
             source: SourceSpan::new(source_path),
             confidence: 1.0,
             flags,
+            format: block_format,
             content,
         });
     }
@@ -1370,6 +1587,7 @@ fn parse_table(
         source: span,
         confidence: 1.0,
         flags: LayoutFlags::default(),
+        format: Default::default(),
         content: BlockContent::Table(table_block),
     })
 }
@@ -1435,6 +1653,7 @@ fn parse_table_at(
                         source: nested_span,
                         confidence: 1.0,
                         flags: LayoutFlags::default(),
+                        format: Default::default(),
                         content: BlockContent::Table(nested_table),
                     })
                 })
@@ -1663,6 +1882,13 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
             StyleDefinition {
                 name,
                 based_on,
+                paragraph_format: match child_element(node, "pPr") {
+                    Some(properties) => paragraph_format(properties)?,
+                    None => ParagraphFormat::default(),
+                },
+                contextual_spacing: child_element(node, "pPr")
+                    .and_then(|properties| child_element(properties, "contextualSpacing"))
+                    .is_some_and(|flag| on_off_value(word_value(flag).as_deref())),
                 outline_level,
                 numbering,
                 font_family,

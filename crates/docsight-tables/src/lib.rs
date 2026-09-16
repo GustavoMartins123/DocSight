@@ -130,6 +130,7 @@ impl InferredTable {
             )),
             confidence: self.confidence,
             flags: LayoutFlags::default(),
+            format: Default::default(),
             content: BlockContent::Table(table_block),
         }
     }
