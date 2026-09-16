@@ -7,7 +7,7 @@ import unittest
 import zlib
 
 from scripts.common import ROOT, ProcessResult, ToolError, json_bytes
-from scripts.smoke import REQUIRED_CHECKS, extract_verified, native_target, smoke_archive, validate_png
+from scripts.smoke import SMOKE_CHECKS, extract_verified, native_target, smoke_archive, validate_png
 from scripts.tests.test_release import ReleaseFixture
 
 
@@ -58,7 +58,7 @@ class SmokeTests(ReleaseFixture):
         with patch('scripts.smoke.native_target', return_value='x86_64-unknown-linux-gnu'):
             report = smoke_archive(archive, self.engine)
         self.assertTrue(report['passed'])
-        self.assertEqual([item['name'] for item in report['checks']], list(REQUIRED_CHECKS))
+        self.assertEqual([item['name'] for item in report['checks']], list(SMOKE_CHECKS))
         self.assertTrue(any('--sandbox' in arguments for arguments, _ in self.calls))
         for _, options in self.calls:
             self.assertNotIn('cargo', options['env']['PATH'])
@@ -76,7 +76,7 @@ class SmokeTests(ReleaseFixture):
             report = smoke_archive(self.package(), self.engine)
         self.assertFalse(report['passed'])
         self.assertEqual(report['checks'][0]['error_code'], 'SMOKE_VERSION_MISMATCH')
-        self.assertEqual(len(report['checks']), len(REQUIRED_CHECKS))
+        self.assertEqual(len(report['checks']), len(SMOKE_CHECKS))
 
     def test_nondeterminism_is_reported(self):
         self.nondeterministic = True

@@ -14,7 +14,7 @@ import zipfile
 
 from scripts.common import ROOT, ToolError, json_bytes
 from scripts.release import (
-    DOCUMENTS, EXAMPLES, TARGETS, archive_basename, check_binary, checked_revision,
+    DOCUMENTS, EXAMPLES, SMOKE_CHECKS, TARGETS, archive_basename, check_binary, checked_revision,
     checked_version, collect_archives, make_package, matrix, safe_member, verify_archive,
 )
 
@@ -61,6 +61,16 @@ class ReleaseFixture(unittest.TestCase):
     def package(self, target='x86_64-unknown-linux-gnu', out='dist', revision=None):
         return make_package(self.binary(target), target, revision or self.revision,
                             self.notices, self.root / out, self.root)
+
+    def receipt(self, path):
+        manifest = verify_archive(path)
+        value = {'schema': 'docsight.release-smoke/v1', 'version': manifest['version'],
+                 'target': manifest['target'], 'revision': manifest['revision'],
+                 'archive_sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'passed': True,
+                 'checks': [{'name': name, 'passed': True, 'error_code': None, 'elapsed_ms': 1} for name in SMOKE_CHECKS]}
+        receipt = path.parent / f"smoke-{manifest['target']}.json"
+        receipt.write_bytes(json_bytes(value))
+        return receipt
 
     def rewrite(self, path, transform):
         with zipfile.ZipFile(path) as archive:
@@ -184,7 +194,7 @@ class ReleaseTests(ReleaseFixture):
 
     def test_complete_release_aggregates_sorted_checksums(self):
         for target in TARGETS:
-            self.package(target)
+            self.receipt(self.package(target))
         result = collect_archives(self.root / 'dist')
         self.assertEqual(set(result['targets']), set(TARGETS))
         self.assertEqual(result['revision'], self.revision)
@@ -199,14 +209,40 @@ class ReleaseTests(ReleaseFixture):
 
     def test_mixed_revisions_are_rejected(self):
         for index, target in enumerate(TARGETS):
-            self.package(target, revision='b' * 40 if index == 0 else self.revision)
+            self.receipt(self.package(target, revision='b' * 40 if index == 0 else self.revision))
         with self.assertRaisesRegex(ToolError, 'same version'):
             collect_archives(self.root / 'dist')
 
     def test_bad_sidecar_is_rejected(self):
         for target in TARGETS:
             path = self.package(target)
+            self.receipt(path)
         path.with_name(path.name + '.sha256').write_text('wrong\n')
+        with self.assertRaises(ToolError):
+            collect_archives(self.root / 'dist')
+
+    def test_missing_native_receipts_prevent_release_aggregation(self):
+        for target in TARGETS:
+            self.package(target)
+        with self.assertRaises(FileNotFoundError):
+            collect_archives(self.root / 'dist')
+        self.assertFalse((self.root / 'dist/SHA256SUMS').exists())
+
+    def test_stale_smoke_receipt_is_rejected(self):
+        for target in TARGETS:
+            receipt = self.receipt(self.package(target))
+        value = json.loads(receipt.read_text())
+        value['archive_sha256'] = '0' * 64
+        receipt.write_bytes(json_bytes(value))
+        with self.assertRaises(ToolError):
+            collect_archives(self.root / 'dist')
+
+    def test_partial_smoke_receipt_cannot_claim_success(self):
+        for target in TARGETS:
+            receipt = self.receipt(self.package(target))
+        value = json.loads(receipt.read_text())
+        value['checks'] = value['checks'][:-1]
+        receipt.write_bytes(json_bytes(value))
         with self.assertRaises(ToolError):
             collect_archives(self.root / 'dist')
 
