@@ -24,11 +24,17 @@ def _license_files(package: dict[str, Any]) -> list[Path]:
         if license_path.is_symlink() or not license_path.is_file() or not license_path.resolve().is_relative_to(directory):
             raise ToolError('INVALID_LICENSE_PATH', 'Declared license file must remain inside the package')
         paths.add(license_path.resolve())
+    inspected = 0
     for path in directory.iterdir():
         name = path.name.upper()
         if name.startswith(('LICENSE', 'LICENCE', 'COPYING', 'UNLICENSE', 'NOTICE')):
-            candidates = list(path.rglob('*')) if path.is_dir() else [path]
+            if path.is_symlink():
+                raise ToolError('INVALID_LICENSE_PATH', 'License resources cannot follow symbolic links')
+            candidates = path.rglob('*') if path.is_dir() else [path]
             for candidate in candidates:
+                inspected += 1
+                if inspected > 512:
+                    raise ToolError('LICENSE_RESOURCE_LIMIT', 'License directories exceed the resource traversal limit')
                 if candidate.is_symlink() or not candidate.resolve().is_relative_to(directory):
                     raise ToolError('INVALID_LICENSE_PATH', 'License resources cannot follow symbolic links')
                 if candidate.is_file():

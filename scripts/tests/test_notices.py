@@ -1,4 +1,5 @@
 import copy
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -61,6 +62,13 @@ class NoticeTests(unittest.TestCase):
         self.metadata['workspace_members'] = ['dependency-1']
         with self.assertRaisesRegex(ToolError, 'empty'):
             generate_notices(self.metadata, self.lock)
+
+    @unittest.skipUnless(os.name == 'posix', 'Symbolic link creation requires platform permission')
+    def test_empty_symlinked_license_directory_is_rejected_without_traversal(self):
+        with tempfile.TemporaryDirectory() as outside:
+            (self.root / 'LICENSES').symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ToolError, 'symbolic'):
+                generate_notices(self.metadata, self.lock)
 
     def test_declared_custom_license_file_is_included(self):
         (self.root / 'terms.txt').write_text('Declared custom license text.\n')
