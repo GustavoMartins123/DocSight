@@ -674,3 +674,66 @@ fn preserves_document_with_unresolved_image_as_warning() -> Result<(), Box<dyn s
     );
     Ok(())
 }
+
+fn package_with_properties(
+    core: Option<&str>,
+    app: Option<&str>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let document = format!(r#"<w:document xmlns:w="{W_NS}"><w:body><w:p/></w:body></w:document>"#);
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    writer.start_file("[Content_Types].xml", options)?;
+    writer.write_all(b"<Types/>")?;
+    writer.start_file("word/document.xml", options)?;
+    writer.write_all(document.as_bytes())?;
+    if let Some(core) = core {
+        writer.start_file("docProps/core.xml", options)?;
+        writer.write_all(core.as_bytes())?;
+    }
+    if let Some(app) = app {
+        writer.start_file("docProps/app.xml", options)?;
+        writer.write_all(app.as_bytes())?;
+    }
+    Ok(writer.finish()?.into_inner())
+}
+
+#[test]
+fn reads_package_core_and_extended_properties() -> Result<(), Box<dyn std::error::Error>> {
+    let core = r#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Quarterly Report</dc:title><dc:creator>Ada Lovelace</dc:creator><dc:subject>Revenue</dc:subject></cp:coreProperties>"#;
+    let app = r#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Microsoft Office Word</Application></Properties>"#;
+    let source = DocumentSource::from_bytes(package_with_properties(Some(core), Some(app))?)?;
+    let document = parse_docx(&source)?;
+
+    assert_eq!(document.metadata.title.as_deref(), Some("Quarterly Report"));
+    assert_eq!(document.metadata.author.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(document.metadata.subject.as_deref(), Some("Revenue"));
+    assert_eq!(
+        document.metadata.producer.as_deref(),
+        Some("Microsoft Office Word")
+    );
+    Ok(())
+}
+
+#[test]
+fn reports_absent_package_properties_as_unknown() -> Result<(), Box<dyn std::error::Error>> {
+    let source = DocumentSource::from_bytes(package_with_properties(None, None)?)?;
+    let document = parse_docx(&source)?;
+
+    assert_eq!(document.metadata.title, None);
+    assert_eq!(document.metadata.author, None);
+    assert_eq!(document.metadata.subject, None);
+    assert_eq!(document.metadata.producer, None);
+    Ok(())
+}
+
+#[test]
+fn ignores_empty_package_property_elements() -> Result<(), Box<dyn std::error::Error>> {
+    let core = r#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>   </dc:title><dc:creator></dc:creator></cp:coreProperties>"#;
+    let source = DocumentSource::from_bytes(package_with_properties(Some(core), None)?)?;
+    let document = parse_docx(&source)?;
+
+    assert_eq!(document.metadata.title, None);
+    assert_eq!(document.metadata.author, None);
+    Ok(())
+}

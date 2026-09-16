@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
-const MAX_PACKAGE_ENTRIES: usize = 2_048;
-const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_XML_PART_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_BINARY_PART_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_COMPRESSION_RATIO: u64 = 200;
+pub const MAX_PACKAGE_ENTRIES: usize = 2_048;
+pub const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_XML_PART_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_BINARY_PART_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_COMPRESSION_RATIO: u64 = 200;
 const CENTRAL_DIRECTORY_HEADER_BYTES: usize = 46;
 const END_OF_CENTRAL_DIRECTORY_BYTES: usize = 22;
 
@@ -22,6 +22,8 @@ pub struct DocxParts {
     pub footnotes: Option<String>,
     pub endnotes: Option<String>,
     pub comments: Option<String>,
+    pub core_properties: Option<String>,
+    pub extended_properties: Option<String>,
     pub binary_part_digests: std::collections::BTreeMap<String, String>,
     pub inert_part_digests: std::collections::BTreeMap<String, String>,
 }
@@ -43,6 +45,8 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     let footnotes = read_xml_part(&mut archive, "word/footnotes.xml")?;
     let endnotes = read_xml_part(&mut archive, "word/endnotes.xml")?;
     let comments = read_xml_part(&mut archive, "word/comments.xml")?;
+    let core_properties = read_xml_part(&mut archive, "docProps/core.xml")?;
+    let extended_properties = read_xml_part(&mut archive, "docProps/app.xml")?;
 
     let mut header_names = Vec::new();
     let mut footer_names = Vec::new();
@@ -106,6 +110,8 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
         footnotes,
         endnotes,
         comments,
+        core_properties,
+        extended_properties,
         binary_part_digests,
         inert_part_digests,
     })

@@ -695,6 +695,7 @@ struct AgentCapabilitiesResult {
     output_modes: &'static [&'static str],
     agent_defaults: &'static str,
     limits: &'static [&'static str],
+    ingestion_limits: &'static [docsight_ingest::IngestionLimit],
     coordinate_system: &'static str,
     commands: Vec<CommandCapability>,
 }
@@ -1416,6 +1417,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
         output_modes: OUTPUT_MODES,
         agent_defaults: "JSON on stdout, no diagnostics on stderr, structured errors on stderr",
         limits: AGENT_LIMITS,
+        ingestion_limits: docsight_ingest::INGESTION_LIMITS,
         coordinate_system: "points at 1/72 inch with page origin at the top-left",
         commands: vec![
             CommandCapability {

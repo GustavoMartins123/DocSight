@@ -10,12 +10,15 @@ use roxmltree::{Document as XmlDocument, Node, ParsingOptions};
 use std::collections::{BTreeMap, BTreeSet};
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
+const EXTENDED_PROPERTIES_NS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties";
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const MAX_STYLE_DEPTH: usize = 64;
 const MAX_TABLE_DEPTH: usize = 32;
-const MAX_XML_DEPTH: usize = 64;
-const MAX_XML_NODES: u32 = 65_536;
-const MAX_XML_TOKEN_BYTES: usize = 1024 * 1024;
+pub const MAX_XML_DEPTH: usize = 64;
+pub const MAX_XML_NODES: u32 = 65_536;
+pub const MAX_XML_TOKEN_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
 struct StyleDefinition {
@@ -258,7 +261,10 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         sha256: source.sha256().to_owned(),
         format: DocumentFormat::Docx,
         size_bytes: source.size_bytes(),
-        metadata: DocumentMetadata::default(),
+        metadata: document_metadata(
+            parts.core_properties.as_deref(),
+            parts.extended_properties.as_deref(),
+        )?,
         styles: converted_styles,
         sections,
         pages: Vec::new(),
@@ -271,6 +277,38 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     };
     validate_canonical(&document)?;
     Ok(document)
+}
+
+fn document_metadata(
+    core_xml: Option<&str>,
+    extended_xml: Option<&str>,
+) -> Result<DocumentMetadata, DocsightError> {
+    let mut metadata = DocumentMetadata::default();
+    if let Some(xml) = core_xml {
+        let document = parse_xml(xml)?;
+        let root = document.root_element();
+        metadata.title = namespaced_text(root, DC_NS, "title");
+        metadata.author = namespaced_text(root, DC_NS, "creator");
+        metadata.subject = namespaced_text(root, DC_NS, "subject");
+    }
+    if let Some(xml) = extended_xml {
+        let document = parse_xml(xml)?;
+        metadata.producer = namespaced_text(
+            document.root_element(),
+            EXTENDED_PROPERTIES_NS,
+            "Application",
+        );
+    }
+    Ok(metadata)
+}
+
+fn namespaced_text(root: Node<'_, '_>, namespace: &str, name: &str) -> Option<String> {
+    let text = root
+        .children()
+        .find(|child| child.has_tag_name((namespace, name)))?
+        .text()?
+        .trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 fn preserve_inert_parts(

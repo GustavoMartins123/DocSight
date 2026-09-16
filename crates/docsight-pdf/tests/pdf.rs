@@ -1232,3 +1232,151 @@ fn reports_non_uniform_stroke_as_reduced_render_fidelity() -> Result<(), Box<dyn
     );
     Ok(())
 }
+
+fn build_pdf_with_trailer(objects: &[String], trailer_entries: &str) -> Vec<u8> {
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R {trailer_entries} >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
+fn page_objects(page_entries: &str, extra: &[String]) -> Vec<String> {
+    let content = "BT /F1 12 Tf 20 70 Td (Anchor) Tj ET";
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R {page_entries} >>"
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    objects.extend_from_slice(extra);
+    objects
+}
+
+#[test]
+fn reads_the_document_information_dictionary() -> Result<(), Box<dyn std::error::Error>> {
+    let objects = page_objects(
+        "",
+        &["<< /Title <FEFF00500072006F006A006500740061> /Author (Ada Lovelace) /Subject (Quarterly \\050draft\\051) /Producer (Acrobat 9.0) >>".to_owned()],
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_trailer(&objects, "/Info 6 0 R"))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert_eq!(document.metadata.title.as_deref(), Some("Projeta"));
+    assert_eq!(document.metadata.author.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(
+        document.metadata.subject.as_deref(),
+        Some("Quarterly (draft)")
+    );
+    assert_eq!(document.metadata.producer.as_deref(), Some("Acrobat 9.0"));
+    Ok(())
+}
+
+#[test]
+fn reports_absent_document_information_as_unknown() -> Result<(), Box<dyn std::error::Error>> {
+    let source = DocumentSource::from_bytes(sample_pdf())?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert_eq!(document.metadata.title, None);
+    assert_eq!(
+        document.metadata.producer, None,
+        "an absent Info dictionary must not be reported as if the engine produced the document"
+    );
+    Ok(())
+}
+
+#[test]
+fn extracts_uri_link_annotations_with_page_local_geometry() -> Result<(), Box<dyn std::error::Error>>
+{
+    let objects = page_objects(
+        "/Annots [6 0 R]",
+        &["<< /Type /Annot /Subtype /Link /Rect [20 60 120 80] /A << /S /URI /URI (https://docsight.dev) >> >>".to_owned()],
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_trailer(&objects, ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert_eq!(document.links.len(), 1);
+    let link = &document.links[0];
+    assert_eq!(link.target, "https://docsight.dev");
+    assert!(link.is_external);
+    assert_eq!(link.page, Some(1));
+    assert!(link.id.as_str().starts_with("lnk_"));
+    Ok(())
+}
+
+#[test]
+fn records_internal_destinations_as_non_external_links() -> Result<(), Box<dyn std::error::Error>> {
+    let objects = page_objects(
+        "/Annots [6 0 R]",
+        &["<< /Type /Annot /Subtype /Link /Rect [20 60 120 80] /Dest /Chapter1 >>".to_owned()],
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_trailer(&objects, ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert_eq!(document.links.len(), 1);
+    assert_eq!(document.links[0].target, "Chapter1");
+    assert!(!document.links[0].is_external);
+    Ok(())
+}
+
+#[test]
+fn exposes_non_link_annotations_as_page_overlays() -> Result<(), Box<dyn std::error::Error>> {
+    let objects = page_objects(
+        "/Annots [6 0 R]",
+        &[
+            "<< /Type /Annot /Subtype /Text /Rect [10 20 30 40] /Contents (Needs review) >>"
+                .to_owned(),
+        ],
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_trailer(&objects, ""))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert!(document.links.is_empty());
+    let overlay = document.pages[0]
+        .overlays
+        .first()
+        .ok_or("annotation overlay missing")?;
+    assert_eq!(overlay.text, "Needs review");
+    assert_eq!(overlay.page, 1);
+    let bbox = overlay.bbox.ok_or("annotation geometry missing")?;
+    assert_eq!(bbox.x0, 10.0);
+    assert_eq!(bbox.y0, 60.0);
+    assert_eq!(bbox.x1, 30.0);
+    assert_eq!(bbox.y1, 80.0);
+    Ok(())
+}
+
+#[test]
+fn rejects_annotations_that_are_not_dictionaries() -> Result<(), Box<dyn std::error::Error>> {
+    let objects = page_objects("/Annots [6 0 R]", &["[1 2 3]".to_owned()]);
+    let source = DocumentSource::from_bytes(build_pdf_with_trailer(&objects, ""))?;
+    let error = PdfDocument::open(&source)?.to_document();
+
+    assert!(matches!(
+        error,
+        Err(DocsightError::MalformedDocument { .. })
+            | Err(DocsightError::MalformedDocumentAt { .. })
+    ));
+    Ok(())
+}

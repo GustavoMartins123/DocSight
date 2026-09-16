@@ -16,7 +16,8 @@
     "limits",
     "coordinate_system",
     "commands",
-    "errors"
+    "errors",
+    "ingestion_limits"
   ],
   "properties": {
     "profile": {
@@ -209,6 +210,37 @@
           }
         },
         "additionalProperties": false
+      }
+    },
+    "ingestion_limits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "applies_to",
+          "value",
+          "unit",
+          "effect"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "applies_to": {
+            "type": "string"
+          },
+          "value": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "unit": {
+            "type": "string"
+          },
+          "effect": {
+            "type": "string"
+          }
+        }
       }
     }
   },

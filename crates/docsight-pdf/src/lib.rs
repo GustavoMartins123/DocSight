@@ -12,7 +12,8 @@ use content::{
 };
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
-    DocumentSource, ErrorLocation, IrVersion, ObjectId, Page, Rect, SourceSpan, validate_canonical,
+    DocumentSource, ErrorLocation, Hyperlink, IrVersion, ObjectId, Overlay, OverlayKind, Page,
+    Rect, SourceSpan, validate_canonical,
 };
 use filters::decode_stream;
 use raster::{MAX_DPI, MIN_DPI};
@@ -25,6 +26,9 @@ use syntax::{ObjectRef, Value, Xref, XrefEntry, malformed, parse_object, parse_x
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PAGES: u32 = 10_000;
+pub const MAX_ANNOTATIONS: u32 = 4_096;
+pub use content::MAX_OPERATIONS as PDF_MAX_CONTENT_OPERATIONS;
+pub use font::MAX_FONT_BYTES as PDF_MAX_FONT_BYTES;
 pub use raster::MIN_DPI as PDF_MIN_DPI;
 pub use raster::{
     MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS,
@@ -357,9 +361,144 @@ impl<'a> PdfDocument<'a> {
         })
     }
 
+    fn page_annotations(
+        &self,
+        number: u32,
+        page: &PageRecord,
+    ) -> Result<(Vec<Hyperlink>, Vec<Overlay>), DocsightError> {
+        let mut links = Vec::new();
+        let mut overlays = Vec::new();
+        for (index, value) in page.annotations.iter().enumerate() {
+            let dict = match self.store.resolve(value)? {
+                Value::Dict(dict) => dict,
+                Value::Null => continue,
+                _ => return Err(malformed("page annotation must be a dictionary")),
+            };
+            let subtype = match dict.get("Subtype") {
+                Some(Value::Name(name)) => name.clone(),
+                _ => return Err(malformed("page annotation has no Subtype name")),
+            };
+            let bbox = match dict.get("Rect") {
+                Some(value) => Some(self.annotation_rect(value, page)?),
+                None => None,
+            };
+            let source_path = format!("pdf::page[{number}]::annot[{index}]");
+            if subtype == "Link" {
+                let Some(target) = self.link_target(&dict)? else {
+                    continue;
+                };
+                links.push(Hyperlink {
+                    id: self.source.object_id("lnk", &source_path),
+                    text: String::new(),
+                    target: target.target,
+                    is_external: target.is_external,
+                    page: Some(number),
+                    anchor_path: Some(source_path.clone()),
+                    source: SourceSpan::new(source_path),
+                });
+                continue;
+            }
+            let text = match dict.get("Contents") {
+                Some(value) => match self.store.resolve(value)? {
+                    Value::String(bytes) => decode_pdf_text_string(&bytes).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                None => String::new(),
+            };
+            overlays.push(Overlay {
+                id: self.source.object_id("anno", &source_path),
+                kind: OverlayKind::Annotation,
+                page: number,
+                bbox,
+                text,
+                source: SourceSpan::new(source_path),
+            });
+        }
+        Ok((links, overlays))
+    }
+
+    fn annotation_rect(&self, value: &Value, page: &PageRecord) -> Result<Rect, DocsightError> {
+        let native = parse_box(&self.store, value)?;
+        let left = page.media_box.x0;
+        let top = page.media_box.y1;
+        Rect::new(
+            native.x0 - left,
+            top - native.y1,
+            native.x1 - left,
+            top - native.y0,
+        )
+    }
+
+    fn link_target(
+        &self,
+        annotation: &BTreeMap<String, Value>,
+    ) -> Result<Option<LinkTarget>, DocsightError> {
+        if let Some(value) = annotation.get("A") {
+            let action = match self.store.resolve(value)? {
+                Value::Dict(dict) => dict,
+                Value::Null => return Ok(None),
+                _ => return Err(malformed("link annotation action must be a dictionary")),
+            };
+            let kind = match action.get("S") {
+                Some(Value::Name(name)) => name.clone(),
+                _ => return Err(malformed("link action has no S name")),
+            };
+            if kind != "URI" {
+                return Ok(None);
+            }
+            let Some(uri) = action.get("URI") else {
+                return Ok(None);
+            };
+            let Value::String(bytes) = self.store.resolve(uri)? else {
+                return Err(malformed("link action URI must be a string"));
+            };
+            return Ok(decode_pdf_text_string(&bytes).map(|target| LinkTarget {
+                target,
+                is_external: true,
+            }));
+        }
+        let Some(destination) = annotation.get("Dest") else {
+            return Ok(None);
+        };
+        Ok(
+            destination_name(&self.store.resolve(destination)?).map(|target| LinkTarget {
+                target,
+                is_external: false,
+            }),
+        )
+    }
+
+    fn document_info(&self) -> Result<DocumentMetadata, DocsightError> {
+        let Some(info) = self.store.xref.trailer.get("Info") else {
+            return Ok(DocumentMetadata::default());
+        };
+        let dict = match self.store.resolve(info)? {
+            Value::Dict(dict) => dict,
+            Value::Null => return Ok(DocumentMetadata::default()),
+            _ => return Err(malformed("trailer Info is not a dictionary")),
+        };
+        let entry = |key: &str| -> Result<Option<String>, DocsightError> {
+            let Some(value) = dict.get(key) else {
+                return Ok(None);
+            };
+            match self.store.resolve(value)? {
+                Value::String(bytes) => Ok(decode_pdf_text_string(&bytes)),
+                Value::Null => Ok(None),
+                _ => Ok(None),
+            }
+        };
+        Ok(DocumentMetadata {
+            title: entry("Title")?,
+            author: entry("Author")?,
+            subject: entry("Subject")?,
+            producer: entry("Producer")?,
+        })
+    }
+
     pub fn to_document(&self) -> Result<Document, DocsightError> {
         let mut blocks = Vec::new();
         let mut pages = Vec::new();
+        let mut links = Vec::new();
         let mut all_warnings = Vec::new();
         let mut global_reading_order = 0_u32;
 
@@ -396,12 +535,14 @@ impl<'a> PdfDocument<'a> {
             ));
             blocks.extend(reconstructed.blocks);
 
+            let (page_links, overlays) = self.page_annotations(page_num, page_record)?;
+            links.extend(page_links);
             pages.push(Page {
                 number: page_num,
                 width_pt: page_record.media_box.width(),
                 height_pt: page_record.media_box.height(),
                 block_ids: reconstructed.block_ids,
-                overlays: Vec::new(),
+                overlays,
             });
         }
 
@@ -411,18 +552,13 @@ impl<'a> PdfDocument<'a> {
             sha256: self.source.sha256().to_owned(),
             format: DocumentFormat::Pdf,
             size_bytes: self.source.size_bytes(),
-            metadata: DocumentMetadata {
-                title: None,
-                author: None,
-                subject: None,
-                producer: Some(ENGINE_NAME.to_owned()),
-            },
+            metadata: self.document_info()?,
             styles: Vec::new(),
             sections: Vec::new(),
             pages,
             blocks,
             resources: Vec::new(),
-            links: Vec::new(),
+            links,
             comments: Vec::new(),
             tracked_changes: docsight_core::TrackedChanges::default(),
             warnings: all_warnings,
@@ -957,6 +1093,7 @@ struct PageRecord {
     media_box: NativeBox,
     resources: Option<Value>,
     contents: Vec<Value>,
+    annotations: Vec<Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -1040,10 +1177,25 @@ fn collect_pages(
                     _ => return Err(malformed("Contents must be a stream or array of streams")),
                 },
             };
+            let annotations = match dict.get("Annots") {
+                None => Vec::new(),
+                Some(value) => match store.resolve(value)? {
+                    Value::Array(values) => values,
+                    Value::Null => Vec::new(),
+                    _ => return Err(malformed("Annots must be an array")),
+                },
+            };
+            if annotations.len() > MAX_ANNOTATIONS as usize {
+                return Err(DocsightError::ResourceLimit {
+                    resource: "PDF page annotations".to_owned(),
+                    limit: u64::from(MAX_ANNOTATIONS),
+                });
+            }
             pages.push(PageRecord {
                 media_box: effective_box,
                 resources: current.resources,
                 contents,
+                annotations,
             });
         }
         _ => return Err(malformed("invalid page tree node Type")),
@@ -1272,4 +1424,95 @@ fn content_limit() -> DocsightError {
 pub fn parse_pdf(source: &DocumentSource) -> Result<Document, DocsightError> {
     let pdf = PdfDocument::open(source)?;
     pdf.to_document()
+}
+
+const PDF_DOC_ENCODING_HIGH: [char; 33] = [
+    '\u{2022}',
+    '\u{2020}',
+    '\u{2021}',
+    '\u{2026}',
+    '\u{2014}',
+    '\u{2013}',
+    '\u{0192}',
+    '\u{2044}',
+    '\u{2039}',
+    '\u{203A}',
+    '\u{2212}',
+    '\u{2030}',
+    '\u{201E}',
+    '\u{201C}',
+    '\u{201D}',
+    '\u{2018}',
+    '\u{2019}',
+    '\u{201A}',
+    '\u{2122}',
+    '\u{FB01}',
+    '\u{FB02}',
+    '\u{0141}',
+    '\u{0152}',
+    '\u{0160}',
+    '\u{0178}',
+    '\u{017D}',
+    '\u{0131}',
+    '\u{0142}',
+    '\u{0153}',
+    '\u{0161}',
+    '\u{017E}',
+    char::REPLACEMENT_CHARACTER,
+    '\u{20AC}',
+];
+
+const PDF_DOC_ENCODING_ACCENTS: [char; 8] = [
+    '\u{02D8}', '\u{02C7}', '\u{02C6}', '\u{02D9}', '\u{02DD}', '\u{02DB}', '\u{02DA}', '\u{02DC}',
+];
+
+fn decode_pdf_text_string(bytes: &[u8]) -> Option<String> {
+    let text = if bytes.starts_with(&[0xFE, 0xFF]) {
+        decode_utf16_be(&bytes[2..])
+    } else {
+        decode_pdf_doc_encoding(bytes)
+    };
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn decode_utf16_be(bytes: &[u8]) -> String {
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .collect();
+    char::decode_utf16(units)
+        .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect()
+}
+
+fn decode_pdf_doc_encoding(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| match byte {
+            0x18..=0x1F => PDF_DOC_ENCODING_ACCENTS[usize::from(byte - 0x18)],
+            0x20..=0x7E => char::from(*byte),
+            0x80..=0xA0 => PDF_DOC_ENCODING_HIGH[usize::from(byte - 0x80)],
+            0xA1..=0xFF => char::from(*byte),
+            _ => char::REPLACEMENT_CHARACTER,
+        })
+        .collect()
+}
+
+struct LinkTarget {
+    target: String,
+    is_external: bool,
+}
+
+fn destination_name(value: &Value) -> Option<String> {
+    match value {
+        Value::Name(name) => Some(name.clone()),
+        Value::String(bytes) => decode_pdf_text_string(bytes),
+        Value::Array(values) => match values.first() {
+            Some(Value::Ref(reference)) => Some(format!("page object {}", reference.number)),
+            Some(Value::Int(index)) => Some(format!("page index {index}")),
+            _ => None,
+        },
+        _ => None,
+    }
 }
