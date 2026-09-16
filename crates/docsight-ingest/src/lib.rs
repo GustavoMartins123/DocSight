@@ -4,9 +4,16 @@ use docsight_ooxml::parse_docx;
 use docsight_pdf::PdfDocument;
 
 pub fn ingest(source: &DocumentSource) -> Result<Document, DocsightError> {
+    ingest_with_password(source, b"")
+}
+
+pub fn ingest_with_password(
+    source: &DocumentSource,
+    password: &[u8],
+) -> Result<Document, DocsightError> {
     match source.format() {
         DocumentFormat::Docx => Ok(ingest_docx(source)?.document),
-        DocumentFormat::Pdf => PdfDocument::open(source)?.to_document(),
+        DocumentFormat::Pdf => PdfDocument::open_with_password(source, password)?.to_document(),
     }
 }
 

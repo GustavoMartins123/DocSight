@@ -2,12 +2,14 @@ pub mod canonical;
 pub mod evidence;
 mod glyph;
 pub mod ir;
+pub mod object;
 pub mod png;
 
 pub use canonical::*;
 pub use evidence::*;
 pub use glyph::*;
 pub use ir::*;
+pub use object::*;
 pub use png::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

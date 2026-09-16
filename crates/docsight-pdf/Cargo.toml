@@ -6,14 +6,20 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+aes.workspace = true
+cbc.workspace = true
 docsight-core = { path = "../docsight-core" }
 docsight-tables = { path = "../docsight-tables" }
 flate2.workspace = true
+md-5.workspace = true
+rc4.workspace = true
 serde.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
+md-5.workspace = true
+rc4.workspace = true
 tempfile.workspace = true
 
 [lints]

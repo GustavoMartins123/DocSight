@@ -274,17 +274,21 @@ fn decodes_flate_streams_and_exposes_span_provenance() -> Result<(), DocsightErr
 }
 
 #[test]
-fn rejects_encrypted_documents_with_dedicated_error() -> Result<(), DocsightError> {
+fn rejects_a_malformed_encryption_dictionary() -> Result<(), DocsightError> {
     let pdf =
         String::from_utf8(sample_pdf()).map_err(|error| DocsightError::MalformedDocument {
             message: error.to_string(),
         })?;
     let encrypted = pdf.replace("/Root 1 0 R >>", "/Root 1 0 R /Encrypt 4 0 R >>");
     let source = DocumentSource::from_bytes(encrypted.into_bytes())?;
-    assert!(matches!(
-        PdfDocument::open(&source),
-        Err(DocsightError::EncryptedDocument)
-    ));
+    assert!(
+        matches!(
+            PdfDocument::open(&source),
+            Err(DocsightError::MalformedDocument { .. })
+                | Err(DocsightError::MalformedDocumentAt { .. })
+        ),
+        "an Encrypt reference to a non-encryption object is malformed, not a password prompt"
+    );
     Ok(())
 }
 

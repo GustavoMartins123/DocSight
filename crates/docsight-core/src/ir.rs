@@ -1,7 +1,7 @@
 use crate::{Diagnostic, DocsightError, DocumentFormat, ObjectId, Rect};
 use serde::{Deserialize, Serialize};
 
-pub const IR_SCHEMA_VERSION: &str = "1.1";
+pub const IR_SCHEMA_VERSION: &str = "1.2";
 pub const IR_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -379,6 +379,8 @@ pub struct Hyperlink {
     pub target: String,
     pub is_external: bool,
     pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox: Option<Rect>,
     #[serde(default)]
     pub anchor_path: Option<String>,
     pub source: SourceSpan,

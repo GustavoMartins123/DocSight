@@ -1,4 +1,5 @@
 mod content;
+mod crypt;
 mod filters;
 mod font;
 mod raster;
@@ -10,6 +11,7 @@ use content::{
     LineJoin, MAX_FORM_XOBJECT_DEPTH, Paint, PathSegment, Point, TextRun, VisualIssue,
     XObjectEntry, ext_graphics_states_from_resources, fonts_from_resources, parse_content,
 };
+use crypt::Decryptor;
 use docsight_core::{
     Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat, DocumentMetadata,
     DocumentSource, ErrorLocation, Hyperlink, IrVersion, ObjectId, Overlay, OverlayKind, Page,
@@ -218,6 +220,13 @@ pub struct PdfDocument<'a> {
 
 impl<'a> PdfDocument<'a> {
     pub fn open(source: &'a DocumentSource) -> Result<Self, DocsightError> {
+        Self::open_with_password(source, b"")
+    }
+
+    pub fn open_with_password(
+        source: &'a DocumentSource,
+        password: &[u8],
+    ) -> Result<Self, DocsightError> {
         if source.format() != DocumentFormat::Pdf {
             return Err(DocsightError::UnsupportedOperation {
                 operation: "PDF parsing".to_owned(),
@@ -225,18 +234,31 @@ impl<'a> PdfDocument<'a> {
             });
         }
         let xref = parse_xref(source.bytes())?;
-        if xref.trailer.contains_key("Encrypt") {
-            return Err(DocsightError::EncryptedDocument);
-        }
         let root = match xref.trailer.get("Root") {
             Some(Value::Ref(reference)) => *reference,
             _ => return Err(malformed("trailer has no indirect Root reference")),
         };
-        let store = ObjectStore {
+        let mut store = ObjectStore {
             bytes: source.bytes(),
             xref,
             object_streams: RefCell::new(BTreeMap::new()),
+            decryptor: None,
         };
+        if let Some(entry) = store.xref.trailer.get("Encrypt").cloned() {
+            let dictionary = store.resolve_dict(&entry)?;
+            let first_id = match store.xref.trailer.get("ID") {
+                Some(Value::Array(values)) => match values.first() {
+                    Some(Value::String(bytes)) => bytes.clone(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            store.decryptor = Some(Decryptor::from_encrypt_dictionary(
+                &dictionary,
+                &first_id,
+                password,
+            )?);
+        }
         let mut pages = Vec::new();
         let mut active = BTreeSet::new();
         let catalog = store.resolve_dict(&Value::Ref(root))?;
@@ -393,6 +415,7 @@ impl<'a> PdfDocument<'a> {
                     target: target.target,
                     is_external: target.is_external,
                     page: Some(number),
+                    bbox,
                     anchor_path: Some(source_path.clone()),
                     source: SourceSpan::new(source_path),
                 });
@@ -910,6 +933,43 @@ struct ContentSegment {
     object: String,
 }
 
+fn decrypt_value(
+    decryptor: &Decryptor,
+    reference: ObjectRef,
+    value: &mut Value,
+    depth: usize,
+) -> Result<(), DocsightError> {
+    if depth > 64 {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF encrypted object nesting".to_owned(),
+            limit: 64,
+        });
+    }
+    match value {
+        Value::String(bytes) => *bytes = decryptor.decrypt_string(reference, bytes)?,
+        Value::Array(values) => {
+            for item in values {
+                decrypt_value(decryptor, reference, item, depth + 1)?;
+            }
+        }
+        Value::Dict(entries) => {
+            for item in entries.values_mut() {
+                decrypt_value(decryptor, reference, item, depth + 1)?;
+            }
+        }
+        Value::Stream(stream) => {
+            for item in stream.dict.values_mut() {
+                decrypt_value(decryptor, reference, item, depth + 1)?;
+            }
+            if !matches!(stream.dict.get("Type"), Some(Value::Name(name)) if name == "XRef") {
+                stream.data = decryptor.decrypt_stream(reference, &stream.data)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn trace_resources(
     fonts: &BTreeMap<String, FontInfo>,
     xobjects: &BTreeSet<String>,
@@ -1070,6 +1130,7 @@ struct ObjectStore<'a> {
     bytes: &'a [u8],
     xref: Xref,
     object_streams: RefCell<BTreeMap<u32, Rc<ObjectStreamIndex>>>,
+    decryptor: Option<Decryptor>,
 }
 
 impl ObjectStore<'_> {
@@ -1082,7 +1143,11 @@ impl ObjectStore<'_> {
         })?;
         match entry {
             XrefEntry::Offset(offset) => {
-                parse_object(self.bytes, offset, reference, &self.xref.entries)
+                let mut value = parse_object(self.bytes, offset, reference, &self.xref.entries)?;
+                if let Some(decryptor) = &self.decryptor {
+                    decrypt_value(decryptor, reference, &mut value, 0)?;
+                }
+                Ok(value)
             }
             XrefEntry::Compressed { stream, index } => {
                 self.compressed_object(reference, stream, index)
