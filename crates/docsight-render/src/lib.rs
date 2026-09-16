@@ -2,7 +2,9 @@ mod docx_raster;
 pub mod hit;
 pub mod trace;
 
-use docsight_core::{Diagnostic, DocsightError, DocumentFormat, DocumentSource, Rect, write_all};
+use docsight_core::{
+    Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect, write_all,
+};
 use docsight_ingest::ingest_docx;
 use docsight_pdf::{PdfDocument, RasterizedPage};
 use docx_raster::rasterize_docx_page;
@@ -77,20 +79,7 @@ pub fn render_docx(
         RenderTarget::Page { page } => (*page, None, None),
         RenderTarget::Region { page, bbox } => (*page, Some(*bbox), None),
         RenderTarget::Object { id } => {
-            let block = laid_out
-                .document
-                .find_block(id)
-                .ok_or_else(|| DocsightError::ObjectNotFound { object: id.clone() })?;
-            let page = block
-                .page
-                .ok_or_else(|| DocsightError::UnsupportedFeature {
-                    feature: "object has no page layout".to_owned(),
-                })?;
-            let bbox = block
-                .bbox
-                .ok_or_else(|| DocsightError::UnsupportedFeature {
-                    feature: "object has no geometry".to_owned(),
-                })?;
+            let (page, bbox) = object_crop_target(&laid_out.document, id)?;
             (page, Some(bbox), Some(id.clone()))
         }
     };
@@ -107,15 +96,7 @@ pub fn render_docx(
             let page_bbox = Rect::new(0.0, 0.0, page.width_pt, page.height_pt)?;
             let (clipped, was_clipped) = clip_object_crop(page_bbox, bbox, &object)?;
             if was_clipped {
-                warnings.push(Diagnostic {
-                    code: "OBJECT_CROP_CLIPPED_TO_PAGE".to_owned(),
-                    severity: docsight_core::DiagnosticSeverity::Warning,
-                    message: format!("object {object} extends beyond page {page_num}"),
-                    effect: "the crop contains only the portion intersecting the assigned page"
-                        .to_owned(),
-                    object: Some(docsight_core::ObjectId::from_raw(object)),
-                    page: Some(page_num),
-                });
+                warnings.push(clipped_crop_warning(&object, page_num));
             }
             Some(clipped)
         }
@@ -204,24 +185,49 @@ pub fn render_pdf(
                 document.rasterize(page, request.dpi, Some(bbox))?
             } else {
                 let doc = document.to_document()?;
-                let block = doc
-                    .find_block(id)
-                    .ok_or_else(|| DocsightError::ObjectNotFound { object: id.clone() })?;
-                let page = block
-                    .page
-                    .ok_or_else(|| DocsightError::UnsupportedFeature {
-                        feature: "object has no page layout".to_owned(),
+                let (page, bbox) = object_crop_target(&doc, id)?;
+                let page_record = doc
+                    .page(page)
+                    .ok_or_else(|| DocsightError::ObjectNotFound {
+                        object: format!("page {page}"),
                     })?;
-                let bbox = block
-                    .bbox
-                    .ok_or_else(|| DocsightError::UnsupportedFeature {
-                        feature: "object has no geometry".to_owned(),
-                    })?;
-                document.rasterize(page, request.dpi, Some(bbox))?
+                let page_bbox = Rect::new(0.0, 0.0, page_record.width_pt, page_record.height_pt)?;
+                let (clipped, was_clipped) = clip_object_crop(page_bbox, bbox, id)?;
+                let mut raster = document.rasterize(page, request.dpi, Some(clipped))?;
+                if was_clipped {
+                    raster.warnings.push(clipped_crop_warning(id, page));
+                }
+                raster
             }
         }
     };
     Ok(from_raster(raster))
+}
+
+fn object_crop_target(document: &Document, id: &str) -> Result<(u32, Rect), DocsightError> {
+    let object = document
+        .resolve_object(id)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: id.to_owned(),
+        })?;
+    let page = object.page().ok_or_else(|| DocsightError::UnsupportedFeature {
+        feature: format!("object {id} has no page placement"),
+    })?;
+    let bbox = object.bbox().ok_or_else(|| DocsightError::UnsupportedFeature {
+        feature: format!("object {id} has no crop geometry"),
+    })?;
+    Ok((page, bbox))
+}
+
+fn clipped_crop_warning(object: &str, page: u32) -> Diagnostic {
+    Diagnostic {
+        code: "OBJECT_CROP_CLIPPED_TO_PAGE".to_owned(),
+        severity: docsight_core::DiagnosticSeverity::Warning,
+        message: format!("object {object} extends beyond page {page}"),
+        effect: "the crop contains only the portion intersecting the assigned page".to_owned(),
+        object: Some(docsight_core::ObjectId::from_raw(object)),
+        page: Some(page),
+    }
 }
 
 fn from_raster(raster: RasterizedPage) -> RenderedImage {

@@ -49,6 +49,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 - Paragraph and heading reconstruction with per-object confidence.
 - Table inference with an explicit detector name and confidence score.
 - Form XObjects are traversed: their content stream is parsed with the invoking graphics state composed with the form `/Matrix`, and their text, geometry and nested forms reach the IR. Cycles and nesting beyond 12 levels fail closed.
+- Encrypted documents through the standard security handler: RC4 40 to 128 bit (revisions 2 to 4), AES-128 (`AESV2`) and AES-256 (`AESV3`, revisions 5 and 6), with per-object keys, crypt filters and decryption of both strings and streams. A document whose user password is empty — the common permission-only case — opens directly; otherwise the correct password must be supplied through the library API.
 - Document information from the trailer `/Info` dictionary, decoding both UTF-16BE and PDFDocEncoding strings. An absent dictionary is reported as unknown rather than filled in with the engine's own name.
 - Page annotations: `/Link` annotations with a `/URI` action or a `/Dest` destination become hyperlinks with page-local geometry, and every other annotation subtype becomes an `Annotation` overlay carrying its `/Contents` text. Link targets are never fetched.
 
@@ -71,7 +72,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 
 - Typed diagnostics with a stable code, severity, message, consequence and the affected object or page.
 - Structured errors on stderr with the exit codes `0`, `2`, `10`, `11`, `12`, `13`, `20`, `21`, `30` and `40`, decidable without string matching.
-- Encrypted documents are rejected before inspection with exit code `12`.
+- Documents whose password is unknown are rejected with exit code `12`; nothing is guessed.
 
 ---
 
@@ -98,6 +99,7 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | Embedded objects and active content preserved inert, digest only | `DOCX_EMBEDDED_OBJECT_INERT`, `DOCX_ACTIVE_CONTENT_INERT` |
 | A hyperlink target page cannot be resolved | `DOCX_LINK_PAGE_UNRESOLVED` |
 | Contextual spacing is declared but not applied, so spacing is added even between paragraphs of the same style | `DOCX_CONTEXTUAL_SPACING_IGNORED` |
+
 
 Tracked changes are counted, not reconstructed: `tracked_changes` reports insertion and deletion counts without per-revision authorship or content.
 
@@ -162,7 +164,7 @@ These are not limitations to be fixed inside the current product. They are delib
 - **External document engines.** No Word, LibreOffice, Excel, COM automation, `unoconv` or remote converter as a runtime dependency; no MuPDF or other third-party document interpreter in the binary. MuPDF may be used only as an optional external oracle during development.
 - **Retrieval and question answering.** No RAG, no vector search, no embeddings, no natural-language queries over documents.
 - **Word-identical rendering.** DocSight measures and publishes the fidelity it achieves; it does not claim to reproduce Word's or Acrobat's output pixel for pixel.
-- **Encrypted document recovery.** Password-protected documents are rejected, not decrypted or brute-forced.
+- **Password recovery.** Decryption requires the correct password, or an empty user password where the document permits it. No guessing, dictionary search or owner-password circumvention.
 
 ---
 

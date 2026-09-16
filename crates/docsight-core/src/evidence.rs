@@ -1,5 +1,6 @@
 use crate::{
-    Block, BlockKind, DocsightError, Document, DocumentFormat, DocumentSource, ObjectId, Rect,
+    Block, BlockKind, DocsightError, Document, DocumentFormat, DocumentObject, DocumentSource,
+    ObjectId, OverlayKind, Rect,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -294,7 +295,9 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
 pub struct EvidenceRecord {
     pub document_digest: String,
     pub object_id: ObjectId,
-    pub kind: BlockKind,
+    pub kind: EvidenceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<ObjectId>,
     pub source_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_offset: Option<u64>,
@@ -302,8 +305,10 @@ pub struct EvidenceRecord {
     pub page: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bbox: Option<Rect>,
-    pub z_index: i32,
-    pub reading_order: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z_index: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading_order: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     pub fidelity: FidelityProfile,
@@ -375,6 +380,64 @@ pub struct CoverageReport {
     pub reason_codes: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceKind {
+    Paragraph,
+    Heading,
+    ListItem,
+    Table,
+    Figure,
+    Shape,
+    Note,
+    Unknown,
+    TableCell,
+    Header,
+    Footer,
+    Watermark,
+    CommentMarker,
+    Annotation,
+    Hyperlink,
+}
+
+impl EvidenceKind {
+    pub fn of(object: &DocumentObject<'_>) -> Self {
+        match object {
+            DocumentObject::Block { block, .. } => block.kind.into(),
+            DocumentObject::TableCell { .. } => Self::TableCell,
+            DocumentObject::Overlay(overlay) => overlay.kind.into(),
+            DocumentObject::Hyperlink(_) => Self::Hyperlink,
+        }
+    }
+}
+
+impl From<BlockKind> for EvidenceKind {
+    fn from(kind: BlockKind) -> Self {
+        match kind {
+            BlockKind::Paragraph => Self::Paragraph,
+            BlockKind::Heading => Self::Heading,
+            BlockKind::ListItem => Self::ListItem,
+            BlockKind::Table => Self::Table,
+            BlockKind::Figure => Self::Figure,
+            BlockKind::Shape => Self::Shape,
+            BlockKind::Note => Self::Note,
+            BlockKind::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<OverlayKind> for EvidenceKind {
+    fn from(kind: OverlayKind) -> Self {
+        match kind {
+            OverlayKind::Header => Self::Header,
+            OverlayKind::Footer => Self::Footer,
+            OverlayKind::Watermark => Self::Watermark,
+            OverlayKind::CommentMarker => Self::CommentMarker,
+            OverlayKind::Annotation => Self::Annotation,
+        }
+    }
+}
+
 pub fn compute_evidence(
     doc: &Document,
     source: &DocumentSource,
@@ -382,36 +445,41 @@ pub fn compute_evidence(
     render_fingerprint: Option<String>,
     glyph_coverage: f32,
 ) -> Result<EvidenceRecord, DocsightError> {
-    let block =
-        doc.find_block(object_id.as_str())
+    let object =
+        doc.resolve_object(object_id.as_str())
             .ok_or_else(|| DocsightError::ObjectNotFound {
                 object: object_id.to_string(),
             })?;
+    let anchor = object.anchor_block();
+    let anchor_blocks: Vec<&Block> = anchor.into_iter().collect();
 
     let fidelity = measured_fidelity(
         doc,
         &FidelityInputs {
-            blocks: &[block],
+            blocks: &anchor_blocks,
             glyph_coverage,
-            single_block_confidence: Some(block.confidence),
+            single_block_confidence: Some(object.confidence()),
         },
     );
 
-    let full_text = block.text();
+    let full_text = object.text();
     let text_fragment = truncate_at_char_boundary(&full_text, 300);
+    let source_span = object.source();
+    let confidence = object.confidence();
 
     Ok(EvidenceRecord {
         document_digest: source.sha256().to_owned(),
-        object_id: block.id.clone(),
-        kind: block.kind,
-        source_path: block.source.path.clone(),
-        source_offset: block.source.offset,
-        page: block.page,
-        bbox: block.bbox,
-        z_index: block.z_index,
-        reading_order: block.reading_order,
-        confidence: if block.confidence < 0.999 {
-            Some(block.confidence)
+        object_id: object.id().clone(),
+        kind: EvidenceKind::of(&object),
+        container_id: object.container().map(|container| container.id.clone()),
+        source_path: source_span.path.clone(),
+        source_offset: source_span.offset,
+        page: object.page(),
+        bbox: object.bbox(),
+        z_index: anchor.map(|block| block.z_index),
+        reading_order: object.reading_order(),
+        confidence: if confidence < 0.999 {
+            Some(confidence)
         } else {
             None
         },

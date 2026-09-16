@@ -32,6 +32,7 @@ Classification:
 
 | Item | Why it blocks v1 |
 | --- | --- |
+| A command-line way to supply a PDF password | The standard security handler is implemented and reachable from the library (`PdfDocument::open_with_password`, `docsight_ingest::ingest_with_password`), but no CLI surface exposes it, so a document with a real user password cannot be opened from the terminal. Deferred rather than rushed because it needs a route that does not leak the password into `argv` — a `--password-file` is the likely shape — and because it threads a new parameter through every command handler. |
 | Content-addressed cache between invocations | An agent workflow re-parses and re-lays-out the same document for every command. Tracked as A13. |
 | Per-invocation overrides for ingestion limits | The enforced values are centralized and published in `capabilities` under `ingestion_limits`, and each boundary is tested, but a caller cannot raise one for a document that legitimately exceeds it. Deferred until a real document forces the question, so the override surface is designed against an actual case rather than guessed. |
 

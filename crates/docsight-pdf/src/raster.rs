@@ -321,11 +321,12 @@ impl Canvas {
         even_odd: bool,
         clips: &[ClipRegion],
     ) -> Result<(), DocsightError> {
-        let polygons = flatten_subpaths(path, 0.125 / self.scale)?;
-        if polygons.is_empty() || polygons.iter().any(|polygon| polygon.len() < 3) {
-            return Err(DocsightError::MalformedDocument {
-                message: "filled PDF path has fewer than three points".to_owned(),
-            });
+        let polygons = flatten_subpaths(path, 0.125 / self.scale)?
+            .into_iter()
+            .filter(|polygon| polygon.len() >= 3)
+            .collect::<Vec<_>>();
+        if polygons.is_empty() {
+            return Ok(());
         }
         let polygons = polygons
             .into_iter()

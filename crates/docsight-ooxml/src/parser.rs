@@ -948,6 +948,7 @@ fn extract_hyperlinks(
                     is_external: !target.starts_with('#'),
                     target,
                     page: None,
+                    bbox: None,
                     anchor_path: Some(paragraph_path.to_owned()),
                     source: SourceSpan::new(source_path),
                 });
