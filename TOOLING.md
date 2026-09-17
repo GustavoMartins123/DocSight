@@ -20,7 +20,9 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | `validate --out DIRECTORY` | `xtask/src/validation.rs` | `tooling_validation.rs` |
 | `readiness --revision SHA --evidence DIRECTORY` | `xtask/src/readiness/{mod,evidence,campaigns,reviews}.rs` | `tooling_readiness.rs` |
 | `rust-only` | `xtask/src/architecture.rs` | `tooling_architecture.rs` |
-| Schemas, budgets, workflows and preserved engine gaps | versioned resources and Rust constants | `tooling_contracts.rs` |
+| Open V1 engine gaps keep readiness blocked | `release/known-gaps.json` | `tooling_readiness.rs` |
+| DS9 benchmark budgets and generated scale fixtures | `xtask/src/main.rs`, `benchmarks/` | unit tests in `xtask/src/main.rs` |
+| Evidence schema conformance of generated artifacts, pinned workflow toolchain, locked Cargo commands, explicit `xtask` binary selection, target-filtered notices metadata | `schemas/tooling/v2/evidence.json`, `.github/workflows/`, shipped guides | `tooling_contracts.rs` |
 
 Use `cargo xtask --help` and each command's `--help` for complete options. The
 global `--root` selects an explicit checkout or corpus root. Relative file paths
@@ -57,7 +59,11 @@ creates tags, publishes releases or invents consent.
 ## Testing and evidence
 
 Run `cargo test --locked -p xtask --all-targets` for maintenance coverage and
-`cargo test --locked --workspace --all-features` for the full workspace. Tests
+`cargo test --locked --workspace --all-features` for the full workspace. The
+workspace contains two xtask binaries: `maint`, selected by the `cargo xtask`
+alias, and `xtask`, which owns the DS9 benchmark. Run the benchmark with
+`cargo run --locked --release -p xtask --bin xtask -- benchmark --check`.
+The contract tests reject documented or CI invocations that omit the binary. Tests
 include synthetic executable headers and injected process results to exercise
 negative paths; those fixtures are not native-platform qualification receipts.
 Actual smoke, corpus and validation commands call the native process runner.

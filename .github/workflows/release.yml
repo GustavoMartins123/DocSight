@@ -72,10 +72,10 @@ jobs:
       - run: cargo build --locked --release --workspace --all-features --target "$TARGET"
       - name: Enforce DS9 budgets on the canonical host
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo run --locked --release -p xtask -- benchmark --check --output target/ds9-performance.json
+        run: cargo run --locked --release -p xtask --bin xtask -- benchmark --check --output target/ds9-performance.json
       - name: Collect dependency notices
         run: |
-          cargo metadata --locked --format-version 1 --all-features > target/release-metadata.json
+          cargo metadata --locked --format-version 1 --all-features --filter-platform "$TARGET" > target/release-metadata.json
           cargo xtask notices --metadata target/release-metadata.json --out target/THIRD_PARTY_NOTICES.md
       - name: Package the native CLI and worker
         run: cargo xtask release package --binary "target/$TARGET/release/$BINARY" --worker "target/$TARGET/release/$WORKER" --target "$TARGET" --revision "$GITHUB_SHA" --notices target/THIRD_PARTY_NOTICES.md --out dist
