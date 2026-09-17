@@ -14,13 +14,6 @@ Classification:
 
 ## v1
 
-### Layout fidelity
-
-| Item | Why it blocks v1 |
-| --- | --- |
-| Multi-section DOCX geometry | Section geometry after the first section is discarded (`DOCX_SECTIONS_COLLAPSED`), so page size, margins and headers are wrong for any document that changes section. |
-| Line-level pagination | Pagination moves whole blocks, so widows, orphans and `keep-lines` are approximations and page breaks can occur earlier than in Word. |
-
 ### Operability
 
 | Item | Why it blocks v1 |
@@ -40,7 +33,12 @@ Classification:
 - Contextual spacing (`w:contextualSpacing`), which is parsed and reported but not applied between paragraphs of the same style.
 - Annotation appearance streams: an annotation currently contributes geometry and text to the IR, not its rendered pixels.
 - `Watermark` overlays in the IR. The entity exists but no parser produces it.
-- DOCX floating objects and shapes, and the `Shape` block kind, which is likewise declared but never produced.
+- DOCX floating objects and shapes. Recognized DrawingML lines are preserved as `Shape` blocks, but their position, extent, stroke and pixels are not projected (`DOCX_SHAPE_VISUAL_OMITTED`); other Office shapes are not produced.
+- Row-level table pagination. Paragraphs split by line across pages, but a table that does not fit the remaining space moves to the next page as a whole (`DOCX_PAGINATION_BLOCK_GRANULAR`).
+- Multi-column sections. A section with more than one text column is laid out as one column (`DOCX_SECTION_COLUMNS_UNSUPPORTED`), and a `nextColumn` section break starts a new page (`DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED`).
+- Header and footer formatting. Header and footer parts are projected as deterministic 9 pt plain text lines without their own run formatting, tab stops, tables or drawings (`DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED`), and body text does not move away from a tall header or footer (`DOCX_HEADER_FOOTER_OVERLAPS_BODY`).
+- Binding gutters, which are parsed but not added to the body margins (`DOCX_SECTION_GUTTER_IGNORED`).
+- Page parity with restarted numbering. An `evenPage` or `oddPage` section break decides parity by physical page number, while even-page headers and footers follow the displayed page number; the two can disagree when a section restarts its numbering.
 - Per-revision tracked changes: authorship, timestamp and content, rather than insertion and deletion counts.
 - Complex DOCX numbering: multi-level list restarts, custom patterns and style-linked numbering.
 - Table columns, column spans and text flow across columns.
@@ -73,7 +71,18 @@ implemented in `crates/docsight-pdf/src/syntax.rs`. The existing
 This corrects the stale backlog classification; it is not a new parser
 implementation or a claim that the native test was rerun in every environment.
 
+Multi-section DOCX geometry and line-level pagination (DS13) are implemented in
+`crates/docsight-layout` on Document IR schema 1.3. Each section applies its own
+page size, orientation, margins, start type, header and footer variants and page
+numbering; paragraphs split by line across pages with keep-with-next,
+keep-lines and widow/orphan control, and a paragraph that continues on later
+pages keeps one identifier with page-local continuation geometry. The
+behaviour is covered by `crates/docsight-layout/tests/pagination.rs`,
+`crates/docsight-ooxml/tests/sections.rs` and the CLI contract tests. Both items
+are recorded as resolved in `release/known-gaps.json`; the remaining layout
+limitations are listed under post-v1 above with their diagnostics.
+
 DS10 candidate tooling is described in RELEASE.md and DS11 observation tooling
 in BETA.md. The machine-readable `release/known-gaps.json` retains the open V1
-engine gaps above. A completed tooling implementation is not completion of the
+engine gap above. A completed tooling implementation is not completion of the
 native validation, real beta or V1 acceptance criteria.
