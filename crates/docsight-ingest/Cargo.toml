@@ -15,6 +15,7 @@ serde.workspace = true
 [dev-dependencies]
 docsight-ooxml = { path = "../docsight-ooxml" }
 serde_json.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true
