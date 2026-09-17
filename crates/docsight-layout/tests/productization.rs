@@ -78,7 +78,8 @@ fn applies_geometry_and_overlays_per_section() -> Result<(), Box<dyn std::error:
     assert!(laid.document.pages[0].overlays.iter().any(|overlay| overlay.text == "First"));
     assert!(laid.document.pages[1].overlays.iter().any(|overlay| overlay.text == "Second"));
     assert!(laid.document.pages[0].overlays.iter().any(|overlay| overlay.text == "Page 1"));
-    assert!(laid.document.pages[1].overlays.iter().any(|overlay| overlay.text == "Page 1"));
+    assert!(laid.document.pages[1].overlays.iter().any(|overlay| overlay.text == "Page 2"));
+    assert!(laid.pages[1].runs.iter().any(|run| run.text == "Page 2"));
     Ok(())
 }
 
