@@ -1,116 +1,130 @@
 # Building and reviewing a DocSight release candidate
 
-This guide implements the maintainer side of DS10-DS12. A workflow definition,
-passing packaging unit tests or a source archive is not a published release and
-is not proof of native behavior. No version is promoted automatically. The
-current workspace remains 0.1.4 until maintainers explicitly decide otherwise.
+This guide implements the maintainer side of DS10-DS12. Source code, packaging
+unit tests and workflow definitions are not evidence of a published release,
+native behavior, a completed beta or visual fidelity. The current workspace
+remains 0.1.4. No command here promotes a version or publishes a release.
 
-## Prerequisites and scope
+## Rust-only maintenance
 
-Use a complete Git checkout, including `fuzz/`, the locked Rust dependencies,
-Rust 1.96.0 with rustfmt and Clippy, and Python 3.11 or later. The maintainer scripts
-use only the Python standard library. Building and obtaining dependencies may
-need network access; running the packaged DocSight does not. Use one native host
-per target from `release/targets.json`; cross-compilation alone is not acceptance.
-See INSTALL.md for the configured operating-system baselines and installation.
+Use a complete Git checkout including `fuzz/`, the locked dependencies and Rust
+1.96.0 with rustfmt and Clippy. All permanent maintenance logic lives in the
+existing `xtask` crate. The workspace alias `cargo xtask` runs it with the lockfile
+enforced. Build and dependency acquisition may require network access; running
+the packaged application is offline. There is no interpreter dependency or
+fallback implementation.
 
-Keep the existing Rust engine, immutable IR and public agent v2 contract separate
-from release automation. The binary self-spawns its sandbox worker; no separate
-worker executable or Python interpreter is shipped as a runtime requirement.
-The Python tools orchestrate distribution and validation, while `xtask` remains
-the authoritative DS9 benchmark implementation. Tooling consolidation into Rust
-can be evaluated later without changing the document engine's contracts.
+Use one native host for each target in `release/targets.json`. Cross-compilation
+alone is not native acceptance. INSTALL.md lists configured baselines, not a
+claim that every baseline has been tested. The packages include both `docsight`
+and `docsight-worker`, with `.exe` on Windows. The CLI retains its existing
+self-spawn isolation path; shipping the worker does not change the agent v2
+protocol or immutable IR contracts.
 
-## Automated candidate build
+## Automated candidates
 
-`.github/workflows/release.yml` runs for pull requests or an explicit manual
-workflow dispatch. It has `contents: read`, tests each native target, enforces
-locked dependencies, builds the binary, collects dependency notices, creates a
-ZIP and verifies the extracted executable. Windows applies static CRT flags in
-`RUSTFLAGS`; no target-specific setting is allowed to be silently shadowed.
+`.github/workflows/release.yml` runs on pull requests or explicit workflow
+dispatch. It has `contents: read`. Each native job runs the Rust tooling tests,
+architecture gate, formatter, Clippy, workspace tests and workspace release
+build with locked dependencies. Windows keeps static CRT flags in `RUSTFLAGS`.
+The canonical Linux x64 host also enforces DS9 benchmark budgets.
 
-The workflow requires 18 smoke checks per native archive: version, capabilities,
-DOCX/PDF inspection, repeated inspection bytes, text, render, an identical diff,
-a sandboxed inspection, a typed error and five shell completion generators. The
-executable runs without Cargo or Rust on PATH. PNG validation checks structure,
-size and CRCs, not visual fidelity to Word or correctness of every rendered pixel.
-It then executes the tracked 12-case synthetic corpus and preserves its exact
-manifest and receipts. Neither these examples nor their repeats constitute a
-broad real-document corpus.
+The native packager validates both executable architectures, collects notices,
+creates a bounded deterministic ZIP and verifies it. Smoke execution then uses
+a freshly extracted package with an isolated environment and no Rust on PATH.
+Eighteen checks cover version, capabilities, DOCX/PDF inspection, repeated
+inspection bytes, text, render, identical diff, sandbox inspection, typed error
+and five completion shells. PNG validation checks dimensions, structure, CRCs
+and decoding; it is not a human review of rendering fidelity.
 
-Only after all five native jobs pass does the assembler verify the archive and
-smoke-receipt set, collect SHA256SUMS and generate deterministic notes. It uploads
-a `docsight-release-candidate` workflow artifact. It does **not** create a GitHub
-Release, push a commit or tag, merge a branch, sign a binary or notarize it.
-Publishing and credentials require separate maintainer authorization. A failed
-job retains available smoke, corpus and benchmark reports for diagnosis.
+Each job executes the 12-case synthetic corpus and retains its manifest and
+receipts. Repeats and these small examples do not constitute broad real-document
+coverage. Only after all five native jobs succeed does assembly verify archives,
+sidecars and smoke receipts, collect `SHA256SUMS` and generate release notes.
+Failed jobs retain available receipts for diagnosis. The workflow uploads a
+candidate artifact only: no push, tag, merge, GitHub Release, signing or
+notarization is performed.
 
 ## Local native build example
 
-The following example is for Linux x64 in a clean source checkout. Use a new
-output location instead of overwriting a previous candidate. Windows and macOS
-must use their exact native target, runner environment and flags from the
-workflow; do not validate an ARM package by executing an Intel package instead.
+This example is for Linux x64. `VERSION=0.1.4` matches the current Cargo workspace;
+verify the value using `cargo xtask release version` after a version change.
+Use fresh output locations. Other targets must use their actual native host,
+filename suffixes and environment from the workflow.
 
 ```sh
 export TARGET=x86_64-unknown-linux-gnu
 export REVISION="$(git rev-parse HEAD)"
-export VERSION="$(python -c 'from scripts.release import workspace_version; print(workspace_version())')"
+export VERSION=0.1.4
 export RUSTFLAGS='-D warnings'
-python -m unittest discover -s scripts/tests -v
+cargo test --locked -p xtask --all-targets
+cargo xtask rust-only
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features --target "$TARGET" -- -D warnings
 cargo test --locked --workspace --all-features --target "$TARGET"
-cargo build --locked --release -p docsight-cli --bin docsight --target "$TARGET"
+cargo build --locked --release --workspace --all-features --target "$TARGET"
 cargo metadata --locked --format-version 1 --all-features > target/release-metadata.json
-python -m scripts.notices --metadata target/release-metadata.json --out target/THIRD_PARTY_NOTICES.md
-python -m scripts.release package --binary "target/$TARGET/release/docsight" --target "$TARGET" --revision "$REVISION" --notices target/THIRD_PARTY_NOTICES.md --out dist
-python -m scripts.release verify "dist/docsight-$VERSION-$TARGET.zip"
-python -m scripts.smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
-python -m scripts.corpus run --archive "dist/docsight-$VERSION-$TARGET.zip" --out "dist/corpus-$TARGET.json"
+cargo xtask notices --metadata target/release-metadata.json --out target/THIRD_PARTY_NOTICES.md
+cargo xtask release package --binary "target/$TARGET/release/docsight" --worker "target/$TARGET/release/docsight-worker" --target "$TARGET" --revision "$REVISION" --notices target/THIRD_PARTY_NOTICES.md --out dist
+cargo xtask release verify "dist/docsight-$VERSION-$TARGET.zip"
+cargo xtask smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
+cargo xtask corpus run --archive "dist/docsight-$VERSION-$TARGET.zip" --out "dist/corpus-$TARGET.json"
 ```
 
-The packager rejects wrong executable architecture, unsafe or colliding archive
-paths, symlinks, missing resources, corrupted members and inconsistent hashes or
-permissions. Archives retain schemas, offline guides, two examples, declared
-project license texts and dependency notices. Fixed entry order, timestamps and
-modes make packaging deterministic for identical inputs. This is not a claim
-that compiling the engine produces reproducible binaries across arbitrary hosts.
-Dependency notices include resolved build/test packages and are not a runtime
-SBOM or a legal compatibility assessment. Review third-party obligations before
-redistribution.
+The packager rejects incorrect executable headers, missing workers or resources,
+unsafe or case-colliding member paths, symlinks, encrypted members, excessive
+expanded sizes, corrupt members, unknown members and inconsistent hashes or
+permissions. It retains all schemas, offline guides, two examples, project
+license texts and third-party notices. Order, timestamps and modes are fixed
+for identical inputs. This does not claim reproducible compiler outputs across
+arbitrary hosts. Notices include resolved build/test dependencies as well as
+application dependencies; they are not a runtime-only SBOM or legal assessment.
 
-Once all five archives and their smoke receipts are in `dist`:
+Once all five archives, sidecars and smoke receipts are in `dist`:
 
 ```sh
-python -m scripts.release collect dist
-python -m scripts.changelog --revision "$REVISION" --out dist/RELEASE_NOTES.md
+cargo xtask release collect dist
+cargo xtask changelog --revision "$REVISION" --out dist/RELEASE_NOTES.md
 ```
 
-`--since FULL_ANCESTOR_SHA` limits changelog entries to a validated ancestor range.
-Checksums detect corruption, not publisher authenticity. The current pipeline
-has no signing or notarization step. Do not disable operating-system security
-controls to install an unsigned candidate.
+`--since FULL_ANCESTOR_SHA` restricts notes to a verified ancestor range. Both
+range endpoints are full commit identifiers, never arbitrary shell expressions.
+Checksums detect corruption, not publisher identity. Signing, notarization and
+final publication require separate credentials and explicit authorization.
+Do not disable operating-system security controls to install an unsigned build.
 
-## Full local validation and real evidence
+## Full native validation
 
-After committing the candidate, run the complete gate collector. The output
-must be a new directory; `target/` is ignored by Git.
+After committing the candidate, collect all gates into a new directory under
+the Git-ignored `target/` tree:
 
 ```sh
-python -m scripts.validate --out target/candidate-evidence/validation
+cargo xtask validate --out target/candidate-evidence/validation
 ```
 
-It attempts all nine gates even if a tool is unavailable: Python tests, Python
-syntax, corpus inventory, Cargo format, Clippy, the full Cargo test suite, release
-build, DS9 benchmark budgets and Git whitespace validation. It records stdout,
-stderr, hashes, exit codes, source revision and clean-tree state before and after.
-A missing compiler is `blocked`, not `passed`; a failed test is `failed`, not an
-external blocker. Exit code 1 means at least one gate or clean-tree condition did
-not pass. The original Rust fuzz procedure in FUZZING.md still needs execution;
-a Python harness unit test is not a parser fuzz campaign.
+The nine checks are Rust tooling tests, the Rust-only architecture audit, corpus
+inventory, Cargo format, Clippy, workspace tests, release build, DS9 budgets and
+Git whitespace validation. Every gate is attempted even when an earlier gate
+fails. Logs, hashes, elapsed time, real exit codes, source revision and clean-tree
+state before and after are retained. The `docsight.validation/v2` status values
+are `pass`, `fail`, `unavailable`, `blocked` and `not_run`.
 
-Build an evidence directory with real outputs, not edited success flags:
+A missing executable is `unavailable` with a null exit code; an executed failing
+test is `fail`. A process-start or access failure is `blocked`; an unsupported
+host may be `not_run`. Neither is a successful check. The command returns 1 if a
+gate, clean-tree or revision condition fails, and 2 for invalid inputs or failure
+to construct a report. If Cargo and the compiled xtask are both unavailable,
+no validator ran: record NOT EXECUTED externally, not a fabricated validator
+receipt. Development can continue independently of this execution status.
+
+`cargo xtask corpus validate` only checks inventory and hashes. Its receipt says
+`executed: false`. `cargo xtask corpus run` actually executes the candidate.
+The Rust fuzz procedures in FUZZING.md remain necessary; tooling unit tests do
+not substitute for native parser fuzz campaigns.
+
+## Candidate-bound evidence
+
+Prepare the following directory from actual outputs, never edited success flags:
 
 ```text
 candidate-evidence/
@@ -125,68 +139,62 @@ candidate-evidence/
   beta/observation-*.json
   reviews.json
   reviews/*.md
-  before/*.json                             (when fixes need pre-fix evidence)
+  before/*.json                             (pre-fix regression evidence)
 ```
 
-Run BETA.md's campaign with 5-10 independent technical users. For the broad
-corpus, prepare an approved manifest of consented real and synthetic cases and
-run that same manifest on all five native packages. Keep private source documents
-outside Git and shared artifacts. The gate verifies manifest identity and input
-hashes without requiring private source files in the evidence directory; the
-human review must verify provenance and consent. Historical corpus notes apply
-to their original engine and inputs, not automatically to a new candidate.
+Run BETA.md's procedure with 5-10 independent technical participants. Execute the
+same reviewed broad corpus manifest on all five native candidates. Keep source
+documents and consent records outside Git and shared artifacts. Readiness checks
+receipt identity and hashes without copying private corpus inputs; reviewers
+must verify provenance and consent. Historical results do not automatically
+qualify a different source revision or set of inputs.
 
-## Acceptance policy and reviews
+## Policy and real reviews
 
-`release/readiness-policy.json` initially proposes at least 5 distinct beta
-participants, 100 distinct successful DOCX/PDF primary inputs and 25 consented
-real inputs in each format. The original plan specifies 5-10 users and a broad
-corpus, **not the 100/25 numeric thresholds**. These are explicit initial
-engineering defaults requiring maintainer review, not approved product targets.
-Change them only through a reviewed commit with rationale; do not lower them to
-make a failing candidate appear qualified. Repeating one document does not
-increase the distinct-document count. A diff reference alone does not count as
-another successfully inspected primary document.
+`release/readiness-policy.json` proposes five distinct participants, 100 distinct
+successful DOCX/PDF primary inputs and 25 consented real inputs per format. The
+original plan specifies 5-10 users and a broad corpus, not the numeric 100/25
+thresholds. These numbers remain engineering proposals requiring policy review,
+not automatically approved product criteria. Changes require a reviewed commit
+and rationale, not silent relaxation to make a candidate appear ready. Repeats
+and diff-only references do not inflate the distinct primary-input count.
 
-`reviews.json` contains `schema: docsight.release-reviews/v1`, `version`, full
-`revision`, the SHA-256 of the reviewed policy file as `policy_sha256`, and a
-`reviews` object with exactly these keys: `policy`, `installation`,
-`behavior-and-json`, `render-and-diff`, `security-and-fuzzing`, and
-`beta-participation-and-triage`. Each entry contains `approved`, a stable
-`reviewer` identifier and `evidence: {"file": "reviews/name.md", "sha256": "..."}`.
-Each real review note must contain the procedure, observed results and limits;
-a checkbox or fabricated identity is not a review. The verifier checks artifact
-consistency and recorded attestations; it cannot establish a person's identity,
-independence or the truth of an unsigned attestation.
+`reviews.json` must contain `schema: docsight.release-reviews/v1`, `version`, full
+`revision`, `policy_sha256`, and exactly six review categories in `reviews`:
+`policy`, `installation`, `behavior-and-json`, `render-and-diff`,
+`security-and-fuzzing`, and `beta-participation-and-triage`. Each entry has
+`approved`, a stable `reviewer` identifier, and an evidence reference such as
+`{"file":"reviews/installation.md","sha256":"..."}`. The hash binds an actual
+nontrivial review note describing procedure, observations and limitations.
+Unit-test participants and synthetic positive receipts are not human reviews.
+An unsigned note cannot establish identity, independence or the truth of a claim.
 
-Review installation on clean machines without Rust; CLI/JSON compatibility and
-diagnostics; rendering and changed-document diffs; adversarial documents, worker
-resource limits and actual fuzz results; participant independence and all beta
-issues. In particular, a small smoke pass does not demonstrate that crashes are
-rare or that general document rendering is faithful.
-
-Run the acceptance check against the exact candidate revision:
+Review clean-machine installation, protocol compatibility and diagnostics,
+rendering and changed-document diff, adversarial inputs and worker limits,
+actual fuzz results, independent participants and regression triage. An empty
+issue register is not evidence of low crash rates or successful beta completion.
+Resolved beta issues require a genuine failing pre-fix corpus attempt on the
+same primary and reference hashes and a passing candidate regression. Input
+mutation, missing files or missing tools do not prove a reproduced engine bug.
 
 ```sh
-python -m scripts.readiness --evidence target/candidate-evidence --revision "$REVISION" --out target/candidate-readiness.json
+cargo xtask readiness --evidence target/candidate-evidence --revision "$REVISION" --out target/candidate-readiness.json
 ```
 
-The output evaluates seven criteria and returns exit code 1 while any fail.
-`ready_for_v1: false` must remain visible. Resolving every recorded beta bug
-requires both pre-fix failure and post-fix corpus evidence. An empty beta issue
-register can satisfy its narrow consistency check but cannot satisfy missing
-participants, reviews, corpus or native packages.
+The seven criteria cover workspace validation, five native packages, beta
+observations, broad corpus, manual reviews, regressions and known V1 gaps.
+Any failed criterion keeps `ready_for_v1: false` and yields exit 1. Structural
+consistency of these artifacts is not independent certification.
 
-## Current V1 blockers
+## Remaining engine gaps and schema transition
 
-`release/known-gaps.json` preserves unresolved multi-section DOCX geometry,
-line-level pagination and persistent content-addressed cache as blocking. A
-per-invocation ingestion-limit override remains deferred until a demonstrated
-real case, matching the plan's caveat. Updating a register is not implementation:
-close a gap only with code, regression tests and actual native validation.
+`release/known-gaps.json` continues to record multi-section DOCX geometry,
+line-level pagination and persistent content-addressed caching as open blockers.
+This tooling migration does not implement those engine features or close them.
 
-The versioned maintainer schemas are in `schemas/tooling/v1/evidence.json`.
-They describe beta observations, release manifests, smoke receipts, validation,
-corpus manifests/results, readiness and typed tooling errors. Runtime validators
-also enforce cross-file identities and semantic constraints. They do not replace
-or alter `docsight.agent/v2` or the Document IR schema.
+The current maintainer contract registry is `schemas/tooling/v2/evidence.json`.
+The validation receipt advances from v1 to v2 because native gate names, status
+values and null unavailable exit codes changed. Readiness requires new native
+validation receipts; historical reports must not be relabeled as v2. Other
+artifact schema identifiers remain v1. Public `docsight.agent/v2` and IR contracts
+are unchanged. TOOLING.md maps commands, modules, tests and operational limits.

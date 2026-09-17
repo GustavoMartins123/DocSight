@@ -1,7 +1,5 @@
 /target/
 debug.log
 .tmp*/
-__pycache__/
-*.pyc
 /dist/
 /beta-reports/

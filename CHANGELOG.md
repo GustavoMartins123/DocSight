@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Replace all permanent DS9-DS12 interpreter tooling and auxiliary tests with native Rust modules and integration tests in xtask.
+- Route release, notices, changelog, smoke, corpus, beta, validation and readiness through cargo xtask and guard the Rust-only architecture in CI.
+- Require both docsight and docsight-worker in every native archive.
+- Version native validation receipts as v2 with explicit pass, fail, unavailable, blocked and not_run states and nullable unavailable exit codes.
+
 These changes implement candidate tooling; they do not claim a completed native
 validation campaign, real beta, signed release or V1 acceptance.
 

@@ -16,12 +16,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@master
         with:
-          python-version: "3.12"
-      - run: python -m unittest discover -s scripts/tests -v
-      - run: python -m compileall -q scripts
-      - run: python -m scripts.corpus validate
+          toolchain: "1.96.0"
+      - run: cargo test --locked -p xtask --all-targets
+      - run: cargo xtask rust-only
+      - run: cargo xtask corpus validate
 
   lint:
     runs-on: ubuntu-latest
@@ -32,9 +32,9 @@ jobs:
           toolchain: "1.96.0"
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: rustup target add aarch64-apple-darwin
-      - run: cargo clippy --workspace --all-targets --all-features --target aarch64-apple-darwin
+      - run: cargo clippy --locked --workspace --all-targets --all-features --target aarch64-apple-darwin -- -D warnings
 
   evidence-engine:
     strategy:
@@ -48,4 +48,4 @@ jobs:
         with:
           toolchain: "1.96.0"
           components: rustfmt, clippy
-      - run: cargo test --workspace --all-features
+      - run: cargo test --locked --workspace --all-features

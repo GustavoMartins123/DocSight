@@ -14,11 +14,12 @@ a confusing command, rendering and a meaningful two-document diff. Observe which
 features each person actually needs; do not require them to report artificial
 successes. The default corpus in the source tree is synthetic and is not a beta.
 
-The collector runs only when explicitly invoked. It does not upload anything,
-start a service, watch directories or contact a server. It requires a source
-checkout and Python 3.11 or later; the DocSight executable itself does not require
-Python. A maintainer can assist a participant instead of asking every participant
-to install the development tools. Obtain consent before running on any document
+The collector runs only when explicitly invoked with `--consent`. It does not
+upload anything, start a service, watch directories or contact a server. Build
+the native collector with Rust 1.96.0 from a complete source checkout, then use
+`cargo xtask beta` or the built `xtask` binary. Packaged DocSight execution does
+not need the Rust toolchain. A maintainer can assist a participant instead of
+asking every participant to install the development tools. Obtain consent before running on any document
 and again before sharing a resulting report or reproducer.
 
 ## Collect a local observation
@@ -28,9 +29,9 @@ verified native package for the participant's platform, and use a new output fil
 for each observation:
 
 ```sh
-python -m scripts.beta collect --archive ARCHIVE.zip --participant beta-001 --operation inspect --experience clear --document /private/sample.docx --out beta-reports/observation-001.json
-python -m scripts.beta collect --archive ARCHIVE.zip --participant beta-001 --operation diff --experience confusing --document /private/before.docx --reference /private/after.docx --out beta-reports/observation-002.json
-python -m scripts.beta aggregate --reports beta-reports --out beta-summary.json
+cargo xtask beta collect --consent --archive ARCHIVE.zip --participant beta-001 --operation inspect --experience clear --document /private/sample.docx --out beta-reports/observation-001.json
+cargo xtask beta collect --consent --archive ARCHIVE.zip --participant beta-001 --operation diff --experience confusing --document /private/before.docx --reference /private/after.docx --out beta-reports/observation-002.json
+cargo xtask beta aggregate beta-reports --out beta-summary.json
 ```
 
 Allowed operations are `capabilities`, `inspect`, `overview`, `text`, `render` and
@@ -99,8 +100,8 @@ The expectation contains `exit_code`, sorted `diagnostic_codes`, scalar
 root. A private corpus can be executed without copying it into the repository:
 
 ```sh
-python -m scripts.corpus validate --root /private/corpus --manifest /private/corpus/manifest.json
-python -m scripts.corpus run --archive ARCHIVE.zip --root /private/corpus --manifest /private/corpus/manifest.json --out /private/corpus/report.json
+cargo xtask corpus validate --root /private/corpus --manifest /private/corpus/manifest.json
+cargo xtask corpus run --archive ARCHIVE.zip --root /private/corpus --manifest /private/corpus/manifest.json --out /private/corpus/report.json
 ```
 
 `validate` checks inventory and hashes only; its output explicitly says

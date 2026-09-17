@@ -10,7 +10,7 @@ For a maintainer-published binary candidate, follow the [installation guide](INS
 A source checkout or a workflow definition does not mean binaries have already
 been published. The configured five-target matrix requires native validation
 before a candidate is described as supported. Running the extracted binary does
-not require Rust or Python.
+not require the Rust toolchain.
 
 ## Five-minute agent-first quickstart
 
