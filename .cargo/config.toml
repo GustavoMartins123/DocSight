@@ -1,2 +1,2 @@
 [alias]
-xtask = "run --locked -p xtask --"
+xtask = "run --locked -p xtask --bin maint --"
