@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add an opt-in content-addressed document IR cache with `--cache-dir`, `--cache-max-bytes` and `--cache-max-entries` for the eighteen commands that read the IR. Keys cover the document digest and format, the executable digest, engine and IR schema versions, layout profile and font fingerprint; output is byte-identical on a miss, a hit and without the cache.
+- Write cache entries atomically without overwriting, validate every entry in full before reuse, quarantine invalid entries with a reason and parse the document again, evict least-recently-used entries at the byte and entry limits and remove stale temporary files.
+- Keep the cache in the parent process under `--sandbox`: the worker receives only the key, a validated entry or a private result directory, and the parent validates the returned IR before storing it.
+- Add the `cache stats|verify|prune|clear` command with the `cache-result.json` schema, the `cache` capability and the `CACHE_ENTRY_QUARANTINED` and `CACHE_RESULT_DISCARDED` diagnostics. `--cache-dir` is rejected with `--password-file` and for commands that do not read the IR.
+
 - Lay out every DOCX section with its own page size, orientation, margins, start type, title page, page numbering and default, first-page and even-page headers and footers, and link each DOCX page to its section through `section_index`.
 - Paginate DOCX paragraphs, headings, list items and notes by line with `keep-with-next`, `keep-lines` and widow/orphan control. A block that continues across pages keeps one identifier and exposes page-local `continuations`; `find`, `page`, `hit`, `focus`, `peek`, `resolve`, `context`, spatial queries and `crop` use the fragment on the relevant page.
 - Resolve `PAGE`, `NUMPAGES` and `SECTIONPAGES` header and footer fields per page, including simple and complex fields, restarts and roman or letter formats.

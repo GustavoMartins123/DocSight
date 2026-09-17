@@ -35,3 +35,9 @@ The canonical ceilings and minimum throughput are in [`benchmarks/ds9-budgets.js
 The benchmark demonstrates representative behavior inside the supported limits. It does not override input safety limits. `docsight --agent capabilities` is authoritative for maximum document bytes, XML nodes, package expansion, PDF objects, pages, decoded image pixels, raster pixels and output budgets.
 
 Peak-memory regression enforcement is intentionally pinned to Linux x86_64 so results stay comparable. Product code and the functional test suite remain cross-platform. Other hosts can use the normal commands, but the benchmark command fails explicitly instead of publishing incomparable memory numbers.
+
+## Document IR cache
+
+`--cache-dir` trades parsing and layout for hashing and validation. A hit still reads and hashes the document, hashes the running executable, verifies the entry digest, deserializes the IR and checks its canonical form, then runs the command on that IR. The cache therefore pays off when parsing or DOCX layout dominates, such as large or dense PDFs and long DOCX files, and can be slower than a plain run for small documents. A miss adds the same hashing plus serializing and atomically publishing the entry.
+
+Under `--sandbox` the parent hashes the document and executable, validates the entry and hands it to the worker, which deserializes and validates it again inside the sandbox. The worker's process start and isolation setup are paid on both hits and misses, so the relative gain is smaller than for an unsandboxed hit. The cache is not part of the DS9 benchmark gate; measure it on representative documents with `cache stats` and repeated invocations before relying on a specific speedup.

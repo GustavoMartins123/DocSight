@@ -257,12 +257,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "docsight-cache"
+version = "0.1.4"
+dependencies = [
+ "docsight-core",
+ "docsight-ingest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "docsight-cli"
 version = "0.1.4"
 dependencies = [
  "clap",
  "clap_complete",
  "docsight-agent",
+ "docsight-cache",
  "docsight-core",
  "docsight-diff",
  "docsight-ingest",

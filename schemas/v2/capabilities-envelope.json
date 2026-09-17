@@ -32,6 +32,7 @@
         "invocation_prefix",
         "sandbox",
         "pdf_password",
+        "cache",
         "document_formats",
         "output_modes",
         "agent_defaults",
@@ -181,6 +182,119 @@
             "failure_mode": {
               "type": "string",
               "const": "reject"
+            }
+          },
+          "additionalProperties": false
+        },
+        "cache": {
+          "type": "object",
+          "required": [
+            "flag",
+            "limit_flags",
+            "agent_default",
+            "artifact",
+            "layout",
+            "applies_to_commands",
+            "maintenance_command",
+            "maintenance_actions",
+            "key_components",
+            "default_max_bytes",
+            "default_max_entries",
+            "write_mode",
+            "invalid_entry_behavior",
+            "sandbox_behavior",
+            "password_file_behavior",
+            "output_identity",
+            "failure_mode"
+          ],
+          "properties": {
+            "flag": {
+              "type": "string",
+              "const": "--cache-dir"
+            },
+            "limit_flags": {
+              "type": "array",
+              "const": [
+                "--cache-max-bytes",
+                "--cache-max-entries"
+              ]
+            },
+            "agent_default": {
+              "type": "boolean",
+              "const": false
+            },
+            "artifact": {
+              "type": "string",
+              "const": "document-ir"
+            },
+            "layout": {
+              "type": "string",
+              "const": "docsight.cache/v1"
+            },
+            "applies_to_commands": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "maintenance_command": {
+              "type": "string",
+              "const": "cache"
+            },
+            "maintenance_actions": {
+              "type": "array",
+              "const": [
+                "stats",
+                "verify",
+                "prune",
+                "clear"
+              ]
+            },
+            "key_components": {
+              "type": "array",
+              "const": [
+                "document_sha256",
+                "document_format",
+                "executable_sha256",
+                "engine_version",
+                "ir_schema_version",
+                "layout_profile",
+                "layout_font_fingerprint"
+              ]
+            },
+            "default_max_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "default_max_entries": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "write_mode": {
+              "type": "string",
+              "const": "atomic_no_clobber"
+            },
+            "invalid_entry_behavior": {
+              "type": "string",
+              "const": "quarantine_and_reparse"
+            },
+            "sandbox_behavior": {
+              "type": "string",
+              "const": "parent_process_owns_cache"
+            },
+            "password_file_behavior": {
+              "type": "string",
+              "const": "reject"
+            },
+            "output_identity": {
+              "type": "string",
+              "const": "byte_identical"
+            },
+            "failure_mode": {
+              "type": "string",
+              "const": "fail_closed"
             }
           },
           "additionalProperties": false

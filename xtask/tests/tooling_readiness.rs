@@ -512,7 +512,7 @@ fn resolved_issues_require_a_distinct_reproduced_pre_fix_failure() -> TestResult
 }
 
 #[test]
-fn repository_policy_is_valid_and_current_gaps_keep_v1_blocked() -> TestResult {
+fn repository_policy_is_valid_and_resolved_gaps_leave_evidence_blocking_v1() -> TestResult {
     let root = workspace_root();
     let loaded = load_policy(&root)?;
     assert_eq!(loaded.required_reviews, REVIEWS);
@@ -520,9 +520,10 @@ fn repository_policy_is_valid_and_current_gaps_keep_v1_blocked() -> TestResult {
     let report = assess(&directory.path().join("absent"), REVISION, &root)?;
     assert!(!report.ready_for_v1);
     assert_eq!(report.criteria.len(), CRITERIA.len());
-    assert_eq!(
-        criterion(&report, "known-v1-gaps")?,
-        (false, Some("OPEN_V1_PRODUCT_GAPS"))
+    assert_eq!(criterion(&report, "known-v1-gaps")?, (true, None));
+    assert!(
+        !criterion(&report, "workspace-validation")?.0,
+        "absent candidate evidence must keep V1 blocked"
     );
     assert_eq!(criterion(&report, "beta-regressions")?, (true, None));
     Ok(())

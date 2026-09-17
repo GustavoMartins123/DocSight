@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/cache-result.json",
+  "title": "CacheResult",
+  "type": "object",
+  "required": [
+    "action",
+    "layout",
+    "engine",
+    "stats"
+  ],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "stats",
+        "verify",
+        "prune",
+        "clear"
+      ]
+    },
+    "layout": {
+      "type": "string",
+      "const": "docsight.cache/v1"
+    },
+    "engine": {
+      "type": "object",
+      "required": [
+        "executable_sha256",
+        "engine_version",
+        "ir_schema_version",
+        "layout_profile",
+        "layout_font_fingerprint"
+      ],
+      "properties": {
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "engine_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ir_schema_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layout_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layout_font_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "verify": {
+      "type": "object",
+      "required": [
+        "checked",
+        "valid",
+        "other_engine",
+        "quarantined"
+      ],
+      "properties": {
+        "checked": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "valid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "other_engine": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/quarantine_record"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "prune": {
+      "type": "object",
+      "required": [
+        "removed_quarantined_files",
+        "removed_temporary_files",
+        "removed_other_engine_entries",
+        "quarantined",
+        "evicted_entries"
+      ],
+      "properties": {
+        "removed_quarantined_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_temporary_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_other_engine_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/quarantine_record"
+          }
+        },
+        "evicted_entries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "clear": {
+      "type": "object",
+      "required": [
+        "removed_entries",
+        "removed_quarantined_files",
+        "removed_temporary_files"
+      ],
+      "properties": {
+        "removed_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_quarantined_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_temporary_files": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "stats": {
+      "type": "object",
+      "required": [
+        "entries",
+        "entry_bytes",
+        "current_engine_entries",
+        "other_engine_entries",
+        "unreadable_entries",
+        "quarantined_files",
+        "quarantined_bytes",
+        "temporary_files",
+        "max_bytes",
+        "max_entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entry_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "current_engine_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "other_engine_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unreadable_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "temporary_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_entries": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "stats"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "verify"
+              ]
+            },
+            {
+              "required": [
+                "prune"
+              ]
+            },
+            {
+              "required": [
+                "clear"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "verify"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "verify"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "prune"
+              ]
+            },
+            {
+              "required": [
+                "clear"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "prune"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "prune"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "verify"
+              ]
+            },
+            {
+              "required": [
+                "clear"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "clear"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "clear"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "verify"
+              ]
+            },
+            {
+              "required": [
+                "prune"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "quarantine_record": {
+      "type": "object",
+      "required": [
+        "key_sha256",
+        "reason"
+      ],
+      "properties": {
+        "key_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "not_regular_file",
+            "oversized",
+            "file_name_mismatch",
+            "missing_header",
+            "invalid_header",
+            "key_mismatch",
+            "payload_length",
+            "payload_digest",
+            "invalid_payload",
+            "document_identity",
+            "ir_version",
+            "non_canonical"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

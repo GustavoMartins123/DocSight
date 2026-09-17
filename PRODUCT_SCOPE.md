@@ -72,6 +72,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens. The discoverable `pdf_password` contract declares the file transport, 127-byte limit and fail-closed behavior for encrypted PDFs.
 - Interactive setup: `completions` generates deterministic scripts for Bash, Elvish, Fish, PowerShell and Zsh. It is intentionally human-only and rejects agent or machine-output flags instead of mixing a shell script with JSON.
 - Process isolation: `--sandbox` on Linux, macOS and Windows, failing closed on platforms where enforcement is unavailable.
+- Document IR cache: opt-in `--cache-dir` persists the normalized IR between invocations for `inspect`, `outline`, `text`, `tables`, `table`, `page`, `images`, `links`, `evidence`, `coverage`, `hit`, `query`, `find`, `overview`, `focus`, `peek`, `context` and `resolve`. The key covers the exact document SHA-256 and format, the SHA-256 of the running executable, the engine version, the IR schema version, the layout profile and the layout font fingerprint. Writes are atomic, entries are validated in full before use, limits are set with `--cache-max-bytes` and `--cache-max-entries`, and output is byte-identical with or without the cache. Under `--sandbox` the parent process owns the cache and validates what the worker returns. `cache` reports, verifies, prunes or clears the directory.
 
 ### Diagnostics and errors
 
@@ -152,6 +153,8 @@ These are not format limitations. They are the cases where a command can answer,
 | An object has no canonical geometry, so it is excluded from spatial results and counted | `SPATIAL_GEOMETRY_UNAVAILABLE` |
 | `context` cannot assign a page to one canonical DOCX section | `CONTEXT_SECTION_UNAVAILABLE` |
 | `context` has no object-level fidelity for an overlay | `CONTEXT_FIDELITY_UNAVAILABLE` |
+| A cache entry failed validation, was moved to quarantine and the document was parsed again | `CACHE_ENTRY_QUARANTINED` |
+| The executable changed while a sandbox worker parsed the document, so its IR was not stored | `CACHE_RESULT_DISCARDED` |
 
 ### Images
 
@@ -164,7 +167,9 @@ PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette
 - Annotation appearance streams are not rendered. An annotation contributes its geometry and text to the IR, not its pixels.
 - Resource coverage counts figures and declared resources. A PDF whose content lives in an untraversed Form XObject therefore reports reduced resource coverage rather than silently reporting none.
 - The `caption` DQL selector is DOCX-only and fails closed for PDF, because caption semantics are not reconstructed there.
-- There is no cache between invocations. Every command re-ingests the document.
+- The cache is opt-in and stores only the document IR. `render`, `crop`, `bundle`, `replay`, `verify`, `diff` and `fingerprint` re-ingest the document, and `--cache-dir` is rejected for them and together with `--password-file`, so decrypted content is never persisted.
+- Cache entries hold document content as plain JSON. Directories are created with owner-only permissions and a cache directory that is a symbolic link is rejected, but the entries are not encrypted.
+- An entry is only reused by the identical executable. Upgrading or rebuilding DocSight turns existing entries into other-engine entries, which `cache prune` removes.
 
 ---
 
