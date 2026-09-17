@@ -44,7 +44,8 @@ pub fn build_layout_plan(source: &DocumentSource) -> Result<DocxLayoutPlan, Docs
     for child in body.children().filter(|node| node.is_element()) {
         if child.has_tag_name((W_NS, "p")) {
             paragraph_index = paragraph_index.checked_add(1).ok_or_else(count_error)?;
-            block_cursor = block_cursor.checked_add(1 + figure_count(child)).ok_or_else(count_error)?;
+            let paragraph_blocks = paragraph_block_count(child);
+            block_cursor = block_cursor.checked_add(paragraph_blocks).and_then(|value| value.checked_add(figure_count(child))).ok_or_else(count_error)?;
             if let Some(section_node) = child.children().find(|node| node.has_tag_name((W_NS, "pPr"))).and_then(|properties| properties.children().find(|node| node.has_tag_name((W_NS, "sectPr")))) {
                 section_index = section_index.checked_add(1).ok_or_else(count_error)?;
                 let path = format!("/word/document.xml::body/p[{paragraph_index}]/pPr/sectPr");
@@ -172,6 +173,34 @@ fn default_section(source: &DocumentSource, index: u32) -> Section {
         margin_top_pt: Some(72.0), margin_right_pt: Some(72.0), margin_bottom_pt: Some(72.0), margin_left_pt: Some(72.0),
         header_text: None, footer_text: None,
     }
+}
+
+fn paragraph_block_count(node: Node<'_, '_>) -> usize {
+    let mut segments = vec![String::new()];
+    for descendant in node.descendants().filter(Node::is_element) {
+        if descendant.ancestors().any(|ancestor| ancestor.has_tag_name((W_NS, "del"))) { continue; }
+        if descendant.ancestors().any(|ancestor| {
+            ancestor != descendant && ancestor.tag_name().name() == "fldSimple" && ancestor.attributes().any(|attribute| (attribute.name() == "instr" || attribute.name().ends_with(":instr")) && attribute.value().to_uppercase().contains("PAGE"))
+        }) { continue; }
+        if descendant.tag_name().name() == "fldSimple" {
+            let is_page = descendant.attributes().any(|attribute| (attribute.name() == "instr" || attribute.name().ends_with(":instr")) && attribute.value().to_uppercase().contains("PAGE"));
+            if is_page && let Some(last) = segments.last_mut() { last.push_str("[PAGE]"); }
+            continue;
+        }
+        if descendant.has_tag_name((W_NS, "t")) {
+            if let Some(value) = descendant.text() && let Some(last) = segments.last_mut() { last.push_str(value); }
+        } else if descendant.has_tag_name((W_NS, "tab")) {
+            if let Some(last) = segments.last_mut() { last.push('\t'); }
+        } else if descendant.has_tag_name((W_NS, "br")) || descendant.has_tag_name((W_NS, "cr")) {
+            let page_break = descendant.has_tag_name((W_NS, "br")) && descendant.attribute((W_NS, "type")).or_else(|| descendant.attribute("w:type")).is_some_and(|value| value == "page");
+            if page_break {
+                let leading = segments.len() == 1 && segments[0].trim().is_empty();
+                if !leading { segments.push(String::new()); }
+            } else if let Some(last) = segments.last_mut() { last.push('\n'); }
+        }
+    }
+    if segments.len() > 1 && segments.last().is_some_and(|text| text.trim().is_empty()) { segments.pop(); }
+    segments.len().max(1)
 }
 
 fn child_element<'a>(node: Node<'a, 'a>, local_name: &str) -> Option<Node<'a, 'a>> { node.children().find(|child| child.has_tag_name((W_NS, local_name))) }
