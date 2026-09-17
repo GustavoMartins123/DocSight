@@ -14,24 +14,34 @@ pub const SCHEMA: &str = "docsight.release/v1";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record { pub path: String, pub size: u64, pub sha256: String, pub executable: bool }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Manifest { pub schema: String, pub version: String, pub target: String, pub revision: String, pub toolchain: String, pub files: Vec<Record>, }
+pub struct Manifest {
+    pub schema: String, pub version: String, pub target: String, pub revision: String,
+    pub toolchain: String, pub files: Vec<Record>,
+}
 
 fn corrupt<E>(_: E) -> ToolError { ToolError::new("CORRUPT_ARCHIVE", "Archive is corrupt or missing declared content") }
-fn options(executable: bool) -> SimpleFileOptions { SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).last_modified_time(DateTime::default()).unix_permissions(if executable { 0o755 } else { 0o644 }) }
+
+fn options(executable: bool) -> SimpleFileOptions {
+    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
+        .last_modified_time(DateTime::default()).unix_permissions(if executable { 0o755 } else { 0o644 })
+}
 
 pub fn required_files(target: &str) -> Result<BTreeSet<String>> {
     let (binary, worker) = binary_names(target)?;
     let mut names: BTreeSet<String> = DOCUMENTS.into_iter().map(str::to_owned).collect();
-    names.extend([binary, worker, "THIRD_PARTY_NOTICES.md", "schemas/v2/agent-envelope.json", "schemas/ir/v1/document-ir.json"].into_iter().map(str::to_owned));
+    names.extend([binary, worker, "THIRD_PARTY_NOTICES.md", "schemas/v2/agent-envelope.json",
+        "schemas/ir/v1/document-ir.json"].into_iter().map(str::to_owned));
     names.extend(EXAMPLES.into_iter().map(|name| format!("examples/{name}")));
     Ok(names)
 }
 
 fn toolchain(root: &Path) -> Result<String> {
     let data = read_bytes(&root.join("rust-toolchain.toml"), 65_536)?;
-    let channels: Vec<_> = text(&data)?.lines().filter_map(|line| line.split_once('=')).filter(|(key, _)| key.trim() == "channel").collect();
+    let channels: Vec<_> = text(&data)?.lines().filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| key.trim() == "channel").collect();
     require(channels.len() == 1, "INVALID_TOOLCHAIN", "Exactly one pinned Rust toolchain is required")?;
     let value = parse_json(channels[0].1.trim().as_bytes())?;
     let channel = string(&value)?;
@@ -40,7 +50,8 @@ fn toolchain(root: &Path) -> Result<String> {
     Ok(channel.to_owned())
 }
 
-pub fn make_package(root: &Path, binary_path: &Path, worker_path: &Path, target: &str, revision: &str, notices: &Path, destination: &Path) -> Result<PathBuf> {
+pub fn make_package(root: &Path, binary_path: &Path, worker_path: &Path, target: &str,
+    revision: &str, notices: &Path, destination: &Path) -> Result<PathBuf> {
     checked_revision(revision)?;
     let version = workspace_version();
     let base = basename(version, target)?;
@@ -84,14 +95,18 @@ pub fn make_package(root: &Path, binary_path: &Path, worker_path: &Path, target:
         writer.start_file(format!("{base}/{name}"), options(executable)).map_err(corrupt)?;
         writer.write_all(&bytes)?;
     }
-    let manifest = Manifest { schema: SCHEMA.into(), version: version.into(), target: target.into(), revision: revision.into(), toolchain: toolchain(root)?, files };
+    let manifest = Manifest { schema: SCHEMA.into(), version: version.into(), target: target.into(),
+        revision: revision.into(), toolchain: toolchain(root)?, files };
     writer.start_file(format!("{base}/release-manifest.json"), options(false)).map_err(corrupt)?;
     writer.write_all(&json_bytes(&manifest)?)?;
     writer.finish().map_err(corrupt)?.sync_all()?;
     verify_archive(&staged_path)?;
     let hash = sha256_file(&staged_path)?;
     fs::hard_link(&staged_path, &final_path)?;
-    if let Err(error) = write_new(&checksum, format!("{hash}  {base}.zip\n").as_bytes(), false) { fs::remove_file(&final_path)?; return Err(error); }
+    if let Err(error) = write_new(&checksum, format!("{hash}  {base}.zip\n").as_bytes(), false) {
+        fs::remove_file(&final_path)?;
+        return Err(error);
+    }
     Ok(final_path)
 }
 
@@ -115,7 +130,8 @@ pub fn verify_archive(path: &Path) -> Result<Manifest> {
         let entry = archive.by_index(index).map_err(corrupt)?;
         let name = safe_member(entry.name())?.to_owned();
         let mode = entry.unix_mode().ok_or_else(|| corrupt(()))?;
-        require(folded.insert(name.to_ascii_lowercase()) && mode & 0o170000 == 0o100000, "INVALID_ARCHIVE_MEMBER", "Archive contains duplicate or special members")?;
+        require(folded.insert(name.to_ascii_lowercase()) && mode & 0o170000 == 0o100000,
+            "INVALID_ARCHIVE_MEMBER", "Archive contains duplicate or special members")?;
         require((1..=MAX_FILE_BYTES).contains(&entry.size()), "RELEASE_SIZE_LIMIT", "Archive member size is outside its bounds")?;
         total = total.checked_add(entry.size()).ok_or_else(|| corrupt(()))?;
         require(total <= MAX_TOTAL_BYTES, "RELEASE_SIZE_LIMIT", "Expanded archive exceeds its byte limit")?;
@@ -129,7 +145,8 @@ pub fn verify_archive(path: &Path) -> Result<Manifest> {
     checked_version(&manifest.toolchain)?;
     require(!manifest.toolchain.contains('-'), "INVALID_TOOLCHAIN", "Release requires a pinned stable Rust toolchain")?;
     let base = basename(&manifest.version, &manifest.target)?;
-    require(manifests[0] == format!("{base}/release-manifest.json") && path.file_name().is_some_and(|name| name == format!("{base}.zip").as_str()), "ARCHIVE_IDENTITY_MISMATCH", "Archive name, root and manifest identity must agree")?;
+    require(manifests[0] == format!("{base}/release-manifest.json") && path.file_name().is_some_and(|name| name == format!("{base}.zip").as_str()),
+        "ARCHIVE_IDENTITY_MISMATCH", "Archive name, root and manifest identity must agree")?;
     let (binary_name, worker_name) = binary_names(&manifest.target)?;
     let mut expected = BTreeSet::from([manifests[0].clone()]);
     let mut previous: Option<&str> = None;
@@ -145,7 +162,8 @@ pub fn verify_archive(path: &Path) -> Result<Manifest> {
         let mode = if executable { 0o100755 } else { 0o100644 };
         require(members.get(&full) == Some(&(record.size, mode)), "RELEASE_METADATA_MISMATCH", "File size or permission differs from manifest")?;
         let bytes = read_entry(&mut archive, &full, record.size.min(MAX_FILE_BYTES))?;
-        require(u64::try_from(bytes.len()).ok() == Some(record.size) && digest(&bytes) == record.sha256, "RELEASE_DIGEST_MISMATCH", "Release content differs from its recorded digest")?;
+        require(u64::try_from(bytes.len()).ok() == Some(record.size) && digest(&bytes) == record.sha256,
+            "RELEASE_DIGEST_MISMATCH", "Release content differs from its recorded digest")?;
         if executable { binary::check_bytes(&bytes, &manifest.target)?; }
     }
     require(expected == members.keys().cloned().collect(), "RELEASE_CONTENT_MISMATCH", "Archive contains missing or extra members")?;
@@ -164,7 +182,8 @@ pub fn extract_verified(path: &Path, destination: &Path) -> Result<(PathBuf, Man
         let mut archive = ZipArchive::new(File::open(path)?).map_err(corrupt)?;
         for record in &manifest.files {
             let bytes = read_entry(&mut archive, &format!("{base}/{}", record.path), record.size)?;
-            require(u64::try_from(bytes.len()).ok() == Some(record.size) && digest(&bytes) == record.sha256, "ARCHIVE_CHANGED", "Archive changed after verification")?;
+            require(u64::try_from(bytes.len()).ok() == Some(record.size) && digest(&bytes) == record.sha256,
+                "ARCHIVE_CHANGED", "Archive changed after verification")?;
             let output = destination.join(&record.path);
             if let Some(parent) = output.parent() { fs::create_dir_all(parent)?; }
             write_new(&output, &bytes, record.executable)?;
@@ -208,7 +227,8 @@ pub fn collect(directory: &Path) -> Result<Value> {
         let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| corrupt(()))?;
         sums.push_str(&format!("{hash}  {name}\n"));
     }
-    require(targets == TARGETS.into_iter().map(str::to_owned).collect() && identities.len() == 1, "INCONSISTENT_RELEASE_SET", "Targets must describe the same version, revision and toolchain")?;
+    require(targets == TARGETS.into_iter().map(str::to_owned).collect() && identities.len() == 1,
+        "INCONSISTENT_RELEASE_SET", "Targets must describe the same version, revision and toolchain")?;
     let (version, revision, toolchain) = identities.into_iter().next().ok_or_else(|| corrupt(()))?;
     write_new(&directory.join("SHA256SUMS"), sums.as_bytes(), false)?;
     Ok(json!({"version":version,"revision":revision,"toolchain":toolchain,"targets":targets}))
