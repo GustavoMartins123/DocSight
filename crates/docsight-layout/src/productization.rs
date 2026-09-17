@@ -46,11 +46,15 @@ pub fn layout_docx_productized(mut document: Document, mut sections: Vec<LayoutS
             page.number = page.number.checked_add(page_offset).ok_or_else(page_limit)?;
             for overlay in &mut page.overlays {
                 overlay.page = page.number;
+                if overlay.kind == OverlayKind::Footer {
+                    if let Some(template) = span.section.footer_text.as_deref() { overlay.text = template.replace("[PAGE]", &page.number.to_string()); }
+                }
                 overlay.id = ObjectId::new(overlay_prefix(overlay.kind), &document.sha256, &format!("productized/page[{}]/{}/{}", page.number, overlay_prefix(overlay.kind), overlay.id));
             }
         }
         let mut section_laid_pages = laid.pages;
         for page in &mut section_laid_pages { page.number = page.number.checked_add(page_offset).ok_or_else(page_limit)?; }
+        sync_overlay_text(&section_doc_pages, &mut section_laid_pages);
         let mut section_links = laid.document.links;
         for link in &mut section_links {
             if let Some(page) = link.page.as_mut() { *page = page.checked_add(page_offset).ok_or_else(page_limit)?; }
@@ -171,6 +175,14 @@ fn content_width(section: &Section) -> Result<f32, DocsightError> {
     let width = section.page_width_pt.unwrap_or(612.0) - section.margin_left_pt.unwrap_or(72.0) - section.margin_right_pt.unwrap_or(72.0);
     if !width.is_finite() || width <= 0.0 { return Err(DocsightError::MalformedDocument { message: "DOCX section margins leave no positive page width".to_owned() }); }
     Ok(width)
+}
+fn sync_overlay_text(doc_pages: &[docsight_core::Page], laid_pages: &mut [crate::layout::LaidOutPage]) {
+    for (doc_page, laid_page) in doc_pages.iter().zip(laid_pages.iter_mut()) {
+        for overlay in &doc_page.overlays {
+            let Some(bbox) = overlay.bbox else { continue; };
+            if let Some(run) = laid_page.runs.iter_mut().find(|run| run.bbox == bbox) { run.text = overlay.text.clone(); }
+        }
+    }
 }
 fn anchor_in_blocks(anchor: Option<&str>, blocks: &[Block]) -> bool { anchor.is_some_and(|path| blocks.iter().any(|block| block.source.path == path)) }
 fn overlay_prefix(kind: OverlayKind) -> &'static str { match kind { OverlayKind::Header => "hdr", OverlayKind::Footer => "ftr", OverlayKind::Watermark => "wm", OverlayKind::CommentMarker => "cmt", OverlayKind::Annotation => "ann" } }
