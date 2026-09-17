@@ -20,11 +20,21 @@ const RESOURCE_LOSS_CODES: &[&str] = &[
 const GEOMETRY_WARNING_CODES: &[&str] = &[
     "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
     "DOCX_BLOCK_TALLER_THAN_PAGE",
+    "DOCX_WIDOW_CONTROL_RELAXED",
+    "DOCX_SHAPE_VISUAL_OMITTED",
 ];
 
 const GLOBAL_GEOMETRY_APPROXIMATION_CODES: &[&str] = &[
     "DOCX_FONT_SUBSTITUTED",
     "DOCX_PAGINATION_BLOCK_GRANULAR",
+    "DOCX_SECTION_COLUMNS_UNSUPPORTED",
+    "DOCX_SECTION_DEFAULTED",
+    "DOCX_SECTION_GUTTER_IGNORED",
+    "DOCX_SECTION_GEOMETRY_DEFAULTED",
+    "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED",
+    "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
+    "DOCX_HEADER_FOOTER_OUTSIDE_PAGE",
+    "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
     "APPROXIMATED_PDF_FONT",
 ];
 
@@ -41,6 +51,10 @@ const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
     "PDF_BLEND_MODE_UNSUPPORTED",
     "PDF_NON_UNIFORM_STROKE_VISUAL",
     "PDF_SHADING_UNSUPPORTED",
+    "DOCX_HEADER_FOOTER_UNRESOLVED",
+    "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
+    "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED",
+    "DOCX_SHAPE_VISUAL_OMITTED",
 ];
 
 const PAGE_APPROXIMATION_CODES: &[&str] = &["DOCX_LAYOUT_PAGINATED"];
@@ -50,6 +64,17 @@ const DOCX_RENDER_APPROXIMATION_CODES: &[&str] = &[
     "DOCX_FIGURE_RASTER_PLACEHOLDER",
     "DOCX_BLOCK_TALLER_THAN_PAGE",
     "DOCX_PAGINATION_BLOCK_GRANULAR",
+    "DOCX_SECTION_COLUMNS_UNSUPPORTED",
+    "DOCX_SECTION_DEFAULTED",
+    "DOCX_SECTION_GUTTER_IGNORED",
+    "DOCX_SECTION_GEOMETRY_DEFAULTED",
+    "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED",
+    "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
+    "DOCX_HEADER_FOOTER_OUTSIDE_PAGE",
+    "DOCX_HEADER_FOOTER_UNRESOLVED",
+    "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
+    "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED",
+    "DOCX_SHAPE_VISUAL_OMITTED",
 ];
 
 const DOCX_TEXT_APPROXIMATION_CODE: &str = "DOCX_RUN_ELEMENT_UNSUPPORTED";
@@ -140,6 +165,24 @@ pub struct FidelityInputs<'a> {
 fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityProfile {
     let total = inputs.blocks.len();
     let block_ids: BTreeSet<&ObjectId> = inputs.blocks.iter().map(|block| &block.id).collect();
+    let pages: BTreeSet<u32> = inputs
+        .blocks
+        .iter()
+        .flat_map(|block| block.fragments().map(|(page, _)| page))
+        .collect();
+    let section_ids: BTreeSet<&ObjectId> = doc
+        .section_block_ranges()
+        .ok()
+        .into_iter()
+        .flatten()
+        .zip(&doc.sections)
+        .filter(|(range, _)| {
+            doc.blocks[range.clone()]
+                .iter()
+                .any(|block| block_ids.contains(&block.id))
+        })
+        .map(|(_, section)| &section.id)
+        .collect();
     let relevant_warnings: Vec<_> = doc
         .warnings
         .iter()
@@ -147,7 +190,8 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
             warning
                 .object
                 .as_ref()
-                .is_none_or(|object| block_ids.contains(object))
+                .is_none_or(|object| block_ids.contains(object) || section_ids.contains(object))
+                || warning.page.is_some_and(|page| pages.contains(&page))
         })
         .collect();
     let reasons: BTreeSet<String> = relevant_warnings
@@ -614,7 +658,7 @@ fn page_coverage(
                 regions.push(CoverageRegion {
                     page,
                     object_id: Some(block.id.clone()),
-                    bbox: block.bbox,
+                    bbox: region_bbox(block, page, is_global),
                     status: CoverageStatus::Unsupported,
                     reason_code: "DOCX_BODY_ELEMENT_UNSUPPORTED".to_owned(),
                     description:
@@ -635,7 +679,7 @@ fn page_coverage(
                 regions.push(CoverageRegion {
                     page,
                     object_id: Some(block.id.clone()),
-                    bbox: block.bbox,
+                    bbox: region_bbox(block, page, is_global),
                     status: CoverageStatus::Unsupported,
                     reason_code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
                     description: "embedded image bytes are not rasterized; visual evidence is a placeholder box"
@@ -652,7 +696,7 @@ fn page_coverage(
                 regions.push(CoverageRegion {
                     page,
                     object_id: Some(block.id.clone()),
-                    bbox: block.bbox,
+                    bbox: region_bbox(block, page, is_global),
                     status: CoverageStatus::Approximated,
                     reason_code: "DOCX_RUN_ELEMENT_UNSUPPORTED".to_owned(),
                     description:
@@ -671,7 +715,7 @@ fn page_coverage(
                 regions.push(CoverageRegion {
                     page,
                     object_id: Some(block.id.clone()),
-                    bbox: block.bbox,
+                    bbox: region_bbox(block, page, is_global),
                     status: CoverageStatus::Approximated,
                     reason_code: warning.code.clone(),
                     description: warning.effect.clone(),
@@ -690,7 +734,7 @@ fn page_coverage(
                 regions.push(CoverageRegion {
                     page,
                     object_id: Some(block.id.clone()),
-                    bbox: block.bbox,
+                    bbox: region_bbox(block, page, is_global),
                     status: CoverageStatus::Inferred,
                     reason_code: reason.to_owned(),
                     description: format!(
@@ -714,6 +758,16 @@ fn page_coverage(
             "DOCX_PAGINATION_BLOCK_GRANULAR",
             "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
             "DOCX_BLOCK_TALLER_THAN_PAGE",
+            "DOCX_WIDOW_CONTROL_RELAXED",
+            "DOCX_SECTION_COLUMNS_UNSUPPORTED",
+            "DOCX_SECTION_DEFAULTED",
+            "DOCX_SECTION_GUTTER_IGNORED",
+            "DOCX_SECTION_GEOMETRY_DEFAULTED",
+            "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED",
+            "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
+            "DOCX_HEADER_FOOTER_OUTSIDE_PAGE",
+            "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
+            "DOCX_SHAPE_VISUAL_OMITTED",
         ],
     );
     let visual_reasons = metric_reason_codes(
@@ -723,6 +777,10 @@ fn page_coverage(
             "APPROXIMATED_PDF_FONT",
             "PDF_XOBJECT_PLACEHOLDER",
             "DOCX_FIGURE_RASTER_PLACEHOLDER",
+            "DOCX_HEADER_FOOTER_UNRESOLVED",
+            "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
+            "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED",
+            "DOCX_SHAPE_VISUAL_OMITTED",
         ],
     );
     let geometry_unsupported = GLOBAL_GEOMETRY_APPROXIMATION_CODES
@@ -864,7 +922,7 @@ pub fn compute_coverage(
         let page_blocks: Vec<&Block> = doc
             .blocks
             .iter()
-            .filter(|block| block.page == Some(page))
+            .filter(|block| block.occupies_page(page))
             .collect();
         page_coverages.push(page_coverage(
             doc,
@@ -955,5 +1013,13 @@ fn approximated_unless(approximated: bool) -> CoverageStatus {
         CoverageStatus::Approximated
     } else {
         CoverageStatus::Exact
+    }
+}
+
+fn region_bbox(block: &Block, page: u32, is_global: bool) -> Option<Rect> {
+    if is_global {
+        block.bbox
+    } else {
+        block.bbox_on_page(page)
     }
 }

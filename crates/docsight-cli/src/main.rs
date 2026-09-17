@@ -672,6 +672,8 @@ struct PageSpanRecord {
     reading_order: u32,
     confidence: f32,
     source: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    continued: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2372,19 +2374,35 @@ fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
     let target_page_width = target_page.width_pt;
     let target_page_height = target_page.height_pt;
     let spans: Vec<PageSpanRecord> = document
-        .page_blocks(args.number)
-        .filter_map(|block| {
-            let bbox = block.bbox?;
-            Some(PageSpanRecord {
+        .blocks_on_page(args.number)
+        .map(|block| {
+            let bbox = block.bbox_on_page(args.number).ok_or_else(|| {
+                DocsightError::MalformedDocument {
+                    message: format!(
+                        "block {} is indexed on page {} without fragment geometry",
+                        block.id, args.number
+                    ),
+                }
+            })?;
+            let text = block.text_on_page(args.number)?.ok_or_else(|| {
+                DocsightError::MalformedDocument {
+                    message: format!(
+                        "block {} is indexed on page {} without fragment text",
+                        block.id, args.number
+                    ),
+                }
+            })?;
+            Ok(PageSpanRecord {
                 id: block.id.clone(),
-                text: block.text(),
+                text,
                 bbox,
                 reading_order: block.reading_order,
                 confidence: block.confidence,
                 source: block.source.path.clone(),
+                continued: block.page != Some(args.number),
             })
         })
-        .collect();
+        .collect::<Result<_, DocsightError>>()?;
     let overlays: Vec<PageOverlayRecord> = target_page
         .overlays
         .iter()
@@ -4557,25 +4575,37 @@ fn build_context_package(
             width_pt: page.width_pt,
             height_pt: page.height_pt,
         });
+    let target_section = if document.format == DocumentFormat::Docx {
+        match resolved.anchor_block() {
+            Some(block) => document.section_for_block(&block.id)?,
+            None => target
+                .page
+                .and_then(|number| document.page(number))
+                .and_then(|page| page.section_index)
+                .and_then(|index| {
+                    document
+                        .sections
+                        .iter()
+                        .find(|section| section.section_index == index)
+                }),
+        }
+    } else {
+        None
+    };
     let (section, section_status, section_reason) = match document.format {
         DocumentFormat::Pdf => (
             None,
             ContextSectionStatus::NotApplicable,
             Some("PDF documents do not have DOCX sections".to_owned()),
         ),
-        DocumentFormat::Docx
-            if document.sections.len() == 1
-                && !document
-                    .warnings
-                    .iter()
-                    .any(|warning| warning.code == "DOCX_SECTIONS_COLLAPSED") =>
-        {
-            let section = document.sections.first().map(|section| ContextSection {
+        DocumentFormat::Docx if let Some(section) = target_section => (
+            Some(ContextSection {
                 id: section.id.clone(),
                 index: section.section_index,
-            });
-            (section, ContextSectionStatus::Exact, None)
-        }
+            }),
+            ContextSectionStatus::Exact,
+            None,
+        ),
         DocumentFormat::Docx => {
             warnings.push(Diagnostic {
                 code: "CONTEXT_SECTION_UNAVAILABLE".to_owned(),

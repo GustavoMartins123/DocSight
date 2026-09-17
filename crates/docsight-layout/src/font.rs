@@ -40,44 +40,84 @@ pub fn text_width(text: &str, size_pt: f32) -> f32 {
     text.chars().map(|c| char_width(c, size_pt)).sum()
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WrappedLine {
+    pub text: String,
+    pub start_char: usize,
+}
+
 pub fn wrap_text(text: &str, size_pt: f32, max_width: f32) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-    let mut lines = Vec::new();
+    wrap_text_indexed(text, size_pt, max_width, max_width)
+        .into_iter()
+        .map(|line| line.text)
+        .collect()
+}
+
+pub fn wrap_text_indexed(
+    text: &str,
+    size_pt: f32,
+    first_line_width: f32,
+    line_width: f32,
+) -> Vec<WrappedLine> {
+    let space_width = char_width(' ', size_pt);
+    let mut lines: Vec<WrappedLine> = Vec::new();
+    let mut segment_start = 0_usize;
     for segment in text.split('\n') {
+        let segment_chars = segment.chars().count();
         if segment.is_empty() {
-            lines.push(String::new());
+            lines.push(WrappedLine {
+                text: String::new(),
+                start_char: segment_start,
+            });
+            segment_start += 1;
             continue;
         }
-        let mut current_line = String::new();
+        let mut current = String::new();
         let mut current_width = 0.0_f32;
-        let space_width = char_width(' ', size_pt);
-
+        let mut current_start = segment_start;
+        let mut word_start = segment_start;
         for word in segment.split(' ') {
-            if word.is_empty() {
-                continue;
+            let word_chars = word.chars().count();
+            if !word.is_empty() {
+                let word_width = text_width(word, size_pt);
+                let limit = if lines.is_empty() {
+                    first_line_width
+                } else {
+                    line_width
+                };
+                if current.is_empty() {
+                    current.push_str(word);
+                    current_width = word_width;
+                    current_start = word_start;
+                } else if current_width + space_width + word_width <= limit {
+                    current.push(' ');
+                    current.push_str(word);
+                    current_width += space_width + word_width;
+                } else {
+                    lines.push(WrappedLine {
+                        text: std::mem::take(&mut current),
+                        start_char: current_start,
+                    });
+                    current.push_str(word);
+                    current_width = word_width;
+                    current_start = word_start;
+                }
             }
-            let word_w = text_width(word, size_pt);
-            if current_line.is_empty() {
-                current_line.push_str(word);
-                current_width = word_w;
-            } else if current_width + space_width + word_w <= max_width {
-                current_line.push(' ');
-                current_line.push_str(word);
-                current_width += space_width + word_w;
-            } else {
-                lines.push(current_line);
-                current_line = word.to_owned();
-                current_width = word_w;
-            }
+            word_start += word_chars + 1;
         }
-        if !current_line.is_empty() {
-            lines.push(current_line);
+        if !current.is_empty() {
+            lines.push(WrappedLine {
+                text: current,
+                start_char: current_start,
+            });
         }
+        segment_start += segment_chars + 1;
     }
     if lines.is_empty() {
-        lines.push(String::new());
+        lines.push(WrappedLine {
+            text: String::new(),
+            start_char: 0,
+        });
     }
     lines
 }

@@ -76,6 +76,10 @@
           },
           "source": {
             "type": "string"
+          },
+          "continued": {
+            "type": "boolean",
+            "const": true
           }
         },
         "additionalProperties": false

@@ -1,5 +1,6 @@
 mod package;
 mod parser;
+mod sections;
 
 pub use package::{
     MAX_BINARY_PART_BYTES, MAX_COMPRESSION_RATIO, MAX_PACKAGE_ENTRIES,

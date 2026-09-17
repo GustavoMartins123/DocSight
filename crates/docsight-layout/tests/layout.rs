@@ -15,7 +15,7 @@ fn dummy_document(blocks: Vec<Block>, section: Option<Section>) -> Document {
         size_bytes: 100,
         metadata: DocumentMetadata::default(),
         styles: Vec::new(),
-        sections: section.into_iter().collect(),
+        sections: vec![section.unwrap_or_else(letter_section)],
         pages: Vec::new(),
         blocks,
         resources: Vec::new(),
@@ -23,6 +23,31 @@ fn dummy_document(blocks: Vec<Block>, section: Option<Section>) -> Document {
         comments: Vec::new(),
         tracked_changes: docsight_core::TrackedChanges::default(),
         warnings: Vec::new(),
+    }
+}
+
+fn letter_section() -> Section {
+    Section {
+        id: ObjectId::new("sect", DIGEST, "/word/document.xml::body/sectPr[1]"),
+        section_index: 1,
+        page_width_pt: Some(612.0),
+        page_height_pt: Some(792.0),
+        margin_top_pt: Some(72.0),
+        margin_right_pt: Some(72.0),
+        margin_bottom_pt: Some(72.0),
+        margin_left_pt: Some(72.0),
+        header_text: None,
+        footer_text: None,
+        start: docsight_core::SectionStart::NextPage,
+        title_page: false,
+        even_and_odd_headers: false,
+        header_distance_pt: None,
+        footer_distance_pt: None,
+        columns: 1,
+        page_number_start: None,
+        page_number_format: None,
+        headers_footers: Vec::new(),
+        last_block_id: None,
     }
 }
 
@@ -53,6 +78,7 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         confidence: 1.0,
         flags: Default::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Heading(HeadingBlock {
             level: 1,
             text: "Document Title".to_owned(),
@@ -70,6 +96,7 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         confidence: 1.0,
         flags: Default::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Paragraph(ParagraphBlock {
             text: "This is a sample paragraph describing the deterministic layout implementation."
                 .to_owned(),
@@ -87,6 +114,16 @@ fn paginates_paragraphs_and_computes_deterministic_geometry()
         margin_left_pt: Some(72.0),
         header_text: None,
         footer_text: None,
+        start: docsight_core::SectionStart::NextPage,
+        title_page: false,
+        even_and_odd_headers: false,
+        header_distance_pt: None,
+        footer_distance_pt: None,
+        columns: 1,
+        page_number_start: None,
+        page_number_format: None,
+        headers_footers: Vec::new(),
+        last_block_id: None,
     };
 
     let doc = dummy_document(vec![b1, b2], Some(section));
@@ -133,6 +170,7 @@ fn paginates_large_content_into_multiple_pages() -> Result<(), Box<dyn std::erro
             confidence: 1.0,
             flags: Default::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Paragraph(ParagraphBlock {
                 text: format!("Paragraph {i}: This is substantial content to fill space on the page and force deterministic pagination breaks."),
                 style_id: None,
@@ -151,6 +189,16 @@ fn paginates_large_content_into_multiple_pages() -> Result<(), Box<dyn std::erro
         margin_left_pt: Some(50.0),
         header_text: None,
         footer_text: None,
+        start: docsight_core::SectionStart::NextPage,
+        title_page: false,
+        even_and_odd_headers: false,
+        header_distance_pt: None,
+        footer_distance_pt: None,
+        columns: 1,
+        page_number_start: None,
+        page_number_format: None,
+        headers_footers: Vec::new(),
+        last_block_id: None,
     };
 
     let doc = dummy_document(blocks, Some(section));
@@ -224,6 +272,7 @@ fn lays_out_tables_with_cells_and_borders() -> Result<(), Box<dyn std::error::Er
         confidence: 1.0,
         flags: Default::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Table(TableBlock {
             rows: 2,
             columns: 2,
@@ -262,6 +311,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         confidence: 1.0,
         flags: Default::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Figure(docsight_core::FigureBlock {
             alt_text: Some("Chart Diagram".to_owned()),
             caption: None,
@@ -282,6 +332,7 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         confidence: 1.0,
         flags: Default::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Note(docsight_core::NoteBlock {
             kind: docsight_core::NoteKind::Footnote,
             note_id: "1".to_owned(),
@@ -301,6 +352,31 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
         margin_left_pt: Some(72.0),
         header_text: Some("Top Header".to_owned()),
         footer_text: Some("Bottom Page [PAGE]".to_owned()),
+        start: docsight_core::SectionStart::NextPage,
+        title_page: false,
+        even_and_odd_headers: false,
+        header_distance_pt: None,
+        footer_distance_pt: None,
+        columns: 1,
+        page_number_start: None,
+        page_number_format: None,
+        headers_footers: vec![
+            docsight_core::SectionHeaderFooter {
+                kind: docsight_core::HeaderFooterKind::Header,
+                variant: docsight_core::HeaderFooterVariant::Default,
+                part: "/word/header1.xml".to_owned(),
+                text: "Top Header".to_owned(),
+                inherited: false,
+            },
+            docsight_core::SectionHeaderFooter {
+                kind: docsight_core::HeaderFooterKind::Footer,
+                variant: docsight_core::HeaderFooterVariant::Default,
+                part: "/word/footer1.xml".to_owned(),
+                text: "Bottom Page [PAGE]".to_owned(),
+                inherited: false,
+            },
+        ],
+        last_block_id: None,
     };
 
     let mut doc = dummy_document(vec![fig_block, note_block], Some(section));
@@ -325,6 +401,8 @@ fn lays_out_figures_notes_headers_and_footers() -> Result<(), Box<dyn std::error
     assert_eq!(page.overlays[0].text, "Top Header");
     assert_eq!(page.overlays[1].kind, docsight_core::OverlayKind::Footer);
     assert_eq!(page.overlays[1].text, "Bottom Page 1");
+    assert_eq!(page.overlays[0].source.path, "/word/header1.xml");
+    assert_eq!(page.overlays[1].source.path, "/word/footer1.xml");
 
     assert!(laid_out.document.blocks[0].bbox.is_some());
     assert_eq!(laid_out.document.blocks[0].page, Some(1));
@@ -350,6 +428,7 @@ fn paragraph_block(index: u32, text: &str, flags: LayoutFlags) -> Block {
         confidence: 1.0,
         flags,
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Paragraph(ParagraphBlock {
             text: text.to_owned(),
             style_id: None,
@@ -429,36 +508,62 @@ fn break_after_flushes_the_current_page() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+fn keep_document(heading_flags: LayoutFlags) -> Document {
+    let mut section = letter_section();
+    section.page_height_pt = Some(244.0);
+    let mut blocks: Vec<Block> = (1..=4)
+        .map(|index| paragraph_block(index, "Filler line.", LayoutFlags::default()))
+        .collect();
+    blocks.push(paragraph_block(5, "Heading kept with next", heading_flags));
+    blocks.push(paragraph_block(
+        6,
+        "Follower body paragraph with enough words to wrap across several lines of the page body.",
+        LayoutFlags::default(),
+    ));
+    dummy_document(blocks, Some(section))
+}
+
 #[test]
 fn keep_with_next_moves_heading_with_its_follower() -> Result<(), Box<dyn std::error::Error>> {
-    let keep = LayoutFlags {
+    let free = layout_docx(keep_document(LayoutFlags::default()))?;
+    assert_eq!(free.document.blocks[4].page, Some(1));
+
+    let kept = layout_docx(keep_document(LayoutFlags {
         keep_with_next: true,
         ..Default::default()
-    };
-    let long_text = "filler paragraph ".repeat(292);
-    let doc = dummy_document(
-        vec![
-            paragraph_block(1, &long_text, LayoutFlags::default()),
-            paragraph_block(2, "Heading kept with next", keep),
-            paragraph_block(3, "Follower body paragraph.", LayoutFlags::default()),
-        ],
-        None,
-    );
-    let laid_out = layout_docx(doc)?;
-    assert_eq!(laid_out.pages.len(), 2);
-    assert_eq!(laid_out.document.blocks[0].page, Some(1));
-    assert_eq!(laid_out.document.blocks[1].page, Some(2));
-    assert_eq!(laid_out.document.blocks[2].page, Some(2));
+    }))?;
+    assert_eq!(kept.document.blocks[3].page, Some(1));
+    assert_eq!(kept.document.blocks[4].page, Some(2));
+    assert_eq!(kept.document.blocks[5].page, Some(2));
     Ok(())
 }
 
 #[test]
-fn block_taller_than_page_overflows_with_diagnostic() -> Result<(), Box<dyn std::error::Error>> {
+fn long_paragraph_continues_on_following_pages_instead_of_overflowing()
+-> Result<(), Box<dyn std::error::Error>> {
     let huge = "overflow line of text ".repeat(2000);
     let doc = dummy_document(
         vec![paragraph_block(1, &huge, LayoutFlags::default())],
         None,
     );
+    let laid_out = layout_docx(doc)?;
+    assert!(laid_out.pages.len() > 1);
+    let block = &laid_out.document.blocks[0];
+    assert_eq!(block.page, Some(1));
+    assert_eq!(block.continuations.len() + 1, laid_out.pages.len());
+    assert!(
+        !laid_out
+            .document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_BLOCK_TALLER_THAN_PAGE")
+    );
+    Ok(())
+}
+
+#[test]
+fn table_taller_than_page_overflows_with_diagnostic() -> Result<(), Box<dyn std::error::Error>> {
+    let doc = dummy_document(vec![table_block(1, 80)], None);
     let laid_out = layout_docx(doc)?;
     assert_eq!(laid_out.pages.len(), 1);
     assert!(
@@ -472,24 +577,81 @@ fn block_taller_than_page_overflows_with_diagnostic() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn block_granular_pagination_is_diagnosed() -> Result<(), Box<dyn std::error::Error>> {
-    let doc = dummy_document(
+fn block_granular_pagination_is_diagnosed_only_for_moved_tables()
+-> Result<(), Box<dyn std::error::Error>> {
+    let plain = layout_docx(dummy_document(
         vec![paragraph_block(
             1,
             "Single paragraph.",
             LayoutFlags::default(),
         )],
         None,
-    );
-    let laid_out = layout_docx(doc)?;
+    ))?;
     assert!(
-        laid_out
+        !plain
             .document
             .warnings
             .iter()
             .any(|warning| warning.code == "DOCX_PAGINATION_BLOCK_GRANULAR")
     );
+
+    let filler = "filler text ".repeat(350);
+    let moved = layout_docx(dummy_document(
+        vec![
+            paragraph_block(1, &filler, LayoutFlags::default()),
+            table_block(2, 20),
+        ],
+        None,
+    ))?;
+    let table = &moved.document.blocks[1];
+    assert_eq!(table.page, Some(2));
+    let warning = moved
+        .document
+        .warnings
+        .iter()
+        .find(|warning| warning.code == "DOCX_PAGINATION_BLOCK_GRANULAR")
+        .ok_or("moved table was not diagnosed")?;
+    assert_eq!(warning.object.as_ref(), Some(&table.id));
+    assert_eq!(warning.page, Some(2));
     Ok(())
+}
+
+fn table_block(index: u32, rows: u32) -> Block {
+    let source_path = format!("/word/document.xml::body/tbl[{index}]");
+    let cells = (0..rows)
+        .map(|row| TableCell {
+            id: ObjectId::new("cell", DIGEST, &format!("{source_path}/tr[{row}]/tc[1]")),
+            row,
+            column: 0,
+            row_span: 1,
+            column_span: 1,
+            bbox: None,
+            text: format!("row {row}"),
+            blocks: Vec::new(),
+            source: SourceSpan::new(format!("{source_path}/tr[{row}]/tc[1]")),
+        })
+        .collect();
+    Block {
+        id: ObjectId::new("tbl", DIGEST, &source_path),
+        kind: docsight_core::BlockKind::Table,
+        page: None,
+        bbox: None,
+        z_index: 0,
+        reading_order: index,
+        source: SourceSpan::new(source_path),
+        confidence: 1.0,
+        flags: LayoutFlags::default(),
+        format: Default::default(),
+        continuations: Vec::new(),
+        content: BlockContent::Table(TableBlock {
+            rows,
+            columns: 1,
+            header_rows: 0,
+            cells,
+            column_widths_pt: None,
+            detector: None,
+        }),
+    }
 }
 
 fn formatted_paragraph(index: u32, text: &str, format: docsight_core::ParagraphFormat) -> Block {

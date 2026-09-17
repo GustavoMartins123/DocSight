@@ -7,8 +7,7 @@
       "global": {
         "geometry": {
           "reason_codes": [
-            "DOCX_FONT_SUBSTITUTED",
-            "DOCX_PAGINATION_BLOCK_GRANULAR"
+            "DOCX_FONT_SUBSTITUTED"
           ],
           "score": 0.0,
           "status": "unsupported"
@@ -42,8 +41,7 @@
         {
           "geometry": {
             "reason_codes": [
-              "DOCX_FONT_SUBSTITUTED",
-              "DOCX_PAGINATION_BLOCK_GRANULAR"
+              "DOCX_FONT_SUBSTITUTED"
             ],
             "score": 0.0,
             "status": "unsupported"
@@ -56,12 +54,6 @@
               "page": 1,
               "reason_code": "DOCX_FONT_SUBSTITUTED",
               "status": "unsupported"
-            },
-            {
-              "description": "the page is not backed by source-faithful geometry or rendering",
-              "page": 1,
-              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
-              "status": "approximated"
             }
           ],
           "resource": {
@@ -90,8 +82,7 @@
         {
           "geometry": {
             "reason_codes": [
-              "DOCX_FONT_SUBSTITUTED",
-              "DOCX_PAGINATION_BLOCK_GRANULAR"
+              "DOCX_FONT_SUBSTITUTED"
             ],
             "score": 0.0,
             "status": "unsupported"
@@ -104,12 +95,6 @@
               "page": 2,
               "reason_code": "DOCX_FONT_SUBSTITUTED",
               "status": "unsupported"
-            },
-            {
-              "description": "the page is not backed by source-faithful geometry or rendering",
-              "page": 2,
-              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
-              "status": "approximated"
             }
           ],
           "resource": {
@@ -138,8 +123,7 @@
         {
           "geometry": {
             "reason_codes": [
-              "DOCX_FONT_SUBSTITUTED",
-              "DOCX_PAGINATION_BLOCK_GRANULAR"
+              "DOCX_FONT_SUBSTITUTED"
             ],
             "score": 0.0,
             "status": "unsupported"
@@ -152,12 +136,6 @@
               "page": 3,
               "reason_code": "DOCX_FONT_SUBSTITUTED",
               "status": "unsupported"
-            },
-            {
-              "description": "the page is not backed by source-faithful geometry or rendering",
-              "page": 3,
-              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
-              "status": "approximated"
             }
           ],
           "resource": {
@@ -186,8 +164,7 @@
         {
           "geometry": {
             "reason_codes": [
-              "DOCX_FONT_SUBSTITUTED",
-              "DOCX_PAGINATION_BLOCK_GRANULAR"
+              "DOCX_FONT_SUBSTITUTED"
             ],
             "score": 0.0,
             "status": "unsupported"
@@ -200,12 +177,6 @@
               "page": 4,
               "reason_code": "DOCX_FONT_SUBSTITUTED",
               "status": "unsupported"
-            },
-            {
-              "description": "the page is not backed by source-faithful geometry or rendering",
-              "page": 4,
-              "reason_code": "DOCX_PAGINATION_BLOCK_GRANULAR",
-              "status": "approximated"
             }
           ],
           "resource": {
@@ -234,10 +205,9 @@
       ],
       "reason_codes": [
         "DOCX_FONT_SUBSTITUTED",
-        "DOCX_LAYOUT_PAGINATED",
-        "DOCX_PAGINATION_BLOCK_GRANULAR"
+        "DOCX_LAYOUT_PAGINATED"
       ],
-      "unsupported_feature_count": 2
+      "unsupported_feature_count": 1
     },
     "evidence": {
       "document": {
@@ -256,8 +226,7 @@
           "geometry": 0.0,
           "reasons": [
             "DOCX_FONT_SUBSTITUTED",
-            "DOCX_LAYOUT_PAGINATED",
-            "DOCX_PAGINATION_BLOCK_GRANULAR"
+            "DOCX_LAYOUT_PAGINATED"
           ],
           "structure": 1.0,
           "text": 1.0,
@@ -274,8 +243,7 @@
       },
       "warnings": [
         "DOCX_LAYOUT_PAGINATED",
-        "DOCX_FONT_SUBSTITUTED",
-        "DOCX_PAGINATION_BLOCK_GRANULAR"
+        "DOCX_FONT_SUBSTITUTED"
       ]
     },
     "hit": {
@@ -330,8 +298,8 @@
             "weight": 0.07999999821186066
           },
           {
-            "after": "p3:90.00,645.14,522.00,685.10",
-            "before": "p3:90.00,645.14,522.00,685.10",
+            "after": "p3:90.00,613.01,522.00,652.97",
+            "before": "p3:90.00,613.01,522.00,652.97",
             "kind": "geometry",
             "score": 1.0,
             "weight": 0.07999999821186066
@@ -380,10 +348,8 @@
         "warnings": [
           "DOCX_LAYOUT_PAGINATED: DOCX was paginated using deterministic layout engine",
           "DOCX_FONT_SUBSTITUTED: layout used deterministic proportional fallback font",
-          "DOCX_PAGINATION_BLOCK_GRANULAR: pagination never splits a block across pages",
           "DOCX_LAYOUT_PAGINATED: DOCX was paginated using deterministic layout engine",
-          "DOCX_FONT_SUBSTITUTED: layout used deterministic proportional fallback font",
-          "DOCX_PAGINATION_BLOCK_GRANULAR: pagination never splits a block across pages"
+          "DOCX_FONT_SUBSTITUTED: layout used deterministic proportional fallback font"
         ]
       },
       "total_records": 50
@@ -417,11 +383,10 @@
       "raster_sha256": "8a97f0ce59fc9d93373f96c22ae19732c8aaa1eea0ae7be3f7361b4d56bef03d",
       "resource_count": 0,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "b54e7763e9fece82368953aab95bf6ee35e4f6d22f3be66fdd54b68a6b112ac7",
+      "trace_sha256": "9f8931b111dfc723e6f9f5100f5612c0aa5334ef33ab979026fa2f80072cbc17",
       "warnings": [
         "DOCX_LAYOUT_PAGINATED",
-        "DOCX_FONT_SUBSTITUTED",
-        "DOCX_PAGINATION_BLOCK_GRANULAR"
+        "DOCX_FONT_SUBSTITUTED"
       ],
       "width_px": 612
     },
@@ -454,13 +419,12 @@
         "document_sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061",
         "raster_sha256": "8a97f0ce59fc9d93373f96c22ae19732c8aaa1eea0ae7be3f7361b4d56bef03d",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "b54e7763e9fece82368953aab95bf6ee35e4f6d22f3be66fdd54b68a6b112ac7",
+        "trace_sha256": "9f8931b111dfc723e6f9f5100f5612c0aa5334ef33ab979026fa2f80072cbc17",
         "valid": true
       },
       "warnings": [
         "DOCX_LAYOUT_PAGINATED",
-        "DOCX_FONT_SUBSTITUTED",
-        "DOCX_PAGINATION_BLOCK_GRANULAR"
+        "DOCX_FONT_SUBSTITUTED"
       ]
     }
   },
@@ -704,7 +668,7 @@
     {
       "file": "context-result.json",
       "id": "https://docsight.dev/schemas/v2/context-result.json",
-      "sha256": "f6a516c2b24fc9885d974526eeb8a336b7538b314653dbf1b751374c5c02dfdb"
+      "sha256": "357f403e15f0812c6be839439f8d9c7e41d23653da2eb410814f70565d475b8c"
     },
     {
       "file": "coverage-report.json",
@@ -774,17 +738,17 @@
     {
       "file": "overview-result.json",
       "id": "https://docsight.dev/schemas/v2/overview-result.json",
-      "sha256": "05c8effc41e8c371f80386b86847d4e91a8e5812456d1720f8e7a4de336aa4d6"
+      "sha256": "77175f92cf994074783e4f397e1d5e64e0106da7abc8f3e91957d666169691d6"
     },
     {
       "file": "page-result.json",
       "id": "https://docsight.dev/schemas/v2/page-result.json",
-      "sha256": "bbd581bb110ee0b5fcb29109106de45f8cc618cb9c3e0b8b396ee4525d0cb897"
+      "sha256": "d2a25cdbad070052359a55cd1e27edc59db9bcecbebde51969f769df5cfce2c9"
     },
     {
       "file": "peek-result.json",
       "id": "https://docsight.dev/schemas/v2/peek-result.json",
-      "sha256": "4d767e91408425b35c6bac00429602a4cd712d29f57c54dd876afc7feca8bda1"
+      "sha256": "9e8ebbdc7c9ccf27793d53cc7ad238f2d1bd98a797a91582e3b35825d61912a9"
     },
     {
       "file": "projection-selection.json",
@@ -809,22 +773,22 @@
     {
       "file": "resolve-result.json",
       "id": "https://docsight.dev/schemas/v2/resolve-result.json",
-      "sha256": "81ca72acb31d07342da36a980db975e984980d41cb412f5751c50197d93e08fc"
+      "sha256": "c7ada8cd73a30c4e6920933329f920459dd9e133e50fa7a93c73458ebbe7d74d"
     },
     {
       "file": "semantic-object.json",
       "id": "https://docsight.dev/schemas/v2/semantic-object.json",
-      "sha256": "ee9bb30ebca4f2fd348339f221956c46a934b031662d14f93790bc45ef382fcb"
+      "sha256": "c67f1db6074bdb3f82a50d696d2a1b70ae905e7380b137fcea5e08fa509b1927"
     },
     {
       "file": "semantic-viewport.json",
       "id": "https://docsight.dev/schemas/v2/semantic-viewport.json",
-      "sha256": "7d2a7f93aad0f7e6962899caa4db51b6a5d1f8bad024ec33b9fc0c2314001ef1"
+      "sha256": "3648f26001465d441f54f0e0e0532ee92384bf4845273f5d395b2b680a955964"
     },
     {
       "file": "spatial-query-result.json",
       "id": "https://docsight.dev/schemas/v2/spatial-query-result.json",
-      "sha256": "8780cb754dc71dcf796745621d32be5a3b5c1b92aabec6b7288de9d2d3b0721f"
+      "sha256": "627ad23441d052c002ead2547a8271f0064d8fb350606ca17b7745f85f810a7b"
     },
     {
       "file": "table-result.json",

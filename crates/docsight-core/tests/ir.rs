@@ -58,6 +58,7 @@ fn sample_document() -> Document {
             confidence: 1.0,
             flags: Default::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Heading(HeadingBlock {
                 level: 1,
                 text: "Introduction".to_owned(),
@@ -75,6 +76,7 @@ fn sample_document() -> Document {
             confidence: 1.0,
             flags: Default::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Paragraph(ParagraphBlock {
                 text: "This is a paragraph.".to_owned(),
                 style_id: None,
@@ -91,6 +93,7 @@ fn sample_document() -> Document {
             confidence: 1.0,
             flags: Default::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Table(table_block),
         },
     ];
@@ -100,6 +103,8 @@ fn sample_document() -> Document {
         width_pt: 595.0,
         height_pt: 842.0,
         block_ids: vec![h1_id, p1_id, tbl_id],
+        section_index: None,
+        continued_block_ids: Vec::new(),
         overlays: Vec::new(),
     };
 

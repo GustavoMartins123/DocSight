@@ -120,7 +120,7 @@ fn hit_includes_page_overlays() -> Result<(), Box<dyn std::error::Error>> {
 
     let output = docsight()
         .args([
-            "hit", doc_str, "--page", "1", "--point", "100,735", "--json",
+            "hit", doc_str, "--page", "1", "--point", "100,750", "--json",
         ])
         .output()?;
     assert!(output.status.success());

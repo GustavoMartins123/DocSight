@@ -1,10 +1,14 @@
 use crate::package::read_parts;
+use crate::sections::{
+    SectionInputs, SectionLocation, defaulted_section, even_and_odd_headers, header_footer_parts,
+    parse_section,
+};
 use docsight_core::{
     Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
     Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
     Hyperlink, IrVersion, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId,
-    ParagraphBlock, ParagraphFormat, Resource, ResourceKind, Section, SourceSpan, Style,
-    TableBlock, TableCell, TextAlignment, TrackedChanges, UnknownBlock, validate_canonical,
+    ParagraphBlock, ParagraphFormat, Resource, ResourceKind, Section, ShapeBlock, SourceSpan,
+    Style, TableBlock, TableCell, TextAlignment, TrackedChanges, UnknownBlock, validate_canonical,
 };
 use roxmltree::{Document as XmlDocument, Node, ParsingOptions};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +36,52 @@ struct StyleDefinition {
     font_size_pt: Option<f32>,
     bold: Option<bool>,
     italic: Option<bool>,
+    layout_flags: StyleLayoutFlags,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StyleLayoutFlags {
+    page_break_before: Option<bool>,
+    keep_with_next: Option<bool>,
+    keep_lines: Option<bool>,
+    widow_control: Option<bool>,
+}
+
+impl StyleLayoutFlags {
+    fn from_properties(properties: Node<'_, '_>) -> Self {
+        let flag = |name: &str| {
+            child_element(properties, name).map(|flag| on_off_value(word_value(flag).as_deref()))
+        };
+        Self {
+            page_break_before: flag("pageBreakBefore"),
+            keep_with_next: flag("keepNext"),
+            keep_lines: flag("keepLines"),
+            widow_control: flag("widowControl"),
+        }
+    }
+
+    fn merge(&mut self, source: Self) {
+        self.page_break_before = source.page_break_before.or(self.page_break_before);
+        self.keep_with_next = source.keep_with_next.or(self.keep_with_next);
+        self.keep_lines = source.keep_lines.or(self.keep_lines);
+        self.widow_control = source.widow_control.or(self.widow_control);
+    }
+
+    fn resolve(self) -> LayoutFlags {
+        LayoutFlags {
+            page_break_before: self.page_break_before.unwrap_or(false),
+            break_after: false,
+            keep_with_next: self.keep_with_next.unwrap_or(false),
+            keep_lines: self.keep_lines.unwrap_or(false),
+            widow_control: self.widow_control.unwrap_or(true),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ParagraphDefaults {
+    style_id: Option<String>,
+    layout_flags: StyleLayoutFlags,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -77,9 +127,15 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     }
     let parts = read_parts(source.bytes())?;
     let rels = parse_relationships(parts.rels.as_deref())?;
-    let header_texts = extract_part_texts(&parts.headers)?;
-    let footer_texts = extract_part_texts(&parts.footers)?;
+    let header_footer_contents = header_footer_parts(&parts.headers, &parts.footers)?;
+    let section_inputs = SectionInputs {
+        source,
+        rels: &rels,
+        parts: &header_footer_contents,
+        even_and_odd_headers: even_and_odd_headers(parts.settings.as_deref())?,
+    };
     let styles = parse_styles(parts.styles.as_deref())?;
+    let paragraph_defaults = parse_paragraph_defaults(parts.styles.as_deref())?;
     let numbering = parse_numbering(parts.numbering.as_deref())?;
     let xml = parse_xml(&parts.document)?;
     let body = xml
@@ -101,7 +157,8 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
     );
     let mut paragraph_index = 0_u32;
     let mut table_index = 0_u32;
-    let mut section_index = 0_u32;
+    let mut body_section_index = 0_u32;
+    let mut section_start_block = 0_usize;
     let mut figure_index = 0_u32;
     let mut unknown_index = 0_u32;
     let mut link_counter = 0_usize;
@@ -128,6 +185,7 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 paragraph_index,
                 source,
                 &styles,
+                &paragraph_defaults,
                 &numbering,
                 &mut reading_order,
                 &mut warnings,
@@ -156,20 +214,38 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut note_anchors,
                 &mut comment_anchors,
             );
+            if let Some(section_node) = child_element(child, "pPr")
+                .and_then(|properties| child_element(properties, "sectPr"))
+            {
+                let source_path = format!("{paragraph_path}/pPr/sectPr");
+                push_section(
+                    section_node,
+                    &source_path,
+                    &blocks,
+                    &mut section_start_block,
+                    &mut sections,
+                    &section_inputs,
+                    &mut warnings,
+                )?;
+            }
         } else if child.has_tag_name((W_NS, "tbl")) {
             table_index = table_index.checked_add(1).ok_or_else(block_count_error)?;
             reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
             blocks.push(parse_table(child, table_index, source, reading_order)?);
         } else if child.has_tag_name((W_NS, "sectPr")) {
-            section_index = section_index.checked_add(1).ok_or_else(block_count_error)?;
-            sections.push(parse_section(
+            body_section_index = body_section_index
+                .checked_add(1)
+                .ok_or_else(block_count_error)?;
+            let source_path = format!("/word/document.xml::body/sectPr[{body_section_index}]");
+            push_section(
                 child,
-                section_index,
-                source,
-                &header_texts,
-                &footer_texts,
-                &rels,
-            ));
+                &source_path,
+                &blocks,
+                &mut section_start_block,
+                &mut sections,
+                &section_inputs,
+                &mut warnings,
+            )?;
         } else {
             unknown_index = unknown_index.checked_add(1).ok_or_else(block_count_error)?;
             reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
@@ -204,36 +280,27 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         ));
     }
 
-    if body
-        .descendants()
-        .filter(|node| node.has_tag_name((W_NS, "pPr")))
-        .any(|properties| child_element(properties, "sectPr").is_some())
-    {
-        warnings.push(Diagnostic::warning(
-            "DOCX_SECTIONS_COLLAPSED",
-            "document has paragraph-level section breaks that were collapsed".to_owned(),
-            "only the first section geometry is applied to every page",
-        ));
-    }
-
-    if sections.is_empty() {
+    if sections.is_empty() || section_start_block < blocks.len() {
         warnings.push(Diagnostic::warning(
             "DOCX_SECTION_DEFAULTED",
-            "document.xml has no sectPr; a default section was synthesized".to_owned(),
-            "page geometry falls back to Letter 612x792 pt with 72 pt margins",
+            "document.xml does not end with a sectPr; a default final section was synthesized"
+                .to_owned(),
+            "page geometry of the final section falls back to Letter 612x792 pt with 72 pt margins and no headers or footers",
         ));
-        sections.push(Section {
-            id: source.object_id("sect", "/word/document.xml::body/sectPr[1]"),
-            section_index: 1,
-            page_width_pt: Some(612.0),
-            page_height_pt: Some(792.0),
-            margin_top_pt: Some(72.0),
-            margin_right_pt: Some(72.0),
-            margin_bottom_pt: Some(72.0),
-            margin_left_pt: Some(72.0),
-            header_text: header_texts.first().map(|(_, t)| t.clone()),
-            footer_text: footer_texts.first().map(|(_, t)| t.clone()),
-        });
+        let index = next_section_index(&sections)?;
+        let source_path = format!(
+            "/word/document.xml::body/sectPr[{}]",
+            body_section_index
+                .checked_add(1)
+                .ok_or_else(block_count_error)?
+        );
+        sections.push(defaulted_section(
+            source,
+            index,
+            &source_path,
+            section_last_block(&blocks, section_start_block),
+            section_inputs.even_and_odd_headers,
+        ));
     }
 
     blocks.extend(parse_notes(
@@ -373,107 +440,45 @@ fn preserve_inert_parts(
     }
 }
 
-fn parse_section(
+#[allow(clippy::too_many_arguments)]
+fn push_section(
     node: Node<'_, '_>,
-    index: u32,
-    source: &DocumentSource,
-    header_texts: &[(String, String)],
-    footer_texts: &[(String, String)],
-    rels: &BTreeMap<String, (String, String)>,
-) -> Section {
-    let source_path = format!("/word/document.xml::body/sectPr[{index}]");
-    let mut page_width_pt = None;
-    let mut page_height_pt = None;
-    let mut margin_top_pt = None;
-    let mut margin_right_pt = None;
-    let mut margin_bottom_pt = None;
-    let mut margin_left_pt = None;
-
-    if let Some(pg_sz) = child_element(node, "pgSz") {
-        if let Some(w) = pg_sz
-            .attribute((W_NS, "w"))
-            .and_then(|v| v.parse::<f32>().ok())
-        {
-            page_width_pt = Some(w / 20.0);
-        }
-        if let Some(h) = pg_sz
-            .attribute((W_NS, "h"))
-            .and_then(|v| v.parse::<f32>().ok())
-        {
-            page_height_pt = Some(h / 20.0);
-        }
-    }
-    if let Some(pg_mar) = child_element(node, "pgMar") {
-        if let Some(top) = pg_mar
-            .attribute((W_NS, "top"))
-            .and_then(|v| v.parse::<f32>().ok())
-        {
-            margin_top_pt = Some(top / 20.0);
-        }
-        if let Some(right) = pg_mar
-            .attribute((W_NS, "right"))
-            .and_then(|v| v.parse::<f32>().ok())
-        {
-            margin_right_pt = Some(right / 20.0);
-        }
-        if let Some(bottom) = pg_mar
-            .attribute((W_NS, "bottom"))
-            .and_then(|v| v.parse::<f32>().ok())
-        {
-            margin_bottom_pt = Some(bottom / 20.0);
-        }
-        if let Some(left) = pg_mar
-            .attribute((W_NS, "left"))
-            .and_then(|v| v.parse::<f32>().ok())
-        {
-            margin_left_pt = Some(left / 20.0);
-        }
-    }
-
-    let mut header_text = None;
-    let mut footer_text = None;
-
-    for child in node.children().filter(Node::is_element) {
-        if child.has_tag_name((W_NS, "headerReference")) {
-            let r_id = child
-                .attribute((R_NS, "id"))
-                .or_else(|| child.attribute("r:id"));
-            if let Some(r_id) = r_id
-                && let Some((_, target)) = rels.get(r_id)
-                && let Some(normalized) = normalize_internal_target(target)
-                && let Some((_, text)) = header_texts.iter().find(|(name, _)| *name == normalized)
-            {
-                header_text = Some(text.clone());
-            }
-        } else if child.has_tag_name((W_NS, "footerReference")) {
-            let r_id = child
-                .attribute((R_NS, "id"))
-                .or_else(|| child.attribute("r:id"));
-            if let Some(r_id) = r_id
-                && let Some((_, target)) = rels.get(r_id)
-                && let Some(normalized) = normalize_internal_target(target)
-                && let Some((_, text)) = footer_texts.iter().find(|(name, _)| *name == normalized)
-            {
-                footer_text = Some(text.clone());
-            }
-        }
-    }
-
-    Section {
-        id: source.object_id("sect", &source_path),
-        section_index: index,
-        page_width_pt,
-        page_height_pt,
-        margin_top_pt,
-        margin_right_pt,
-        margin_bottom_pt,
-        margin_left_pt,
-        header_text,
-        footer_text,
-    }
+    source_path: &str,
+    blocks: &[Block],
+    section_start_block: &mut usize,
+    sections: &mut Vec<Section>,
+    inputs: &SectionInputs<'_>,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<(), DocsightError> {
+    let location = SectionLocation {
+        index: next_section_index(sections)?,
+        source_path,
+        last_block_id: section_last_block(blocks, *section_start_block),
+    };
+    let section = parse_section(node, location, sections.last(), inputs, warnings)?;
+    sections.push(section);
+    *section_start_block = blocks.len();
+    Ok(())
 }
 
-fn normalize_internal_target(target: &str) -> Option<String> {
+fn next_section_index(sections: &[Section]) -> Result<u32, DocsightError> {
+    u32::try_from(sections.len())
+        .ok()
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: "DOCX section count".to_owned(),
+            limit: u64::from(u32::MAX),
+        })
+}
+
+fn section_last_block(blocks: &[Block], section_start_block: usize) -> Option<ObjectId> {
+    blocks
+        .get(section_start_block..)
+        .and_then(<[Block]>::last)
+        .map(|block| block.id.clone())
+}
+
+pub(crate) fn normalize_internal_target(target: &str) -> Option<String> {
     if target.contains("://") || target.contains('\\') || target.contains(':') {
         return None;
     }
@@ -574,23 +579,6 @@ fn parse_relationships(
     Ok(map)
 }
 
-fn extract_part_texts(parts: &[(String, String)]) -> Result<Vec<(String, String)>, DocsightError> {
-    let mut results = Vec::new();
-    for (part_name, xml_str) in parts {
-        let doc = parse_xml(xml_str)?;
-        let text = doc
-            .descendants()
-            .filter(|n| n.has_tag_name((W_NS, "p")))
-            .map(paragraph_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !text.trim().is_empty() {
-            results.push((part_name.clone(), text));
-        }
-    }
-    Ok(results)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn extract_figures(
     node: Node<'_, '_>,
@@ -614,6 +602,60 @@ fn extract_figures(
         let mut alt_text = None;
         let mut resource_id = None;
 
+        if let Some(doc_pr) = drawing
+            .descendants()
+            .find(|n| n.tag_name().name() == "docPr")
+        {
+            alt_text = doc_pr
+                .attribute("descr")
+                .or_else(|| doc_pr.attribute("title"))
+                .or_else(|| doc_pr.attribute("name"))
+                .map(str::to_owned);
+        }
+        let embedded_image = drawing.descendants().any(|node| {
+            node.tag_name().name() == "blip"
+                && node
+                    .attribute((R_NS, "embed"))
+                    .or_else(|| node.attribute("r:embed"))
+                    .is_some()
+        });
+        let shape_type = drawing.descendants().find_map(|node| {
+            if node.tag_name().name() == "prstGeom" {
+                node.attribute("prst").map(str::to_owned)
+            } else {
+                None
+            }
+        });
+        if !embedded_image && shape_type.as_deref() == Some("line") {
+            let source_path = format!("/word/document.xml::shape[{figure_index}]");
+            let shape_id = source.object_id("shape", &source_path);
+            warnings.push(Diagnostic {
+                code: "DOCX_SHAPE_VISUAL_OMITTED".to_owned(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("DrawingML line {shape_id} is preserved without visual projection"),
+                effect: "the line's floating position, extent, stroke, and pixels are not reproduced; its structural identity remains available as a shape".to_owned(),
+                object: Some(shape_id.clone()),
+                page: None,
+            });
+            figures.push(Block {
+                id: shape_id,
+                kind: BlockKind::Shape,
+                page: None,
+                bbox: None,
+                z_index: 0,
+                reading_order: *reading_order,
+                source: SourceSpan::new(&source_path),
+                confidence: 1.0,
+                flags: LayoutFlags::default(),
+                format: Default::default(),
+                continuations: Vec::new(),
+                content: BlockContent::Shape(ShapeBlock {
+                    shape_type: "line".to_owned(),
+                    label: alt_text,
+                }),
+            });
+            continue;
+        }
         if let Some(extent) = drawing
             .descendants()
             .find(|n| n.tag_name().name() == "extent")
@@ -624,16 +666,6 @@ fn extract_figures(
             if let Some(cy) = extent.attribute("cy") {
                 height_pt = Some(emu_to_points(cy, "figure height")?);
             }
-        }
-        if let Some(doc_pr) = drawing
-            .descendants()
-            .find(|n| n.tag_name().name() == "docPr")
-        {
-            alt_text = doc_pr
-                .attribute("descr")
-                .or_else(|| doc_pr.attribute("title"))
-                .or_else(|| doc_pr.attribute("name"))
-                .map(str::to_owned);
         }
         if let Some(blip) = drawing
             .descendants()
@@ -673,6 +705,7 @@ fn extract_figures(
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
                     format: Default::default(),
+                    continuations: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -703,6 +736,7 @@ fn extract_figures(
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
                     format: Default::default(),
+                    continuations: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -733,6 +767,7 @@ fn extract_figures(
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
                     format: Default::default(),
+                    continuations: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -764,6 +799,7 @@ fn extract_figures(
                     confidence: 1.0,
                     flags: LayoutFlags::default(),
                     format: Default::default(),
+                    continuations: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -800,6 +836,7 @@ fn extract_figures(
             confidence: 1.0,
             flags: LayoutFlags::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Figure(FigureBlock {
                 alt_text,
                 caption: None,
@@ -1010,6 +1047,7 @@ fn parse_notes(
             confidence: 1.0,
             flags: LayoutFlags::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Note(NoteBlock {
                 kind: note_kind,
                 note_id: id.to_owned(),
@@ -1109,6 +1147,7 @@ fn parse_unknown_body_element(
         confidence: 1.0,
         flags: LayoutFlags::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Unknown(UnknownBlock { raw_tag, details }),
     }
 }
@@ -1265,14 +1304,14 @@ fn paragraph_segments(node: Node<'_, '_>) -> ParagraphSegments {
     }
 }
 
-fn on_off_value(value: Option<&str>) -> bool {
+pub(crate) fn on_off_value(value: Option<&str>) -> bool {
     match value {
         None => true,
         Some(value) => !matches!(value, "0" | "false" | "off"),
     }
 }
 
-fn twips_to_points(value: &str, field: &str) -> Result<f32, DocsightError> {
+pub(crate) fn twips_to_points(value: &str, field: &str) -> Result<f32, DocsightError> {
     let twips: i64 = value
         .trim()
         .parse()
@@ -1431,25 +1470,48 @@ fn merge_paragraph_format(target: &mut ParagraphFormat, source: &ParagraphFormat
     target.indent_first_line_pt = source.indent_first_line_pt.or(target.indent_first_line_pt);
 }
 
-fn paragraph_layout_flags(node: Node<'_, '_>) -> LayoutFlags {
-    let mut flags = LayoutFlags::default();
-    let Some(properties) = child_element(node, "pPr") else {
-        return flags;
-    };
-    flags.page_break_before = child_element(properties, "pageBreakBefore")
-        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
-    flags.keep_with_next = child_element(properties, "keepNext")
-        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
-    flags.keep_lines = child_element(properties, "keepLines")
-        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
-    flags
+fn paragraph_layout_flags(
+    node: Node<'_, '_>,
+    style_id: Option<&str>,
+    styles: &BTreeMap<String, StyleDefinition>,
+    defaults: &ParagraphDefaults,
+) -> LayoutFlags {
+    let mut resolved = defaults.layout_flags;
+    let effective_style = style_id.or(defaults.style_id.as_deref());
+    for key in style_chain(effective_style, styles).iter().rev() {
+        if let Some(definition) = styles.get(key) {
+            resolved.merge(definition.layout_flags);
+        }
+    }
+    if let Some(properties) = child_element(node, "pPr") {
+        resolved.merge(StyleLayoutFlags::from_properties(properties));
+    }
+    resolved.resolve()
 }
 
+fn style_chain(style_id: Option<&str>, styles: &BTreeMap<String, StyleDefinition>) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = style_id.map(str::to_owned);
+    while let Some(key) = current {
+        if chain.len() >= MAX_STYLE_DEPTH || chain.contains(&key) {
+            break;
+        }
+        let Some(definition) = styles.get(&key) else {
+            break;
+        };
+        current = definition.based_on.clone();
+        chain.push(key);
+    }
+    chain
+}
+
+#[allow(clippy::too_many_arguments)]
 fn parse_paragraph(
     node: Node<'_, '_>,
     index: u32,
     source: &DocumentSource,
     styles: &BTreeMap<String, StyleDefinition>,
+    defaults: &ParagraphDefaults,
     numbering: &NumberingDefinitions,
     reading_order: &mut u32,
     warnings: &mut Vec<Diagnostic>,
@@ -1470,7 +1532,7 @@ fn parse_paragraph(
     let list_reference = merge_numbering(direct_numbering, inherited_numbering);
     let list = resolve_list_marker(list_reference, numbering, warnings);
     let segments = paragraph_segments(node);
-    let paragraph_flags = paragraph_layout_flags(node);
+    let paragraph_flags = paragraph_layout_flags(node, style_id.as_deref(), styles, defaults);
     let segment_count = segments.texts.len();
     let last_segment = segment_count.saturating_sub(1);
 
@@ -1542,6 +1604,7 @@ fn parse_paragraph(
             confidence: 1.0,
             flags,
             format: block_format,
+            continuations: Vec::new(),
             content,
         });
     }
@@ -1589,6 +1652,7 @@ fn parse_table(
         confidence: 1.0,
         flags: LayoutFlags::default(),
         format: Default::default(),
+        continuations: Vec::new(),
         content: BlockContent::Table(table_block),
     })
 }
@@ -1655,6 +1719,7 @@ fn parse_table_at(
                         confidence: 1.0,
                         flags: LayoutFlags::default(),
                         format: Default::default(),
+                        continuations: Vec::new(),
                         content: BlockContent::Table(nested_table),
                     })
                 })
@@ -1896,10 +1961,41 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
                 font_size_pt,
                 bold,
                 italic,
+                layout_flags: child_element(node, "pPr")
+                    .map(StyleLayoutFlags::from_properties)
+                    .unwrap_or_default(),
             },
         );
     }
     Ok(styles)
+}
+
+fn parse_paragraph_defaults(xml: Option<&str>) -> Result<ParagraphDefaults, DocsightError> {
+    let Some(xml) = xml else {
+        return Ok(ParagraphDefaults::default());
+    };
+    let document = parse_xml(xml)?;
+    let root = document.root_element();
+    let layout_flags = child_element(root, "docDefaults")
+        .and_then(|defaults| child_element(defaults, "pPrDefault"))
+        .and_then(|defaults| child_element(defaults, "pPr"))
+        .map(StyleLayoutFlags::from_properties)
+        .unwrap_or_default();
+    let style_id = root
+        .children()
+        .filter(|node| node.has_tag_name((W_NS, "style")))
+        .find(|node| {
+            node.attribute((W_NS, "type")) == Some("paragraph")
+                && node
+                    .attribute((W_NS, "default"))
+                    .is_some_and(|value| on_off_value(Some(value)))
+        })
+        .and_then(|node| node.attribute((W_NS, "styleId")))
+        .map(str::to_owned);
+    Ok(ParagraphDefaults {
+        style_id,
+        layout_flags,
+    })
 }
 
 fn parse_half_point_size(node: Node<'_, '_>) -> Result<f32, DocsightError> {
@@ -2192,12 +2288,12 @@ fn paragraph_property<'a>(node: Node<'a, 'a>, property: &str) -> Option<Node<'a,
     child_element(node, "pPr").and_then(|properties| child_element(properties, property))
 }
 
-fn child_element<'a>(node: Node<'a, 'a>, name: &str) -> Option<Node<'a, 'a>> {
+pub(crate) fn child_element<'a>(node: Node<'a, 'a>, name: &str) -> Option<Node<'a, 'a>> {
     node.children()
         .find(|child| child.has_tag_name((W_NS, name)))
 }
 
-fn word_value(node: Node<'_, '_>) -> Option<String> {
+pub(crate) fn word_value(node: Node<'_, '_>) -> Option<String> {
     node.attribute((W_NS, "val")).map(str::to_owned)
 }
 
@@ -2225,7 +2321,7 @@ fn outline_level(properties: Node<'_, '_>) -> Result<Option<u8>, DocsightError> 
     Ok(Some(level))
 }
 
-fn parse_xml(xml: &str) -> Result<XmlDocument<'_>, DocsightError> {
+pub(crate) fn parse_xml(xml: &str) -> Result<XmlDocument<'_>, DocsightError> {
     preflight_xml(xml)?;
     let options = ParsingOptions {
         allow_dtd: false,

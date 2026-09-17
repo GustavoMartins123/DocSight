@@ -1,4 +1,4 @@
-use docsight_core::{BlockKind, DocsightError, DocumentSource};
+use docsight_core::{BlockContent, BlockKind, DocsightError, DocumentSource};
 use docsight_ooxml::parse_docx;
 use std::io::{Cursor, Write};
 use zip::CompressionMethod;
@@ -87,6 +87,29 @@ fn parse_error(
         Ok(_) => Err(message.into()),
         Err(error) => Ok(error),
     }
+}
+
+#[test]
+fn preserves_zero_height_drawingml_lines_as_shapes() -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:body><w:p><w:r><w:drawing><wp:anchor><wp:extent cx="5750560" cy="0"/><wp:docPr id="1" name="Horizontal line"/><a:graphic><a:graphicData><wps:wsp><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="5750560" cy="0"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&document, None, None)?)?;
+    let parsed = parse_docx(&source)?;
+    let shape = parsed
+        .blocks
+        .iter()
+        .find(|block| block.kind == BlockKind::Shape)
+        .ok_or("missing line shape")?;
+    let BlockContent::Shape(content) = &shape.content else {
+        return Err("shape block has the wrong content".into());
+    };
+    assert_eq!(content.shape_type, "line");
+    assert_eq!(content.label.as_deref(), Some("Horizontal line"));
+    assert!(parsed.warnings.iter().any(|warning| {
+        warning.code == "DOCX_SHAPE_VISUAL_OMITTED" && warning.object.as_ref() == Some(&shape.id)
+    }));
+    Ok(())
 }
 
 #[test]

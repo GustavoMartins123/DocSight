@@ -6,8 +6,8 @@ pub use find::{
 };
 
 use docsight_core::{
-    BlockContent, BlockKind, Diagnostic, DocsightError, Document, DocumentFormat, DocumentObject,
-    ObjectId, OverlayKind, Rect,
+    BlockContent, BlockContinuation, BlockKind, Diagnostic, DocsightError, Document,
+    DocumentFormat, DocumentObject, ObjectId, OverlayKind, Rect,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -84,6 +84,37 @@ pub struct SemanticObject {
     pub confidence: f32,
     pub text_snippet: String,
     pub text_truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub continuations: Vec<BlockContinuation>,
+}
+
+impl SemanticObject {
+    fn occupies(&self, pages: PageRange) -> bool {
+        self.page.is_some_and(|page| pages.contains(page))
+            || self
+                .continuations
+                .iter()
+                .any(|continuation| pages.contains(continuation.page))
+    }
+
+    fn fragments(&self) -> Vec<(u32, Rect)> {
+        self.page
+            .zip(self.bbox)
+            .into_iter()
+            .chain(
+                self.continuations
+                    .iter()
+                    .map(|continuation| (continuation.page, continuation.bbox)),
+            )
+            .collect()
+    }
+
+    fn geometry_on_page(&self, page: u32) -> Option<Rect> {
+        self.fragments()
+            .into_iter()
+            .find(|(number, _)| *number == page)
+            .map(|(_, bbox)| bbox)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +134,14 @@ impl Candidate {
         Rect::new(bbox.x0, bbox.y0, bbox.x1, bbox.y1)
             .ok()
             .map(|rect| (page, rect))
+    }
+
+    fn geometries(&self, pages: Option<PageRange>) -> Vec<(u32, Rect)> {
+        self.object
+            .fragments()
+            .into_iter()
+            .filter(|(page, _)| pages.is_none_or(|range| range.contains(*page)))
+            .collect()
     }
 }
 
@@ -351,34 +390,45 @@ fn execute_relation(
     }
     let geometric_references = references
         .into_iter()
-        .filter_map(|candidate| match candidate.geometry() {
-            Some(geometry) => Some((candidate, geometry)),
-            None => {
+        .filter_map(|candidate| {
+            let geometries = candidate.geometries(None);
+            if geometries.is_empty() {
                 unavailable.insert(candidate.object.id.to_string());
-                None
+                return None;
             }
+            Some((candidate, geometries))
         })
         .collect::<Vec<_>>();
 
     Ok(selected
         .into_iter()
         .filter_map(|candidate| {
-            let (page, bbox) = match candidate.geometry() {
-                Some(geometry) => geometry,
-                None => {
-                    unavailable.insert(candidate.object.id.to_string());
-                    return None;
-                }
-            };
+            let geometries = candidate.geometries(pages);
+            if geometries.is_empty() {
+                unavailable.insert(candidate.object.id.to_string());
+                return None;
+            }
             let mut applicable = geometric_references
                 .iter()
-                .filter(|(reference, (reference_page, reference_bbox))| {
-                    candidate.object.id != reference.object.id
-                        && page == *reference_page
-                        && relation_matches(operator, bbox, *reference_bbox)
-                })
-                .map(|(reference, (_, reference_bbox))| {
-                    (reference, rect_distance(bbox, *reference_bbox))
+                .filter_map(|(reference, reference_geometries)| {
+                    if candidate.object.id == reference.object.id {
+                        return None;
+                    }
+                    let distance = geometries
+                        .iter()
+                        .flat_map(|(page, bbox)| {
+                            reference_geometries
+                                .iter()
+                                .filter(move |(reference_page, reference_bbox)| {
+                                    page == reference_page
+                                        && relation_matches(operator, *bbox, *reference_bbox)
+                                })
+                                .map(move |(_, reference_bbox)| {
+                                    rect_distance(*bbox, *reference_bbox)
+                                })
+                        })
+                        .min_by(f64::total_cmp)?;
+                    Some((reference, distance))
                 })
                 .collect::<Vec<_>>();
             applicable.sort_by(|(left, left_distance), (right, right_distance)| {
@@ -416,14 +466,14 @@ fn execute_distance_to(
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: reference_id.to_owned(),
         })?;
-    let (reference_page, reference_bbox) =
-        reference
-            .geometry()
-            .ok_or_else(|| DocsightError::UnsupportedFeature {
-                feature: format!(
-                    "spatial query target {reference_id} has no canonical page-point geometry"
-                ),
-            })?;
+    let reference_geometries = reference.geometries(None);
+    if reference_geometries.is_empty() {
+        return Err(DocsightError::UnsupportedFeature {
+            feature: format!(
+                "spatial query target {reference_id} has no canonical page-point geometry"
+            ),
+        });
+    }
 
     Ok(select_candidates(candidates, selector, pages)
         .into_iter()
@@ -431,17 +481,20 @@ fn execute_distance_to(
             if candidate.object.id == reference.object.id {
                 return None;
             }
-            let (page, bbox) = match candidate.geometry() {
-                Some(geometry) => geometry,
-                None => {
-                    unavailable.insert(candidate.object.id.to_string());
-                    return None;
-                }
-            };
-            if page != reference_page {
+            let geometries = candidate.geometries(pages);
+            if geometries.is_empty() {
+                unavailable.insert(candidate.object.id.to_string());
                 return None;
             }
-            let distance_pt = rect_distance(bbox, reference_bbox);
+            let distance_pt = geometries
+                .iter()
+                .flat_map(|(page, bbox)| {
+                    reference_geometries
+                        .iter()
+                        .filter(move |(reference_page, _)| page == reference_page)
+                        .map(move |(_, reference_bbox)| rect_distance(*bbox, *reference_bbox))
+                })
+                .min_by(f64::total_cmp)?;
             let matches = match comparison {
                 DistanceComparison::LessThan => distance_pt < f64::from(limit_pt),
                 DistanceComparison::LessThanOrEqual => distance_pt <= f64::from(limit_pt),
@@ -522,12 +575,8 @@ fn select_candidates<'a>(
     candidates
         .iter()
         .filter(|candidate| {
-            pages.is_none_or(|range| {
-                candidate
-                    .object
-                    .page
-                    .is_some_and(|page| range.contains(page))
-            }) && selector_matches(candidate, selector)
+            pages.is_none_or(|range| candidate.object.occupies(range))
+                && selector_matches(candidate, selector)
         })
         .collect()
 }
@@ -632,6 +681,7 @@ fn candidates(document: &Document) -> Result<Vec<Candidate>, DocsightError> {
                 confidence: block.confidence,
                 text_snippet,
                 text_truncated,
+                continuations: block.continuations.clone(),
             },
             search_text,
             heading_level,
@@ -642,7 +692,7 @@ fn candidates(document: &Document) -> Result<Vec<Candidate>, DocsightError> {
     }
     for page in &document.pages {
         let page_max_order = document
-            .page_blocks(page.number)
+            .blocks_on_page(page.number)
             .map(|block| block.reading_order)
             .max()
             .unwrap_or(0);
@@ -671,6 +721,7 @@ fn candidates(document: &Document) -> Result<Vec<Candidate>, DocsightError> {
                     confidence: 1.0,
                     text_snippet,
                     text_truncated,
+                    continuations: Vec::new(),
                 },
                 search_text: overlay.text.clone(),
                 heading_level: None,
@@ -1137,7 +1188,7 @@ pub fn focus_object(
     }
     let page_candidates = candidates
         .iter()
-        .filter(|candidate| candidate.object.page == Some(target_page))
+        .filter(|candidate| candidate.object.geometry_on_page(target_page).is_some())
         .collect::<Vec<_>>();
     if let Some(position) = page_candidates
         .iter()
@@ -1175,16 +1226,18 @@ pub fn focus_object(
             .filter(|candidate| {
                 candidate.object.id != target.object.id
                     && selector_kind_matches(candidate, SelectorKind::Caption)
-                    && candidate.geometry().is_some()
+                    && candidate.object.geometry_on_page(target_page).is_some()
             })
             .min_by(|left, right| {
                 let left_distance = left
-                    .geometry()
-                    .map(|(_, bbox)| rect_distance(target_bbox, bbox))
+                    .object
+                    .geometry_on_page(target_page)
+                    .map(|bbox| rect_distance(target_bbox, bbox))
                     .unwrap_or(f64::INFINITY);
                 let right_distance = right
-                    .geometry()
-                    .map(|(_, bbox)| rect_distance(target_bbox, bbox))
+                    .object
+                    .geometry_on_page(target_page)
+                    .map(|bbox| rect_distance(target_bbox, bbox))
                     .unwrap_or(f64::INFINITY);
                 left_distance
                     .total_cmp(&right_distance)
@@ -1260,12 +1313,10 @@ pub fn focus_pages(
         });
     }
     let mut selected = BTreeMap::new();
-    for candidate in candidates.iter().filter(|candidate| {
-        candidate
-            .object
-            .page
-            .is_some_and(|page| pages.contains(page))
-    }) {
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| candidate.object.occupies(pages))
+    {
         add_viewport_entry(
             &mut selected,
             candidate,
@@ -1276,18 +1327,12 @@ pub fn focus_pages(
             },
         );
     }
-    let first_index = candidates.iter().position(|candidate| {
-        candidate
-            .object
-            .page
-            .is_some_and(|page| pages.contains(page))
-    });
-    let last_index = candidates.iter().rposition(|candidate| {
-        candidate
-            .object
-            .page
-            .is_some_and(|page| pages.contains(page))
-    });
+    let first_index = candidates
+        .iter()
+        .position(|candidate| candidate.object.occupies(pages));
+    let last_index = candidates
+        .iter()
+        .rposition(|candidate| candidate.object.occupies(pages));
     if let (Some(first_index), Some(last_index)) = (first_index, last_index) {
         if let Some(parent) = candidates[..first_index]
             .iter()
@@ -1484,30 +1529,22 @@ pub fn peek_section(document: &Document, index: u32) -> Result<PeekResult, Docsi
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: format!("section {index}"),
         })?;
-    if document.sections.len() != 1
-        || document
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "DOCX_SECTIONS_COLLAPSED")
+    if document
+        .pages
+        .iter()
+        .any(|page| page.section_index.is_none())
     {
         return Err(DocsightError::UnsupportedFeature {
-            feature: "peek section page mapping for multi-section documents".to_owned(),
+            feature: "peek section page mapping for pages without a declared section".to_owned(),
         });
     }
-    let first_page = document
-        .pages
-        .first()
-        .map(|page| page.number)
-        .ok_or_else(|| DocsightError::ObjectNotFound {
+    let pages = document.section_page_numbers(index)?;
+    let (Some(first_page), Some(last_page)) = (pages.first().copied(), pages.last().copied())
+    else {
+        return Err(DocsightError::ObjectNotFound {
             object: format!("section {index} pages"),
-        })?;
-    let last_page = document
-        .pages
-        .last()
-        .map(|page| page.number)
-        .ok_or_else(|| DocsightError::ObjectNotFound {
-            object: format!("section {index} pages"),
-        })?;
+        });
+    };
     let mut result = peek_pages(document, PageRange::new(first_page, last_page)?)?;
     result.target = PeekTarget::Section {
         index,
@@ -1564,7 +1601,12 @@ fn candidate_neighborhood(
     }
     let page_candidates = candidates
         .iter()
-        .filter(|candidate| candidate.object.page == target.object.page)
+        .filter(|candidate| {
+            target
+                .object
+                .page
+                .is_some_and(|page| candidate.object.geometry_on_page(page).is_some())
+        })
         .collect::<Vec<_>>();
     if let Some(position) = page_candidates
         .iter()
@@ -1598,7 +1640,12 @@ fn candidate_neighborhood(
     }
     if include_related {
         if let Some(target_geometry) = target.geometry()
-            && let Some(caption) = nearest_caption(&page_candidates, target, target_geometry.1)
+            && let Some(caption) = nearest_caption(
+                &page_candidates,
+                target,
+                target_geometry.0,
+                target_geometry.1,
+            )
         {
             add_viewport_entry(
                 &mut selected,
@@ -1763,6 +1810,7 @@ fn resolved_semantic_object(
         confidence: object.confidence(),
         text_snippet,
         text_truncated,
+        continuations: object.continuations().to_vec(),
     })
 }
 
@@ -1772,7 +1820,7 @@ fn floating_reading_order(
 ) -> Result<u32, DocsightError> {
     let page = object.page().unwrap_or(0);
     let block_order = document
-        .page_blocks(page)
+        .blocks_on_page(page)
         .map(|block| block.reading_order)
         .max()
         .unwrap_or(0);
@@ -1814,6 +1862,7 @@ fn semantic_kind_of(object: &DocumentObject<'_>) -> SemanticKind {
 fn nearest_caption<'a>(
     page_candidates: &[&'a Candidate],
     target: &Candidate,
+    page: u32,
     target_bbox: Rect,
 ) -> Option<&'a Candidate> {
     page_candidates
@@ -1822,16 +1871,18 @@ fn nearest_caption<'a>(
         .filter(|candidate| {
             candidate.object.id != target.object.id
                 && selector_kind_matches(candidate, SelectorKind::Caption)
-                && candidate.geometry().is_some()
+                && candidate.object.geometry_on_page(page).is_some()
         })
         .min_by(|left, right| {
             let left_distance = left
-                .geometry()
-                .map(|(_, bbox)| rect_distance(target_bbox, bbox))
+                .object
+                .geometry_on_page(page)
+                .map(|bbox| rect_distance(target_bbox, bbox))
                 .unwrap_or(f64::INFINITY);
             let right_distance = right
-                .geometry()
-                .map(|(_, bbox)| rect_distance(target_bbox, bbox))
+                .object
+                .geometry_on_page(page)
+                .map(|bbox| rect_distance(target_bbox, bbox))
                 .unwrap_or(f64::INFINITY);
             left_distance
                 .total_cmp(&right_distance)
@@ -1936,12 +1987,7 @@ pub fn resolve(
         .enumerate()
         .filter(|(_, candidate)| {
             kind.is_none_or(|kind| candidate.object.kind == kind)
-                && pages.is_none_or(|pages| {
-                    candidate
-                        .object
-                        .page
-                        .is_some_and(|page| pages.contains(page))
-                })
+                && pages.is_none_or(|pages| candidate.object.occupies(pages))
         })
         .filter_map(|(index, candidate)| {
             score_candidate(
@@ -2051,11 +2097,19 @@ fn score_candidate(
         ));
     }
     if pages.is_some() {
+        let matched_page = pages.and_then(|range| {
+            candidate
+                .object
+                .fragments()
+                .into_iter()
+                .map(|(page, _)| page)
+                .find(|page| range.contains(*page))
+        });
         reasons.push(resolve_reason(
             ResolveReasonCode::PageConstraint,
             1.0,
             0.02,
-            candidate.object.page.map(|page| format!("page:{page}")),
+            matched_page.map(|page| format!("page:{page}")),
         ));
     }
     let score = round_score(reasons.iter().map(|reason| reason.contribution).sum());
@@ -2090,14 +2144,14 @@ fn related_caption_score(
     candidate: &Candidate,
     query: &str,
 ) -> (f64, Option<String>) {
-    let Some(page) = candidate.object.page else {
+    let candidate_geometries = candidate.geometries(None);
+    if candidate_geometries.is_empty() {
         return (0.0, None);
-    };
+    }
     candidates
         .iter()
         .filter(|other| {
-            other.object.page == Some(page)
-                && other.object.id != candidate.object.id
+            other.object.id != candidate.object.id
                 && selector_kind_matches(other, SelectorKind::Caption)
         })
         .filter_map(|caption| {
@@ -2105,12 +2159,17 @@ fn related_caption_score(
             if lexical == 0.0 {
                 return None;
             }
-            let proximity = match (candidate.geometry(), caption.geometry()) {
-                (Some((_, candidate_bbox)), Some((_, caption_bbox))) => {
-                    1.0 / (1.0 + rect_distance(candidate_bbox, caption_bbox) / 72.0)
-                }
-                _ => 0.5,
-            };
+            let distance = candidate_geometries
+                .iter()
+                .flat_map(|(page, candidate_bbox)| {
+                    caption
+                        .geometries(None)
+                        .into_iter()
+                        .filter(move |(caption_page, _)| page == caption_page)
+                        .map(move |(_, caption_bbox)| rect_distance(*candidate_bbox, caption_bbox))
+                })
+                .min_by(f64::total_cmp);
+            let proximity = distance.map_or(0.5, |distance| 1.0 / (1.0 + distance / 72.0));
             Some((lexical * proximity, caption))
         })
         .max_by(|(left_score, left), (right_score, right)| {
@@ -2311,8 +2370,8 @@ fn semantic_object_cmp(left: &SemanticObject, right: &SemanticObject) -> Orderin
 mod tests {
     use super::*;
     use docsight_core::{
-        Block, DocumentMetadata, HeadingBlock, LayoutFlags, Overlay, Page, ParagraphBlock,
-        SourceSpan, TableBlock, TableCell, TrackedChanges,
+        Block, BlockContinuation, DocumentMetadata, HeadingBlock, LayoutFlags, Overlay, Page,
+        ParagraphBlock, SourceSpan, TableBlock, TableCell, TrackedChanges,
     };
 
     fn source(path: &str) -> SourceSpan {
@@ -2338,6 +2397,7 @@ mod tests {
             confidence: 1.0,
             flags: LayoutFlags::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content,
         }
     }
@@ -2423,6 +2483,8 @@ mod tests {
                     table_paragraph.id.clone(),
                     caption.id.clone(),
                 ],
+                section_index: None,
+                continued_block_ids: Vec::new(),
                 overlays: vec![Overlay {
                     id: ObjectId::from_raw("wm_page"),
                     kind: OverlayKind::Watermark,
@@ -2510,6 +2572,49 @@ mod tests {
     }
 
     #[test]
+    fn page_scoped_queries_use_continuation_geometry() -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.blocks[0].continuations.push(BlockContinuation {
+            page: 2,
+            bbox: Rect::new(10.0, 10.0, 100.0, 20.0)?,
+            text_start_char: 1,
+        });
+        document.blocks[1].continuations.push(BlockContinuation {
+            page: 2,
+            bbox: Rect::new(10.0, 30.0, 100.0, 40.0)?,
+            text_start_char: 1,
+        });
+        document.pages.push(Page {
+            number: 2,
+            width_pt: 120.0,
+            height_pt: 120.0,
+            block_ids: Vec::new(),
+            section_index: None,
+            continued_block_ids: vec![document.blocks[0].id.clone(), document.blocks[1].id.clone()],
+            overlays: Vec::new(),
+        });
+
+        let spatial = execute_spatial_query(&document, "page[2] paragraph below(heading)")?;
+        assert_eq!(spatial.result.total_matches, 1);
+        assert_eq!(spatial.result.matches[0].object.id.as_str(), "p_intro");
+
+        let resolved = resolve(
+            &document,
+            "Quarterly results",
+            Some(SemanticKind::Paragraph),
+            Some(PageRange::new(2, 2)?),
+        )?;
+        assert_eq!(resolved.total_candidates, 1);
+        let page_reason = resolved.candidates[0]
+            .reasons
+            .iter()
+            .find(|reason| reason.code == ResolveReasonCode::PageConstraint)
+            .ok_or("page constraint reason")?;
+        assert_eq!(page_reason.evidence.as_deref(), Some("page:2"));
+        Ok(())
+    }
+
+    #[test]
     fn fuzz_spatial_dql_parser_never_panics() -> Result<(), Box<dyn std::error::Error>> {
         let document = document()?;
         let mut state = 0x9e37_79b9_u32;
@@ -2556,6 +2661,8 @@ mod tests {
             width_pt: 120.0,
             height_pt: 120.0,
             block_ids: Vec::new(),
+            section_index: None,
+            continued_block_ids: Vec::new(),
             overlays: Vec::new(),
         });
         let result = focus_pages(&document, PageRange::new(2, 2)?)?;
@@ -2575,6 +2682,8 @@ mod tests {
                 width_pt: 120.0,
                 height_pt: 120.0,
                 block_ids: Vec::new(),
+                section_index: None,
+                continued_block_ids: Vec::new(),
                 overlays: Vec::new(),
             });
         }
