@@ -78,7 +78,7 @@ pub fn layout_docx_productized(mut document: Document, mut sections: Vec<LayoutS
     final_comments.extend(original_comments.into_iter().filter(|comment| !seen_comments.contains(&comment.id)));
     warnings.push(Diagnostic::warning("DOCX_MULTI_SECTION_LAYOUT", format!("laid out {} DOCX sections with independent geometry", sections.len()), "page size, margins, headers and footers follow the active section instead of the first section"));
     if final_blocks.len() > original_blocks.len() {
-        warnings.push(Diagnostic::warning("DOCX_LINE_LEVEL_PAGINATION", "long paragraphs were split into deterministic line groups before pagination".to_owned(), "paragraph fragments preserve source paths while allowing page breaks between line groups with at least two lines per fragment"));
+        warnings.push(Diagnostic::warning("DOCX_LINE_LEVEL_PAGINATION", "long text blocks were split into deterministic line groups before pagination".to_owned(), "fragments preserve source paths and paragraph boundary formatting while allowing page breaks between groups with at least two lines"));
     }
     deduplicate_warnings(&mut warnings);
     document.sections = sections.into_iter().map(|span| span.section).collect();
@@ -111,11 +111,12 @@ fn fragment_text_blocks(blocks: &[Block], section: &Section, styles: &[Style], d
     let width = content_width(section)?;
     let mut output = Vec::new();
     for block in blocks {
-        let BlockContent::Paragraph(paragraph) = &block.content else { output.push(block.clone()); continue; };
         if block.flags.keep_lines { output.push(block.clone()); continue; }
-        let font_size = paragraph.style_id.as_deref().and_then(|style_id| styles.iter().find(|style| style.id == style_id)).and_then(|style| style.font_size_pt).filter(|size| size.is_finite() && *size > 0.0).unwrap_or(11.0);
+        let Some((text, style_id)) = text_and_style(block) else { output.push(block.clone()); continue; };
+        let font_size = style_id.and_then(|style_id| styles.iter().find(|style| style.id == style_id)).and_then(|style| style.font_size_pt).filter(|size| size.is_finite() && *size > 0.0).unwrap_or(11.0);
         let indents = block.format.indent_left_pt.unwrap_or(0.0).max(0.0) + block.format.indent_right_pt.unwrap_or(0.0).max(0.0);
-        let lines = wrap_text(&paragraph.text, font_size, (width - indents).max(36.0));
+        let first_line_indent = block.format.indent_first_line_pt.unwrap_or(0.0).max(0.0);
+        let lines = wrap_text(text, font_size, (width - indents - first_line_indent).max(36.0));
         if lines.len() <= 4 { output.push(block.clone()); continue; }
         let groups = line_groups(lines.len());
         for (fragment_index, (start, end)) in groups.iter().copied().enumerate() {
@@ -127,11 +128,34 @@ fn fragment_text_blocks(blocks: &[Block], section: &Section, styles: &[Style], d
             fragment.bbox = None;
             fragment.reading_order = 0;
             fragment.flags = LayoutFlags { page_break_before: first && block.flags.page_break_before, break_after: last && block.flags.break_after, keep_with_next: last && block.flags.keep_with_next, keep_lines: true };
-            if let BlockContent::Paragraph(value) = &mut fragment.content { value.text = lines[start..end].join(" "); }
+            if !first {
+                fragment.format.space_before_pt = None;
+                fragment.format.indent_first_line_pt = None;
+            }
+            if !last { fragment.format.space_after_pt = None; }
+            set_text(&mut fragment, lines[start..end].join(" "));
             output.push(fragment);
         }
     }
     Ok(output)
+}
+
+fn text_and_style(block: &Block) -> Option<(&str, Option<&str>)> {
+    match &block.content {
+        BlockContent::Paragraph(value) => Some((&value.text, value.style_id.as_deref())),
+        BlockContent::Heading(value) => Some((&value.text, value.style_id.as_deref())),
+        BlockContent::ListItem(value) => Some((&value.text, value.style_id.as_deref())),
+        _ => None,
+    }
+}
+
+fn set_text(block: &mut Block, text: String) {
+    match &mut block.content {
+        BlockContent::Paragraph(value) => value.text = text,
+        BlockContent::Heading(value) => value.text = text,
+        BlockContent::ListItem(value) => value.text = text,
+        _ => {}
+    }
 }
 
 fn line_groups(line_count: usize) -> Vec<(usize, usize)> {
