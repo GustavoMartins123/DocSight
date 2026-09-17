@@ -18,8 +18,10 @@ These are the configured build and required native-test baselines, not a record
 that those tests have run. A candidate must pass its native checks before these
 targets can be called validated. They do not promise support for every Linux
 distribution or older macOS version. Alpine/musl and 32-bit systems are not release
-targets. Rust, Python, Office and a network connection are not required to run the
-extracted binary. Python is used only by maintainer automation.
+targets. Rust, Office and a network connection are not required to run the
+extracted binaries. Maintenance and candidate preparation use the Rust `xtask`
+crate. Each archive contains both `docsight` and `docsight-worker` (with `.exe`
+on Windows), plus schemas, examples, documentation and license resources.
 
 ## Verify before extracting
 
@@ -68,7 +70,7 @@ Open the extracted directory and run `./docsight --version` on Linux/macOS or
 
 On Windows use `.\docsight.exe` instead of `./docsight`. Add the extracted
 directory to your PATH, or keep calling the executable by its full path. Do not
-copy only the executable when distributing the tool onward: retain the licenses,
+copy only the CLI when distributing the tool onward: retain the worker, licenses,
 third-party notices, schemas and documentation shipped beside it.
 
 The quickstart in README.md covers discovery, navigation, evidence and password

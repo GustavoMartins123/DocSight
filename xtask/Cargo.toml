@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+clap.workspace = true
 docsight-core = { path = "../crates/docsight-core" }
 docsight-layout = { path = "../crates/docsight-layout" }
 docsight-ooxml = { path = "../crates/docsight-ooxml" }
@@ -14,8 +15,12 @@ docsight-pdf = { path = "../crates/docsight-pdf" }
 docsight-render = { path = "../crates/docsight-render" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 zip.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
