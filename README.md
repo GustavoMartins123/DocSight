@@ -98,7 +98,7 @@ docsight --agent --cache-dir .docsight-cache find "$DOC" "termination"
 docsight --agent --cache-dir .docsight-cache cache stats
 ```
 
-The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed.
+The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
 
 ## Bounded output
 

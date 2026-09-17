@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const TARGETS: [&str; 13] = [
+const TARGETS: [&str; 14] = [
     "fuzz_opc_container",
     "fuzz_ooxml_relationships",
     "fuzz_styles_cascade",
@@ -16,6 +16,7 @@ const TARGETS: [&str; 13] = [
     "fuzz_spatial_dql_parser",
     "fuzz_hit_test",
     "fuzz_evidence_bundle_manifest",
+    "fuzz_cache_entry",
 ];
 
 fn root() -> PathBuf {

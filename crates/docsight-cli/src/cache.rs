@@ -1,8 +1,8 @@
 use crate::{emit_warnings, output_serialization_error, stdout_error};
 use docsight_cache::{
     CacheClearReport, CacheConfig, CacheKey, CachePruneReport, CacheStats, CacheVerifyReport,
-    DEFAULT_CACHE_MAX_BYTES, DEFAULT_CACHE_MAX_ENTRIES, DocumentCache, EngineIdentity, Lookup,
-    QuarantineRecord, decode_entry, encode_entry,
+    DEFAULT_CACHE_MAX_BYTES, DEFAULT_CACHE_MAX_ENTRIES, DocumentCache, EngineIdentity, EntryLookup,
+    EntryProducer, Lookup, QuarantineRecord, decode_entry, encode_entry,
 };
 use docsight_core::{Diagnostic, DocsightError, Document, DocumentSource};
 use serde::Serialize;
@@ -33,6 +33,7 @@ pub(crate) const CACHED_COMMANDS: &[&str] = &[
 const HANDOFF_KEY_FILE: &str = "key.json";
 const HANDOFF_ENTRY_FILE: &str = "entry.dsc";
 const HANDOFF_RESULT_FILE: &str = "result.dsc";
+const HANDOFF_REJECTED_FILE: &str = "rejected";
 const HANDOFF_PARTIAL_FILE: &str = "result.partial";
 const MAX_HANDOFF_KEY_BYTES: u64 = 64 * 1024;
 const MAX_HANDOFF_ENTRY_BYTES: u64 = 1024 * 1024 * 1024;
@@ -141,7 +142,7 @@ impl<'a> DocumentLoader<'a> {
                     Lookup::Quarantined(record) => warn_quarantined(&record, self.reporting)?,
                 }
                 let document = ingest()?;
-                cache.put(&key, &document)?;
+                cache.put(&key, &document, EntryProducer::InProcess)?;
                 Ok(document)
             }
             Some(LoaderCache::Handoff(handoff)) => handoff.load(source, ingest),
@@ -180,12 +181,10 @@ impl HandoffChild {
         }
         let entry = self.directory.join(HANDOFF_ENTRY_FILE);
         if let Some(bytes) = read_bounded(&entry, MAX_HANDOFF_ENTRY_BYTES)? {
-            return decode_entry(&bytes, &self.key).map_err(|rejection| {
-                handoff_failure(format!(
-                    "cache handoff entry was rejected: {}",
-                    rejection.code()
-                ))
-            });
+            match decode_entry(&bytes, &self.key) {
+                Ok(document) => return Ok(document),
+                Err(_) => write_new(&self.directory.join(HANDOFF_REJECTED_FILE), &[])?,
+            }
         }
         let document = ingest()?;
         self.write_result(&document)?;
@@ -193,7 +192,7 @@ impl HandoffChild {
     }
 
     fn write_result(&self, document: &Document) -> Result<(), DocsightError> {
-        let bytes = encode_entry(&self.key, document)?;
+        let bytes = encode_entry(&self.key, document, EntryProducer::SandboxWorker)?;
         let partial = self.directory.join(HANDOFF_PARTIAL_FILE);
         let io_error = |source| DocsightError::Io {
             path: partial.clone(),
@@ -235,14 +234,13 @@ impl SandboxCacheHandoff {
             })?;
         let key_bytes = serde_json::to_vec(&key).map_err(output_serialization_error)?;
         write_new(&directory.path().join(HANDOFF_KEY_FILE), &key_bytes)?;
-        let hit = match cache.get(&key)? {
-            Lookup::Hit(document) => {
-                let entry = encode_entry(&key, &document)?;
+        let hit = match cache.get_entry(&key)? {
+            EntryLookup::Hit(entry) => {
                 write_new(&directory.path().join(HANDOFF_ENTRY_FILE), &entry)?;
                 true
             }
-            Lookup::Miss => false,
-            Lookup::Quarantined(record) => {
+            EntryLookup::Miss => false,
+            EntryLookup::Quarantined(record) => {
                 warn_quarantined(&record, reporting)?;
                 false
             }
@@ -278,7 +276,12 @@ impl SandboxCacheHandoff {
 
     pub(crate) fn commit(self, reporting: Reporting) -> Result<(), DocsightError> {
         if self.hit {
-            return Ok(());
+            if !self.directory.path().join(HANDOFF_REJECTED_FILE).exists() {
+                return Ok(());
+            }
+            if let Some(record) = self.cache.revalidate(&self.key)? {
+                warn_quarantined(&record, reporting)?;
+            }
         }
         let result = self.directory.path().join(HANDOFF_RESULT_FILE);
         let limit = self.cache.max_bytes();
@@ -501,6 +504,11 @@ pub(crate) fn cache_command(
             stats.other_engine_entries.to_string(),
         ),
         ("unreadable_entries", stats.unreadable_entries.to_string()),
+        ("in_process_entries", stats.in_process_entries.to_string()),
+        (
+            "sandbox_worker_entries",
+            stats.sandbox_worker_entries.to_string(),
+        ),
         ("quarantined_files", stats.quarantined_files.to_string()),
         ("quarantined_bytes", stats.quarantined_bytes.to_string()),
         ("temporary_files", stats.temporary_files.to_string()),

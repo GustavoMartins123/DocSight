@@ -186,8 +186,14 @@ fn sandboxed_runs_share_the_parent_owned_cache() -> TestResult {
         .output()?;
     assert!(plain.status.success());
 
+    let temporary = directory.path().join("tmp");
+    std::fs::create_dir_all(&temporary)?;
     let sandboxed = |cache: &Path| -> Result<Output, Box<dyn std::error::Error>> {
-        Ok(docsight()
+        let mut command = docsight();
+        for variable in ["TMPDIR", "TMP", "TEMP"] {
+            command.env(variable, &temporary);
+        }
+        Ok(command
             .args(["--agent", "--sandbox", "--cache-dir"])
             .arg(cache)
             .arg("text")
@@ -224,15 +230,9 @@ fn sandboxed_runs_share_the_parent_owned_cache() -> TestResult {
     let verify = cache_json(&cache_dir, "verify")?;
     assert_eq!(verify["result"]["verify"]["checked"], 1);
     assert_eq!(verify["result"]["verify"]["valid"], 1);
-    let leaked = std::fs::read_dir(std::env::temp_dir())?
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("docsight-cache-handoff-")
-        })
-        .count();
+    assert_eq!(verify["result"]["stats"]["sandbox_worker_entries"], 1);
+    assert_eq!(verify["result"]["stats"]["in_process_entries"], 0);
+    let leaked = std::fs::read_dir(&temporary)?.count();
     assert_eq!(leaked, 0, "handoff directories must be removed");
     Ok(())
 }
@@ -705,5 +705,185 @@ fn cache_reports_match_the_published_schema() -> TestResult {
         command["result_schema"],
         "https://docsight.dev/schemas/v2/cache-result.json"
     );
+    Ok(())
+}
+
+fn entry_file(cache_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(std::fs::read_dir(cache_dir.join("v1").join("entries"))?
+        .next()
+        .ok_or("cache entry")??
+        .path())
+}
+
+/// Rewrites the payload of an entry and repairs the header digest, so the entry passes the
+/// parent's integrity check and is only rejected when the worker decodes it.
+fn forge_entry_payload(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::Digest;
+    let bytes = std::fs::read(path)?;
+    let newline = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or("entry header")?;
+    let mut header: serde_json::Value = serde_json::from_slice(&bytes[..newline])?;
+    let mut payload: serde_json::Value = serde_json::from_slice(&bytes[newline + 1..])?;
+    payload["sha256"] = serde_json::json!("0".repeat(64));
+    let payload = serde_json::to_vec(&payload)?;
+    let digest: String = sha2::Sha256::digest(&payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    header["payload_sha256"] = serde_json::json!(digest);
+    header["payload_bytes"] = serde_json::json!(payload.len());
+    let mut forged = serde_json::to_vec(&header)?;
+    forged.push(b'\n');
+    forged.extend_from_slice(&payload);
+    std::fs::write(path, forged)?;
+    Ok(())
+}
+
+#[test]
+fn an_entry_the_worker_rejects_is_revalidated_by_the_parent() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let cache_dir = directory.path().join("cache");
+    let document = fixture("sample_headings.docx");
+    let plain = docsight()
+        .args(["--agent", "outline"])
+        .arg(&document)
+        .output()?;
+    assert!(plain.status.success());
+
+    let sandboxed = || -> Result<Output, Box<dyn std::error::Error>> {
+        Ok(docsight()
+            .args(["--agent", "--sandbox", "--cache-dir"])
+            .arg(&cache_dir)
+            .arg("outline")
+            .arg(&document)
+            .output()?)
+    };
+    assert_same_output("populate", &plain, &sandboxed()?);
+    forge_entry_payload(&entry_file(&cache_dir)?)?;
+
+    assert_same_output("forged entry", &plain, &sandboxed()?);
+    let verify = cache_json(&cache_dir, "verify")?;
+    assert_eq!(verify["result"]["verify"]["valid"], 1);
+    assert_eq!(verify["result"]["stats"]["quarantined_files"], 1);
+    let quarantined: Vec<String> = std::fs::read_dir(cache_dir.join("v1").join("quarantine"))?
+        .filter_map(Result::ok)
+        .map(|item| item.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        quarantined[0].ends_with(".document_identity.dsc"),
+        "{quarantined:?}"
+    );
+    assert_same_output("hit after reparse", &plain, &sandboxed()?);
+    Ok(())
+}
+
+#[test]
+fn a_cache_that_cannot_be_written_fails_explicitly() -> TestResult {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir()?;
+        let cache_dir = directory.path().join("cache");
+        let document = fixture("sample_headings.docx");
+        let plain = docsight()
+            .args(["--agent", "outline"])
+            .arg(&document)
+            .output()?;
+        let populate = docsight()
+            .args(["--agent", "--cache-dir"])
+            .arg(&cache_dir)
+            .arg("outline")
+            .arg(fixture("sample_tables.docx"))
+            .output()?;
+        assert!(populate.status.success());
+
+        let entries = cache_dir.join("v1").join("entries");
+        std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o500))?;
+        if std::fs::write(entries.join("probe"), b"").is_ok() {
+            return Ok(());
+        }
+        let blocked = docsight()
+            .args(["--agent", "--cache-dir"])
+            .arg(&cache_dir)
+            .arg("outline")
+            .arg(&document)
+            .output()?;
+        assert_eq!(blocked.status.code(), Some(40));
+        assert!(blocked.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&blocked.stderr)?;
+        assert_eq!(error["error"]["code"], "IO_ERROR");
+
+        let hit = docsight()
+            .args(["--agent", "--cache-dir"])
+            .arg(&cache_dir)
+            .arg("outline")
+            .arg(fixture("sample_tables.docx"))
+            .output()?;
+        assert!(hit.status.success(), "a stored entry stays readable");
+        std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o700))?;
+        assert_same_output(
+            "after restoring permissions",
+            &plain,
+            &docsight()
+                .args(["--agent", "--cache-dir"])
+                .arg(&cache_dir)
+                .arg("outline")
+                .arg(&document)
+                .output()?,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn killing_the_process_never_publishes_a_partial_entry() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let cache_dir = directory.path().join("cache");
+    let document =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Projeto_DOCSIGHT_Especificacao.docx");
+    let plain = docsight()
+        .args(["--agent", "text"])
+        .arg(&document)
+        .output()?;
+    assert!(plain.status.success());
+
+    for step in 0..40 {
+        let mut child = docsight()
+            .args(["--agent", "--cache-dir"])
+            .arg(&cache_dir)
+            .arg("text")
+            .arg(&document)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        std::thread::sleep(std::time::Duration::from_millis(step * 5));
+        let killed = child.kill().is_ok();
+        let output = child.wait_with_output()?;
+        if !killed || output.status.success() {
+            assert_same_output("uninterrupted run", &plain, &output);
+        }
+        let verify = cache_json(&cache_dir, "verify")?;
+        assert!(
+            verify["result"]["verify"]["quarantined"]
+                .as_array()
+                .is_some_and(Vec::is_empty),
+            "step {step}: {verify}"
+        );
+        assert_same_output(
+            "after an interrupted run",
+            &plain,
+            &docsight()
+                .args(["--agent", "--cache-dir"])
+                .arg(&cache_dir)
+                .arg("text")
+                .arg(&document)
+                .output()?,
+        );
+    }
+    let stats = cache_json(&cache_dir, "stats")?;
+    assert_eq!(stats["result"]["stats"]["entries"], 1);
+    assert_eq!(stats["result"]["stats"]["temporary_files"], 0);
     Ok(())
 }

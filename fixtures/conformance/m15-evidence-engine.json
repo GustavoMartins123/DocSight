@@ -658,7 +658,7 @@
     {
       "file": "cache-result.json",
       "id": "https://docsight.dev/schemas/v2/cache-result.json",
-      "sha256": "3cde3078fde7958923de1456f9293c58eb2c64e74df48f6539081ad030b64ff3"
+      "sha256": "6d3afdf3d6a363ac126c9cf5c315e8cae8337084b7fcfc379130fb5f5f2ec902"
     },
     {
       "file": "capabilities-envelope.json",

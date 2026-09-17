@@ -152,6 +152,8 @@
         "current_engine_entries",
         "other_engine_entries",
         "unreadable_entries",
+        "in_process_entries",
+        "sandbox_worker_entries",
         "quarantined_files",
         "quarantined_bytes",
         "temporary_files",
@@ -176,6 +178,14 @@
           "minimum": 0
         },
         "unreadable_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "in_process_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sandbox_worker_entries": {
           "type": "integer",
           "minimum": 0
         },

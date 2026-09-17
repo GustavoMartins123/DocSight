@@ -5,6 +5,10 @@
 - Add an opt-in content-addressed document IR cache with `--cache-dir`, `--cache-max-bytes` and `--cache-max-entries` for the eighteen commands that read the IR. Keys cover the document digest and format, the executable digest, engine and IR schema versions, layout profile and font fingerprint; output is byte-identical on a miss, a hit and without the cache.
 - Write cache entries atomically without overwriting, validate every entry in full before reuse, quarantine invalid entries with a reason and parse the document again, evict least-recently-used entries at the byte and entry limits and remove stale temporary files.
 - Keep the cache in the parent process under `--sandbox`: the worker receives only the key, a validated entry or a private result directory, and the parent validates the returned IR before storing it.
+- Validate a document IR in full, including its canonical form, before writing it to the cache, verify integrity, key, document identity and IR version on every read, and verify the canonical form again for entries returned by a sandboxed worker and during `cache verify` and `cache prune`.
+- Record whether a cache entry was produced in process or by a sandboxed worker and report both counts in `cache stats`.
+- Quarantine an entry only while the file still holds the rejected bytes, so a concurrently published entry is never quarantined by mistake, and let the parent revalidate an entry its worker rejected instead of trusting the worker.
+- Add a sandbox write-path probe and worker test, a `fuzz_cache_entry` fuzz target, and tests for interrupted processes and unwritable cache directories.
 - Add the `cache stats|verify|prune|clear` command with the `cache-result.json` schema, the `cache` capability and the `CACHE_ENTRY_QUARANTINED` and `CACHE_RESULT_DISCARDED` diagnostics. `--cache-dir` is rejected with `--password-file` and for commands that do not read the IR.
 
 - Lay out every DOCX section with its own page size, orientation, margins, start type, title page, page numbering and default, first-page and even-page headers and footers, and link each DOCX page to its section through `section_index`.

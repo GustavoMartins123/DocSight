@@ -1,4 +1,7 @@
-use crate::entry::{EntryRejection, decode_entry, encode_entry, verify_entry_integrity};
+use crate::entry::{
+    EntryProducer, EntryRejection, decode_entry, decode_untrusted_entry, encode_entry,
+    probe_header, verify_entry, verify_entry_integrity,
+};
 use crate::key::{CacheKey, EngineIdentity};
 use docsight_core::{DocsightError, Document, DocumentSource};
 use serde::Serialize;
@@ -21,6 +24,7 @@ const MAX_QUARANTINE_FILES: usize = 64;
 const MAX_SCANNED_FILES: usize = 100_000;
 const STALE_TEMPORARY_AGE: Duration = Duration::from_secs(600);
 const HEADER_PROBE_BYTES: u64 = 16 * 1024;
+const MAX_LOOKUP_ATTEMPTS: usize = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheConfig {
@@ -32,6 +36,13 @@ pub struct CacheConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Lookup {
     Hit(Box<Document>),
+    Miss,
+    Quarantined(QuarantineRecord),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EntryLookup {
+    Hit(Vec<u8>),
     Miss,
     Quarantined(QuarantineRecord),
 }
@@ -82,6 +93,8 @@ pub struct CacheStats {
     pub current_engine_entries: u64,
     pub other_engine_entries: u64,
     pub unreadable_entries: u64,
+    pub in_process_entries: u64,
+    pub sandbox_worker_entries: u64,
     pub quarantined_files: u64,
     pub quarantined_bytes: u64,
     pub temporary_files: u64,
@@ -123,11 +136,29 @@ pub struct DocumentCache {
     engine: EngineIdentity,
 }
 
+enum Found<T> {
+    Hit(T),
+    Miss,
+    Quarantined(QuarantineRecord),
+}
+
+enum Evidence<'a> {
+    NotRegularFile,
+    Oversized,
+    Mismatched(&'a [u8]),
+    Bytes(&'a [u8], EntryRejection),
+}
+
+enum Quarantine {
+    Moved(QuarantineRecord),
+    Changed,
+}
+
 enum Inspection {
     Current,
     OtherEngine,
     Quarantined(QuarantineRecord),
-    Vanished,
+    Skipped,
 }
 
 struct ScannedFile {
@@ -178,42 +209,44 @@ impl DocumentCache {
     }
 
     pub fn get(&self, key: &CacheKey) -> Result<Lookup, DocsightError> {
-        self.require_engine(key)?;
-        let digest = key.digest()?;
-        let path = self.entry_path(&digest);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Lookup::Miss),
-            Err(source) => return Err(DocsightError::Io { path, source }),
-        };
-        if !metadata.file_type().is_file() {
-            return self
-                .quarantine_file(&path, &digest, QuarantineReason::NotRegularFile)
-                .map(Lookup::Quarantined);
-        }
-        if metadata.len() > self.max_bytes {
-            return self
-                .quarantine_file(&path, &digest, QuarantineReason::Oversized)
-                .map(Lookup::Quarantined);
-        }
-        let bytes = match read_bounded(&path, self.max_bytes)? {
-            Some(bytes) => bytes,
-            None => return Ok(Lookup::Miss),
-        };
-        match decode_entry(&bytes, key) {
-            Ok(document) => {
-                touch(&path)?;
-                Ok(Lookup::Hit(Box::new(document)))
-            }
-            Err(rejection) => self
-                .quarantine_file(&path, &digest, QuarantineReason::Entry(rejection))
-                .map(Lookup::Quarantined),
-        }
+        Ok(
+            match self.lookup(key, &|bytes| decode_entry(bytes, key).map(Box::new))? {
+                Found::Hit(document) => Lookup::Hit(document),
+                Found::Miss => Lookup::Miss,
+                Found::Quarantined(record) => Lookup::Quarantined(record),
+            },
+        )
     }
 
-    pub fn put(&self, key: &CacheKey, document: &Document) -> Result<StoreOutcome, DocsightError> {
+    pub fn get_entry(&self, key: &CacheKey) -> Result<EntryLookup, DocsightError> {
+        Ok(
+            match self.lookup(key, &|bytes| {
+                verify_entry(bytes, key).map(|_| bytes.to_vec())
+            })? {
+                Found::Hit(bytes) => EntryLookup::Hit(bytes),
+                Found::Miss => EntryLookup::Miss,
+                Found::Quarantined(record) => EntryLookup::Quarantined(record),
+            },
+        )
+    }
+
+    pub fn revalidate(&self, key: &CacheKey) -> Result<Option<QuarantineRecord>, DocsightError> {
+        Ok(
+            match self.lookup(key, &|bytes| decode_untrusted_entry(bytes, key).map(|_| ()))? {
+                Found::Quarantined(record) => Some(record),
+                Found::Hit(()) | Found::Miss => None,
+            },
+        )
+    }
+
+    pub fn put(
+        &self,
+        key: &CacheKey,
+        document: &Document,
+        producer: EntryProducer,
+    ) -> Result<StoreOutcome, DocsightError> {
         self.require_engine(key)?;
-        let bytes = encode_entry(key, document)?;
+        let bytes = encode_entry(key, document, producer)?;
         if bytes.len() as u64 > self.max_bytes {
             return Ok(StoreOutcome::ExceedsLimit);
         }
@@ -230,8 +263,10 @@ impl DocumentCache {
         bytes: &[u8],
     ) -> Result<Result<StoreOutcome, QuarantineRecord>, DocsightError> {
         self.require_engine(key)?;
-        match decode_entry(bytes, key) {
-            Ok(document) => self.put(key, &document).map(Ok),
+        match decode_untrusted_entry(bytes, key) {
+            Ok(document) => self
+                .put(key, &document, EntryProducer::SandboxWorker)
+                .map(Ok),
             Err(rejection) => {
                 let digest = key.digest()?;
                 let reason = QuarantineReason::Entry(rejection);
@@ -256,6 +291,8 @@ impl DocumentCache {
             current_engine_entries: 0,
             other_engine_entries: 0,
             unreadable_entries: 0,
+            in_process_entries: 0,
+            sandbox_worker_entries: 0,
             quarantined_files: quarantine.len() as u64,
             quarantined_bytes: quarantine.iter().map(|file| file.bytes).sum(),
             temporary_files: temporary.len() as u64,
@@ -265,10 +302,19 @@ impl DocumentCache {
         for file in entries.iter().filter(|file| is_entry_name(&file.name)) {
             stats.entries += 1;
             stats.entry_bytes += file.bytes;
-            match file.regular.then(|| probe_engine(&file.path)).flatten() {
-                Some(engine) if engine == self.engine => stats.current_engine_entries += 1,
-                Some(_) => stats.other_engine_entries += 1,
-                None => stats.unreadable_entries += 1,
+            let Some((key, producer)) = file.regular.then(|| probe_file(&file.path)).flatten()
+            else {
+                stats.unreadable_entries += 1;
+                continue;
+            };
+            if key.engine == self.engine {
+                stats.current_engine_entries += 1;
+            } else {
+                stats.other_engine_entries += 1;
+            }
+            match producer {
+                EntryProducer::InProcess => stats.in_process_entries += 1,
+                EntryProducer::SandboxWorker => stats.sandbox_worker_entries += 1,
             }
         }
         Ok(stats)
@@ -289,7 +335,7 @@ impl DocumentCache {
                 Inspection::Current => report.valid += 1,
                 Inspection::OtherEngine => report.other_engine += 1,
                 Inspection::Quarantined(record) => report.quarantined.push(record),
-                Inspection::Vanished => continue,
+                Inspection::Skipped => continue,
             }
             report.checked += 1;
         }
@@ -306,7 +352,7 @@ impl DocumentCache {
             .filter(|file| is_entry_name(&file.name))
         {
             match self.inspect_file(&file)? {
-                Inspection::Current | Inspection::Vanished => {}
+                Inspection::Current | Inspection::Skipped => {}
                 Inspection::OtherEngine => {
                     if remove_if_present(&file.path)? {
                         removed_other_engine_entries += 1;
@@ -333,6 +379,50 @@ impl DocumentCache {
         })
     }
 
+    fn lookup<T>(
+        &self,
+        key: &CacheKey,
+        accept: &dyn Fn(&[u8]) -> Result<T, EntryRejection>,
+    ) -> Result<Found<T>, DocsightError> {
+        self.require_engine(key)?;
+        let digest = key.digest()?;
+        let path = self.entry_path(&digest);
+        for _ in 0..MAX_LOOKUP_ATTEMPTS {
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Found::Miss),
+                Err(source) => return Err(DocsightError::Io { path, source }),
+            };
+            let outcome = if !metadata.file_type().is_file() {
+                self.quarantine_file(&path, &digest, Evidence::NotRegularFile)?
+            } else if metadata.len() > self.max_bytes {
+                self.quarantine_file(&path, &digest, Evidence::Oversized)?
+            } else {
+                let Some(bytes) = read_bounded(&path, self.max_bytes)? else {
+                    return Ok(Found::Miss);
+                };
+                match accept(&bytes) {
+                    Ok(value) => {
+                        touch(&path)?;
+                        return Ok(Found::Hit(value));
+                    }
+                    Err(rejection) => {
+                        self.quarantine_file(&path, &digest, Evidence::Bytes(&bytes, rejection))?
+                    }
+                }
+            };
+            if let Quarantine::Moved(record) = outcome {
+                return Ok(Found::Quarantined(record));
+            }
+        }
+        Err(DocsightError::BackendFailure {
+            backend: "docsight-cache".to_owned(),
+            message: format!(
+                "cache entry {digest} changed {MAX_LOOKUP_ATTEMPTS} times while it was being validated"
+            ),
+        })
+    }
+
     fn require_engine(&self, key: &CacheKey) -> Result<(), DocsightError> {
         if key.engine == self.engine && key.is_well_formed() {
             return Ok(());
@@ -352,42 +442,66 @@ impl DocumentCache {
             .strip_suffix(&format!(".{ENTRY_EXTENSION}"))
             .unwrap_or(&file.name)
             .to_owned();
-        if !file.regular {
-            return self
-                .quarantine_file(&file.path, &digest, QuarantineReason::NotRegularFile)
-                .map(Inspection::Quarantined);
-        }
-        if file.bytes > self.max_bytes {
-            return self
-                .quarantine_file(&file.path, &digest, QuarantineReason::Oversized)
-                .map(Inspection::Quarantined);
-        }
-        let Some(bytes) = read_bounded(&file.path, self.max_bytes)? else {
-            return Ok(Inspection::Vanished);
+        let outcome = if !file.regular {
+            self.quarantine_file(&file.path, &digest, Evidence::NotRegularFile)?
+        } else if file.bytes > self.max_bytes {
+            self.quarantine_file(&file.path, &digest, Evidence::Oversized)?
+        } else {
+            let Some(bytes) = read_bounded(&file.path, self.max_bytes)? else {
+                return Ok(Inspection::Skipped);
+            };
+            let rejection = match verify_entry_integrity(&bytes) {
+                Ok((key, _)) if key.digest()? != digest => Evidence::Mismatched(&bytes),
+                Ok((key, _)) if key.engine != self.engine => return Ok(Inspection::OtherEngine),
+                Ok((key, _)) => match decode_untrusted_entry(&bytes, &key) {
+                    Ok(_) => return Ok(Inspection::Current),
+                    Err(rejection) => Evidence::Bytes(&bytes, rejection),
+                },
+                Err(rejection) => Evidence::Bytes(&bytes, rejection),
+            };
+            self.quarantine_file(&file.path, &digest, rejection)?
         };
-        let rejection = match verify_entry_integrity(&bytes) {
-            Ok(key) if key.digest()? != digest => QuarantineReason::FileNameMismatch,
-            Ok(key) if key.engine != self.engine => return Ok(Inspection::OtherEngine),
-            Ok(key) => match decode_entry(&bytes, &key) {
-                Ok(_) => return Ok(Inspection::Current),
-                Err(rejection) => QuarantineReason::Entry(rejection),
-            },
-            Err(rejection) => QuarantineReason::Entry(rejection),
-        };
-        self.quarantine_file(&file.path, &digest, rejection)
-            .map(Inspection::Quarantined)
+        Ok(match outcome {
+            Quarantine::Moved(record) => Inspection::Quarantined(record),
+            Quarantine::Changed => Inspection::Skipped,
+        })
     }
 
     fn quarantine_file(
         &self,
         path: &Path,
         digest: &str,
-        reason: QuarantineReason,
-    ) -> Result<QuarantineRecord, DocsightError> {
+        evidence: Evidence<'_>,
+    ) -> Result<Quarantine, DocsightError> {
+        let (reason, unchanged) = match evidence {
+            Evidence::NotRegularFile => (
+                QuarantineReason::NotRegularFile,
+                fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.file_type().is_file()),
+            ),
+            Evidence::Oversized => (
+                QuarantineReason::Oversized,
+                fs::symlink_metadata(path).is_ok_and(|metadata| {
+                    metadata.file_type().is_file() && metadata.len() > self.max_bytes
+                }),
+            ),
+            Evidence::Mismatched(bytes) => (
+                QuarantineReason::FileNameMismatch,
+                read_bounded(path, self.max_bytes)?.is_some_and(|current| current == bytes),
+            ),
+            Evidence::Bytes(bytes, rejection) => (
+                QuarantineReason::Entry(rejection),
+                read_bounded(path, self.max_bytes)?.is_some_and(|current| current == bytes),
+            ),
+        };
+        if !unchanged {
+            return Ok(Quarantine::Changed);
+        }
         let target = self.quarantine.join(quarantine_name(digest, reason));
         match fs::rename(path, &target) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Quarantine::Changed);
+            }
             Err(source) => {
                 return Err(DocsightError::Io {
                     path: path.to_path_buf(),
@@ -396,10 +510,10 @@ impl DocumentCache {
             }
         }
         self.trim_quarantine()?;
-        Ok(QuarantineRecord {
+        Ok(Quarantine::Moved(QuarantineRecord {
             key_sha256: digest.to_owned(),
             reason,
-        })
+        }))
     }
 
     fn trim_quarantine(&self) -> Result<(), DocsightError> {
@@ -555,21 +669,14 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>, Docsight
     Ok(Some(bytes))
 }
 
-fn probe_engine(path: &Path) -> Option<EngineIdentity> {
-    #[derive(serde::Deserialize)]
-    struct ProbeHeader {
-        key: CacheKey,
-    }
+fn probe_file(path: &Path) -> Option<(CacheKey, EntryProducer)> {
     let mut bytes = Vec::new();
     File::open(path)
         .ok()?
         .take(HEADER_PROBE_BYTES)
         .read_to_end(&mut bytes)
         .ok()?;
-    let newline = bytes.iter().position(|byte| *byte == b'\n')?;
-    serde_json::from_slice::<ProbeHeader>(&bytes[..newline])
-        .ok()
-        .map(|header| header.key.engine)
+    probe_header(&bytes)
 }
 
 fn touch(path: &Path) -> Result<(), DocsightError> {
@@ -652,4 +759,70 @@ fn is_entry_name(name: &str) -> bool {
 
 fn quarantine_name(digest: &str, reason: QuarantineReason) -> String {
     format!("{digest}.{}.{ENTRY_EXTENSION}", reason.code())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache(directory: &Path) -> Result<DocumentCache, DocsightError> {
+        DocumentCache::open(
+            &CacheConfig {
+                directory: directory.to_path_buf(),
+                max_bytes: 1024 * 1024,
+                max_entries: 8,
+            },
+            EngineIdentity {
+                executable_sha256: "a".repeat(64),
+                engine_version: "0.0.0-test".to_owned(),
+                ir_schema_version: docsight_core::IR_SCHEMA_VERSION.to_owned(),
+                layout_profile: "agent-fidelity-v1".to_owned(),
+                layout_font_fingerprint: "fonts-test".to_owned(),
+            },
+        )
+    }
+
+    #[test]
+    fn an_entry_replaced_during_validation_is_left_in_place() -> Result<(), DocsightError> {
+        let directory = tempfile::tempdir().map_err(|source| DocsightError::Io {
+            path: PathBuf::from("<temporary>"),
+            source,
+        })?;
+        let cache = cache(directory.path())?;
+        let digest = "b".repeat(64);
+        let path = cache.entry_path(&digest);
+        let io_error = |source| DocsightError::Io {
+            path: path.clone(),
+            source,
+        };
+        fs::write(&path, b"published by another process").map_err(io_error)?;
+
+        let outcome = cache.quarantine_file(
+            &path,
+            &digest,
+            Evidence::Bytes(
+                b"the bytes that were rejected",
+                EntryRejection::PayloadDigest,
+            ),
+        )?;
+        assert!(matches!(outcome, Quarantine::Changed));
+        assert_eq!(
+            fs::read(&path).map_err(io_error)?,
+            b"published by another process"
+        );
+        assert_eq!(scan(&cache.quarantine)?.len(), 0);
+
+        let outcome = cache.quarantine_file(
+            &path,
+            &digest,
+            Evidence::Bytes(
+                b"published by another process",
+                EntryRejection::PayloadDigest,
+            ),
+        )?;
+        assert!(matches!(outcome, Quarantine::Moved(_)));
+        assert!(!path.exists());
+        assert_eq!(scan(&cache.quarantine)?.len(), 1);
+        Ok(())
+    }
 }

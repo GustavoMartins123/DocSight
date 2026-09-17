@@ -1,6 +1,6 @@
 # DOCSIGHT fuzzing
 
-The fuzz workspace exercises the parser, layout, spatial-query, hit-testing, table-inference, and evidence-bundle production paths required by M9. Inputs are capped at 1 MiB by the harnesses so a single libFuzzer input cannot bypass the product's own resource-limit checks through unbounded harness allocation.
+The fuzz workspace exercises the parser, layout, spatial-query, hit-testing, table-inference, evidence-bundle production and cache-entry decoding paths. Inputs are capped at 1 MiB by the harnesses so a single libFuzzer input cannot bypass the product's own resource-limit checks through unbounded harness allocation.
 
 Install a nightly Rust toolchain and `cargo-fuzz`, then build every target:
 
@@ -31,6 +31,7 @@ The required targets are:
 - `fuzz_spatial_dql_parser`
 - `fuzz_hit_test`
 - `fuzz_evidence_bundle_manifest`
+- `fuzz_cache_entry`
 
 Crashes are written under `fuzz/artifacts/` and remain untracked until they are minimized, understood, and converted into a permanent regression fixture. CI preserves them as a target-specific workflow artifact when a campaign fails. Corpus changes are reviewed like other test-data changes; do not replace or discard a crashing input merely to make a campaign pass.
 
