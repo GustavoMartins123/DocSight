@@ -31,6 +31,9 @@ struct WorkerCli {
     #[arg(long, hide = true)]
     filesystem_probe_for_test: bool,
 
+    #[arg(long, hide = true)]
+    filesystem_write_probe_for_test: bool,
+
     #[command(subcommand)]
     command: WorkerCommand,
 }
@@ -99,6 +102,9 @@ fn main() -> ExitCode {
     }
     if cli.filesystem_probe_for_test {
         return filesystem_probe_exit_code();
+    }
+    if cli.filesystem_write_probe_for_test {
+        return filesystem_write_probe_exit_code();
     }
     match execute_worker(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -175,6 +181,58 @@ fn filesystem_probe_exit_code() -> ExitCode {
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn filesystem_probe_exit_code() -> ExitCode {
     ExitCode::from(30)
+}
+
+const WRITE_PROBE_DIRECTORY_ENV: &str = "DOCSIGHT_FILESYSTEM_WRITE_PROBE_DIR";
+const WRITE_PROBE_INPUT_ENV: &str = "DOCSIGHT_FILESYSTEM_WRITE_PROBE_INPUT";
+const WRITE_PROBE_DENIED_ENV: &str = "DOCSIGHT_FILESYSTEM_WRITE_PROBE_DENIED";
+const WRITE_PROBE_CONTENT: &[u8] = b"declared write path";
+
+/// Mirrors how the cache hands an entry to an isolated worker: read a declared file, create and
+/// write a new file in the declared directory, rename it there, and stay locked out elsewhere.
+fn filesystem_write_probe_exit_code() -> ExitCode {
+    let (Some(directory), Some(input), Some(denied)) = (
+        std::env::var_os(WRITE_PROBE_DIRECTORY_ENV).map(PathBuf::from),
+        std::env::var_os(WRITE_PROBE_INPUT_ENV).map(PathBuf::from),
+        std::env::var_os(WRITE_PROBE_DENIED_ENV).map(PathBuf::from),
+    ) else {
+        return ExitCode::from(30);
+    };
+    if std::fs::read(&input).is_err() {
+        return ExitCode::from(31);
+    }
+    let partial = directory.join("probe.partial");
+    let write = std::fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(&partial)
+        .and_then(|mut file| file.write_all(WRITE_PROBE_CONTENT));
+    if write.is_err() {
+        return ExitCode::from(32);
+    }
+    if std::fs::rename(&partial, directory.join("probe.result")).is_err() {
+        return ExitCode::from(33);
+    }
+    match std::fs::write(denied.join("probe.denied"), WRITE_PROBE_CONTENT) {
+        Err(error) if write_access_denied(&error) => ExitCode::SUCCESS,
+        _ => ExitCode::from(34),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn write_access_denied(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::EACCES) | Some(libc::EPERM))
+}
+
+#[cfg(target_os = "windows")]
+fn write_access_denied(error: &io::Error) -> bool {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    error.raw_os_error() == Some(ERROR_ACCESS_DENIED)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn write_access_denied(_error: &io::Error) -> bool {
+    false
 }
 
 fn execute_worker(cli: &WorkerCli) -> Result<(), DocsightError> {

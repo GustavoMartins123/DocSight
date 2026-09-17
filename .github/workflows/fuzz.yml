@@ -43,6 +43,7 @@ jobs:
           - fuzz_spatial_dql_parser
           - fuzz_hit_test
           - fuzz_evidence_bundle_manifest
+          - fuzz_cache_entry
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

@@ -169,6 +169,7 @@ PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette
 - The `caption` DQL selector is DOCX-only and fails closed for PDF, because caption semantics are not reconstructed there.
 - The cache is opt-in and stores only the document IR. `render`, `crop`, `bundle`, `replay`, `verify`, `diff` and `fingerprint` re-ingest the document, and `--cache-dir` is rejected for them and together with `--password-file`, so decrypted content is never persisted.
 - Cache entries hold document content as plain JSON. Directories are created with owner-only permissions and a cache directory that is a symbolic link is rejected, but the entries are not encrypted.
+- A cache entry is bound to the document bytes in its key, so it is only ever served for that exact document, and it records whether it was produced in process or by a sandboxed worker. A document that compromised a sandboxed worker could still have a forged IR stored for its own bytes, which is why cache directories should not be shared between sources with different levels of trust.
 - An entry is only reused by the identical executable. Upgrading or rebuilding DocSight turns existing entries into other-engine entries, which `cache prune` removes.
 
 ---

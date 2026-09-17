@@ -1,4 +1,7 @@
-use docsight_worker::{SANDBOX_CHILD_ENV, SandboxPolicy, run_in_sandbox_with_env};
+use docsight_worker::{
+    SANDBOX_CHILD_ENV, SANDBOX_READ_PATHS_ENV, SANDBOX_WRITE_PATHS_ENV, SandboxPolicy,
+    run_in_sandbox_with_env,
+};
 use std::net::TcpListener;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -119,5 +122,58 @@ fn declared_read_paths_stay_readable_inside_the_sandbox() -> Result<(), Box<dyn 
     );
     let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(result["format"], "docx");
+    Ok(())
+}
+
+#[test]
+fn declared_write_paths_stay_writable_inside_the_sandbox() -> Result<(), Box<dyn std::error::Error>>
+{
+    let worker = Path::new(env!("CARGO_BIN_EXE_docsight-worker"));
+    let handoff = tempfile::tempdir()?;
+    let denied = tempfile::tempdir()?;
+    let input = handoff.path().join("probe.input");
+    std::fs::write(&input, b"key")?;
+    let declared_reads = serde_json::to_string(&[input.to_string_lossy()])?;
+    let declared_writes = serde_json::to_string(&[handoff.path().to_string_lossy()])?;
+
+    let output = run_in_sandbox_with_env(
+        Some(worker),
+        &SandboxPolicy::default(),
+        &[
+            "--filesystem-write-probe-for-test".to_owned(),
+            "inspect".to_owned(),
+            "unused".to_owned(),
+        ],
+        &[
+            (SANDBOX_CHILD_ENV.to_owned(), "1".to_owned()),
+            (SANDBOX_READ_PATHS_ENV.to_owned(), declared_reads),
+            (SANDBOX_WRITE_PATHS_ENV.to_owned(), declared_writes),
+            (
+                "DOCSIGHT_FILESYSTEM_WRITE_PROBE_DIR".to_owned(),
+                handoff.path().to_string_lossy().into_owned(),
+            ),
+            (
+                "DOCSIGHT_FILESYSTEM_WRITE_PROBE_INPUT".to_owned(),
+                input.to_string_lossy().into_owned(),
+            ),
+            (
+                "DOCSIGHT_FILESYSTEM_WRITE_PROBE_DENIED".to_owned(),
+                denied.path().to_string_lossy().into_owned(),
+            ),
+        ],
+    )?;
+
+    assert_eq!(
+        output.exit_code,
+        0,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(handoff.path().join("probe.result"))?,
+        b"declared write path"
+    );
+    assert!(!handoff.path().join("probe.partial").exists());
+    assert!(!denied.path().join("probe.denied").exists());
     Ok(())
 }

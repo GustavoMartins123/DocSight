@@ -77,10 +77,15 @@ pub fn parse_docx_bytes(bytes: Vec<u8>) {
 }
 
 pub fn laid_out_fixed_document() -> Option<Document> {
+    fixed_source_and_document().map(|(_, document)| document)
+}
+
+pub fn fixed_source_and_document() -> Option<(DocumentSource, Document)> {
     let bytes = docx_package(fixed_document_xml(), &[])?;
     let source = DocumentSource::from_bytes(bytes).ok()?;
     let document = parse_docx(&source).ok()?;
-    layout_docx(document).ok().map(|layout| layout.document)
+    let document = layout_docx(document).ok()?.document;
+    Some((source, document))
 }
 
 pub fn xml_text(data: &[u8]) -> String {
