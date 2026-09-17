@@ -1,6 +1,6 @@
 use docsight_core::{DocsightError, Document, DocumentFormat, DocumentSource};
-use docsight_layout::{LaidOutDocument, layout_docx};
-use docsight_ooxml::parse_docx;
+use docsight_layout::{LaidOutDocument, LayoutSection, layout_docx_productized};
+use docsight_ooxml::{build_layout_plan, parse_docx};
 use docsight_pdf::PdfDocument;
 
 pub fn ingest(source: &DocumentSource) -> Result<Document, DocsightError> {
@@ -21,7 +21,18 @@ pub fn ingest_with_password(
 }
 
 pub fn ingest_docx(source: &DocumentSource) -> Result<LaidOutDocument, DocsightError> {
-    layout_docx(parse_docx(source)?)
+    let document = parse_docx(source)?;
+    let plan = build_layout_plan(source)?;
+    let sections = plan
+        .sections
+        .into_iter()
+        .map(|section| LayoutSection {
+            start_block: section.start_block,
+            end_block: section.end_block,
+            section: section.section,
+        })
+        .collect();
+    layout_docx_productized(document, sections)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
