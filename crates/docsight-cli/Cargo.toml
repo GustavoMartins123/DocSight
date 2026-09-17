@@ -13,6 +13,7 @@ path = "src/main.rs"
 clap.workspace = true
 clap_complete.workspace = true
 docsight-agent = { path = "../docsight-agent" }
+docsight-cache = { path = "../docsight-cache" }
 docsight-core = { path = "../docsight-core" }
 docsight-ingest = { path = "../docsight-ingest" }
 docsight-layout = { path = "../docsight-layout" }
@@ -25,12 +26,12 @@ docsight-worker = { path = "../docsight-worker" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 docsight-ooxml = { path = "../docsight-ooxml" }
 md-5.workspace = true
 rc4.workspace = true
-tempfile.workspace = true
 zip.workspace = true
 
 [lints]

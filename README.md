@@ -83,9 +83,22 @@ The password is limited to 127 bytes, cleared from the CLI's memory when the ope
 | Visual evidence | `render`, `crop`, `evidence` | Produce deterministic PNG evidence and its provenance record. |
 | Portable evidence | `bundle`, `verify`, `replay` | Create and verify proof bundles or deterministic render traces offline. |
 | Comparison | `diff` | Compare package, semantic and visual changes with lineage. |
+| Caching | `cache` | Report, verify, prune or clear the opt-in document IR cache. |
 | Interactive setup | `completions` | Generate a completion script for Bash, Elvish, Fish, PowerShell or Zsh. |
 
 Use `docsight <command> --help` for human-readable flags. Use the machine contract for integrations; command names, schemas, units, ordering and exit codes are public contracts.
+
+## Reusing parsed documents
+
+An agent that runs several commands against the same document can keep the parsed IR in a private cache directory:
+
+```bash
+docsight --agent --cache-dir .docsight-cache overview "$DOC"
+docsight --agent --cache-dir .docsight-cache find "$DOC" "termination"
+docsight --agent --cache-dir .docsight-cache cache stats
+```
+
+The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed.
 
 ## Bounded output
 

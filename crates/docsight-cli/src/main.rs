@@ -1,3 +1,6 @@
+mod cache;
+
+use cache::{CacheAction, CacheSettings, DocumentLoader, Reporting};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell};
 use docsight_agent::{
@@ -14,7 +17,6 @@ use docsight_core::{
 use docsight_diff::{
     DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents_with_passwords,
 };
-use docsight_ingest::ingest_with_password as load_document;
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{
     HitQuery, RenderRequest, RenderTarget, render_document_with_password,
@@ -113,6 +115,31 @@ struct Cli {
     )]
     password_file: Option<PathBuf>,
 
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Reuse parsed document IR from an opt-in content-addressed cache directory"
+    )]
+    cache_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "BYTES",
+        value_parser = parse_byte_budget,
+        help = "Maximum total cache entry bytes, such as 64mb (default 256mb)"
+    )]
+    cache_max_bytes: Option<usize>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "COUNT",
+        help = "Maximum number of cache entries (default 4096)"
+    )]
+    cache_max_entries: Option<u64>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -148,6 +175,29 @@ impl Cli {
 
     fn structured_errors(&self) -> bool {
         self.json_errors || self.agent
+    }
+
+    fn reporting(&self) -> Reporting {
+        Reporting {
+            quiet: self.quiet_mode(),
+            json_errors: self.structured_errors(),
+        }
+    }
+
+    fn cache_settings(&self) -> Option<CacheSettings> {
+        self.cache_dir.as_deref().map(|directory| {
+            CacheSettings::new(directory, self.cache_max_bytes, self.cache_max_entries)
+        })
+    }
+
+    fn has_machine_output_limits(&self) -> bool {
+        self.max_bytes.is_some()
+            || self.max_items.is_some()
+            || self.text_limit.is_some()
+            || self.continue_token.is_some()
+            || self.select.is_some()
+            || self.budget.is_some()
+            || self.budget_profile.is_some()
     }
 }
 
@@ -397,6 +447,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_CACHE)]
+    Cache {
+        #[command(subcommand)]
+        action: CacheCommand,
+    },
     #[command(about = SUMMARY_RESOLVE)]
     Resolve {
         path: PathBuf,
@@ -409,6 +464,43 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum CacheCommand {
+    #[command(about = "report entry, quarantine and temporary file counts")]
+    Stats {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(about = "validate every entry and quarantine invalid ones")]
+    Verify {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(
+        about = "remove quarantine, stale temporaries and entries from other engines, then enforce limits"
+    )]
+    Prune {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(about = "remove every entry, quarantined file and temporary file")]
+    Clear {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+impl CacheCommand {
+    fn action(&self) -> (CacheAction, bool) {
+        match self {
+            Self::Stats { json } => (CacheAction::Stats, *json),
+            Self::Verify { json } => (CacheAction::Verify, *json),
+            Self::Prune { json } => (CacheAction::Prune, *json),
+            Self::Clear { json } => (CacheAction::Clear, *json),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -762,6 +854,27 @@ struct AgentPdfPasswordCapability {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct AgentCacheCapability {
+    flag: &'static str,
+    limit_flags: &'static [&'static str],
+    agent_default: bool,
+    artifact: &'static str,
+    layout: &'static str,
+    applies_to_commands: &'static [&'static str],
+    maintenance_command: &'static str,
+    maintenance_actions: &'static [&'static str],
+    key_components: &'static [&'static str],
+    default_max_bytes: u64,
+    default_max_entries: u64,
+    write_mode: &'static str,
+    invalid_entry_behavior: &'static str,
+    sandbox_behavior: &'static str,
+    password_file_behavior: &'static str,
+    output_identity: &'static str,
+    failure_mode: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AgentErrorContract {
     channel: &'static str,
     schema: &'static str,
@@ -779,6 +892,7 @@ struct AgentCapabilitiesResult {
     invocation_prefix: &'static str,
     sandbox: AgentSandboxCapability,
     pdf_password: AgentPdfPasswordCapability,
+    cache: AgentCacheCapability,
     document_formats: &'static [&'static str],
     output_modes: &'static [&'static str],
     agent_defaults: &'static str,
@@ -1103,6 +1217,14 @@ fn main() -> ExitCode {
         Err(error) => error.exit(),
     };
     if cli.sandbox {
+        if let Err(error) = validate_cache_arguments(&cli) {
+            let exit_code = error.exit_code();
+            return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+                ExitCode::from(exit_code)
+            } else {
+                ExitCode::from(40)
+            };
+        }
         let exe = match std::env::current_exe() {
             Ok(exe) => exe,
             Err(error) => {
@@ -1121,20 +1243,55 @@ fn main() -> ExitCode {
                 };
             }
         };
-        let raw_args: Vec<String> = std::env::args()
-            .skip(1)
-            .filter(|arg| arg != "--sandbox")
-            .collect();
+        let handoff = match (cli.cache_settings(), cached_document_path(&cli.command)) {
+            (Some(settings), Some(document)) => {
+                cache::SandboxCacheHandoff::prepare(&settings, document, &exe, cli.reporting())
+            }
+            _ => Ok(None),
+        };
+        let environment = handoff.and_then(|handoff| {
+            let mut environment = vec![(
+                docsight_worker::SANDBOX_CHILD_ENV.to_owned(),
+                "1".to_owned(),
+            )];
+            if let Some(handoff) = &handoff {
+                environment.extend(handoff.environment()?);
+            }
+            Ok((handoff, environment))
+        });
+        let (handoff, environment) = match environment {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let exit_code = error.exit_code();
+                return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+                    ExitCode::from(exit_code)
+                } else {
+                    ExitCode::from(40)
+                };
+            }
+        };
+        let raw_args = cache::strip_cache_arguments(
+            std::env::args()
+                .skip(1)
+                .filter(|arg| arg != "--sandbox")
+                .collect(),
+        );
         match docsight_worker::run_in_sandbox_with_env(
             Some(&exe),
             &docsight_worker::SandboxPolicy::default(),
             &raw_args,
-            &[(
-                docsight_worker::SANDBOX_CHILD_ENV.to_owned(),
-                "1".to_owned(),
-            )],
+            &environment,
         ) {
             Ok(output) => {
+                if let Some(handoff) = handoff
+                    && let Err(error) = handoff.commit(cli.reporting())
+                {
+                    let exit_code = error.exit_code();
+                    if emit_error(&error, cli.structured_errors(), cli.agent).is_err() {
+                        return ExitCode::from(40);
+                    }
+                    return ExitCode::from(exit_code);
+                }
                 if io::stdout().write_all(&output.stdout).is_err()
                     || io::stderr().write_all(&output.stderr).is_err()
                 {
@@ -1163,7 +1320,98 @@ fn main() -> ExitCode {
     }
 }
 
+fn cached_document_path(command: &Command) -> Option<&Path> {
+    match command {
+        Command::Inspect { path, .. }
+        | Command::Outline { path, .. }
+        | Command::Text { path, .. }
+        | Command::Tables { path, .. }
+        | Command::Table { path, .. }
+        | Command::Page { path, .. }
+        | Command::Images { path, .. }
+        | Command::Links { path, .. }
+        | Command::Evidence { path, .. }
+        | Command::Coverage { path, .. }
+        | Command::Hit { path, .. }
+        | Command::Query { path, .. }
+        | Command::Find { path, .. }
+        | Command::Overview { path, .. }
+        | Command::Focus { path, .. }
+        | Command::Peek { path, .. }
+        | Command::Context { path, .. }
+        | Command::Resolve { path, .. } => Some(path),
+        Command::Capabilities { .. }
+        | Command::Completions { .. }
+        | Command::Render { .. }
+        | Command::Crop { .. }
+        | Command::Diff { .. }
+        | Command::Fingerprint { .. }
+        | Command::Bundle { .. }
+        | Command::Replay { .. }
+        | Command::Verify { .. }
+        | Command::Cache { .. } => None,
+    }
+}
+
+fn validate_cache_arguments(cli: &Cli) -> Result<(), DocsightError> {
+    if std::env::var_os(cache::CACHE_HANDOFF_ENV).is_some()
+        && std::env::var_os(docsight_worker::SANDBOX_CHILD_ENV).is_none()
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: format!(
+                "{} is reserved for sandbox workers",
+                cache::CACHE_HANDOFF_ENV
+            ),
+        });
+    }
+    let maintenance = matches!(cli.command, Command::Cache { .. });
+    if cli.cache_dir.is_none() {
+        if cli.cache_max_bytes.is_some() || cli.cache_max_entries.is_some() {
+            return Err(DocsightError::InvalidArgument {
+                message: "--cache-max-bytes and --cache-max-entries require --cache-dir".to_owned(),
+            });
+        }
+        if maintenance {
+            return Err(DocsightError::InvalidArgument {
+                message: "cache maintenance requires --cache-dir".to_owned(),
+            });
+        }
+        return Ok(());
+    }
+    if maintenance {
+        if cli.sandbox {
+            return Err(DocsightError::InvalidArgument {
+                message: "cache maintenance does not parse documents and cannot run with --sandbox"
+                    .to_owned(),
+            });
+        }
+        if cli.has_machine_output_limits() {
+            return Err(DocsightError::InvalidArgument {
+                message: "cache maintenance reports are unbounded and cannot be combined with machine-output limits"
+                    .to_owned(),
+            });
+        }
+        return Ok(());
+    }
+    if cached_document_path(&cli.command).is_none() {
+        return Err(DocsightError::InvalidArgument {
+            message: format!(
+                "--cache-dir applies only to commands that load the document IR: {}",
+                cache::CACHED_COMMANDS.join(", ")
+            ),
+        });
+    }
+    if cli.password_file.is_some() {
+        return Err(DocsightError::InvalidArgument {
+            message: "--cache-dir cannot be combined with --password-file because decrypted document content is never persisted"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn execute(cli: &Cli) -> Result<(), DocsightError> {
+    validate_cache_arguments(cli)?;
     if cli.ndjson && (cli.budget.is_some() || cli.budget_profile.is_some()) {
         return Err(DocsightError::InvalidArgument {
             message: "--budget and --budget-profile require a bounded JSON envelope; use --max-bytes for NDJSON streams"
@@ -1192,6 +1440,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             Command::Capabilities { .. }
                 | Command::Completions { .. }
                 | Command::Fingerprint { .. }
+                | Command::Cache { .. }
         )
     {
         return Err(DocsightError::InvalidArgument {
@@ -1211,12 +1460,32 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
     let limits = cli.query_limits();
     let quiet = cli.quiet_mode();
     let json_errors = cli.structured_errors();
+    let cache_settings = cli
+        .cache_settings()
+        .filter(|_| cached_document_path(&cli.command).is_some());
+    let loader =
+        DocumentLoader::for_invocation(password, cache_settings.as_ref(), cli.reporting())?;
     match &cli.command {
         Command::Capabilities { json } => capabilities(cli.is_agent_json(*json), cli.ndjson),
+        Command::Cache { action } => {
+            let settings = cli
+                .cache_settings()
+                .ok_or_else(|| DocsightError::InvalidArgument {
+                    message: "cache maintenance requires --cache-dir".to_owned(),
+                })?;
+            let (action, json) = action.action();
+            cache::cache_command(
+                &settings,
+                action,
+                cli.is_agent_json(json),
+                cli.ndjson,
+                cli.reporting(),
+            )
+        }
         Command::Completions { shell } => completions(*shell),
         Command::Inspect { path, json } => inspect(
             path,
-            password,
+            &loader,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1225,7 +1494,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Outline { path, json } => outline(
             path,
-            password,
+            &loader,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1234,7 +1503,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Text { path, json } => document_text(
             path,
-            password,
+            &loader,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1243,7 +1512,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Tables { path, json } => tables(
             path,
-            password,
+            &loader,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1256,7 +1525,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             format,
         } => table(TableCommandArgs {
             path,
-            password,
+            loader: &loader,
             object,
             format: *format,
             json: cli.is_agent_json(*format == TableFormat::Json),
@@ -1268,7 +1537,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         Command::Page { path, page, json } => page_command(PageCommandArgs {
             path,
             number: *page,
-            password,
+            loader: &loader,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
@@ -1333,7 +1602,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         }
         Command::Images { path, json } => images(
             path,
-            password,
+            &loader,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1342,7 +1611,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         ),
         Command::Links { path, json } => links(
             path,
-            password,
+            &loader,
             cli.is_agent_json(*json),
             cli.ndjson,
             &limits,
@@ -1391,7 +1660,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => evidence(EvidenceArgs {
             path,
-            password,
+            loader: &loader,
             object,
             render_dpi: *render_dpi,
             json: cli.is_agent_json(*json),
@@ -1454,7 +1723,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => coverage(CoverageArgs {
             path,
-            password,
+            loader: &loader,
             page: *page,
             regions: *regions,
             json: cli.is_agent_json(*json),
@@ -1471,7 +1740,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => hit(HitArgs {
             path,
-            password,
+            loader: &loader,
             page: *page,
             point: point.as_deref(),
             bbox: bbox.as_deref(),
@@ -1492,7 +1761,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => find_command(FindArgs {
             path,
-            password,
+            loader: &loader,
             pattern,
             regex: *regex,
             ignore_case: *ignore_case,
@@ -1511,7 +1780,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => query(QueryArgs {
             path,
-            password,
+            loader: &loader,
             expression,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
@@ -1521,7 +1790,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         }),
         Command::Overview { path, json } => overview(OverviewArgs {
             path,
-            password,
+            loader: &loader,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
             limits: &limits,
@@ -1536,7 +1805,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => focus(FocusArgs {
             path,
-            password,
+            loader: &loader,
             target: target.as_deref(),
             pages: *pages,
             related: *related,
@@ -1556,7 +1825,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => peek(PeekArgs {
             path,
-            password,
+            loader: &loader,
             page: *page,
             pages: *pages,
             object: object.as_deref(),
@@ -1577,7 +1846,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => context(ContextArgs {
             path,
-            password,
+            loader: &loader,
             object: object.as_deref(),
             find: find.as_deref(),
             kind: kind.map(Into::into),
@@ -1596,7 +1865,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json,
         } => resolve(ResolveArgs {
             path,
-            password,
+            loader: &loader,
             text,
             kind: kind.map(Into::into),
             pages: *pages,
@@ -1643,6 +1912,8 @@ const SUMMARY_PEEK: &str =
     "return a compact structural projection for a page, range, object or section";
 const SUMMARY_CONTEXT: &str =
     "aggregate selected content, neighborhood, geometry, fidelity and provenance";
+const SUMMARY_CACHE: &str =
+    "inspect, verify, prune or clear the opt-in content-addressed document IR cache";
 const SUMMARY_RESOLVE: &str =
     "rank deterministic descriptor matches with explainable component scores";
 
@@ -1710,6 +1981,25 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             secret_in_argv: false,
             secret_persisted: false,
             failure_mode: "reject",
+        },
+        cache: AgentCacheCapability {
+            flag: "--cache-dir",
+            limit_flags: &["--cache-max-bytes", "--cache-max-entries"],
+            agent_default: false,
+            artifact: "document-ir",
+            layout: cache::CACHE_LAYOUT,
+            applies_to_commands: cache::CACHED_COMMANDS,
+            maintenance_command: "cache",
+            maintenance_actions: cache::CACHE_MAINTENANCE_ACTIONS,
+            key_components: cache::CACHE_KEY_COMPONENTS,
+            default_max_bytes: docsight_cache::DEFAULT_CACHE_MAX_BYTES,
+            default_max_entries: docsight_cache::DEFAULT_CACHE_MAX_ENTRIES,
+            write_mode: "atomic_no_clobber",
+            invalid_entry_behavior: "quarantine_and_reparse",
+            sandbox_behavior: "parent_process_owns_cache",
+            password_file_behavior: "reject",
+            output_identity: "byte_identical",
+            failure_mode: "fail_closed",
         },
         document_formats: ALL_DOCUMENT_FORMATS,
         output_modes: OUTPUT_MODES,
@@ -2021,6 +2311,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 result_schema: Some("https://docsight.dev/schemas/v2/resolve-result.json"),
                 result_root: None,
             },
+            CommandCapability {
+                name: "cache",
+                summary: SUMMARY_CACHE,
+                invocation: "cache <stats|verify|prune|clear> --cache-dir <path>",
+                formats: NO_DOCUMENT_FORMATS,
+                ndjson: true,
+                ndjson_events: &["cache"],
+                bounded: false,
+                result_schema: Some("https://docsight.dev/schemas/v2/cache-result.json"),
+                result_root: None,
+            },
         ],
     };
 
@@ -2102,7 +2403,7 @@ fn completions(shell: Shell) -> Result<(), DocsightError> {
 
 fn inspect(
     path: &PathBuf,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2110,7 +2411,7 @@ fn inspect(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let (result, warnings) = inspect_source(&source, password)?;
+    let (result, warnings) = inspect_source(&source, loader)?;
 
     if ndjson {
         let stdout = io::stdout();
@@ -2181,11 +2482,11 @@ fn inspect(
 
 fn inspect_source(
     source: &DocumentSource,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
 ) -> Result<(InspectResult, Vec<Diagnostic>), DocsightError> {
     match source.format() {
         DocumentFormat::Docx => {
-            let document = load_document(source, password)?;
+            let document = loader.load(source)?;
             let paragraphs = document.paragraphs().count() + document.list_items().count();
             let tracked = (document.tracked_changes.insertions > 0
                 || document.tracked_changes.deletions > 0)
@@ -2209,13 +2510,13 @@ fn inspect_source(
             };
             Ok((result, document.warnings))
         }
-        DocumentFormat::Pdf => inspect_pdf_source(source, password),
+        DocumentFormat::Pdf => inspect_pdf_source(source, loader),
     }
 }
 
 fn inspect_pdf_source(
     source: &DocumentSource,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
 ) -> Result<(InspectResult, Vec<Diagnostic>), DocsightError> {
     let unavailable = |pages: Option<u32>, error: DocsightError| {
         let mut diagnostic = error.diagnostic();
@@ -2240,21 +2541,20 @@ fn inspect_pdf_source(
         (result, vec![diagnostic])
     };
 
-    let pdf = match PdfDocument::open_with_password(source, password) {
-        Ok(pdf) => pdf,
-        Err(error @ DocsightError::UnsupportedFeature { .. }) => {
-            return Ok(unavailable(None, error));
-        }
-        Err(error) => return Err(error),
-    };
-    let pages = Some(pdf.page_count());
-    let document = match pdf.to_document() {
+    let mut page_count = None;
+    let loaded = loader.load_with(source, || {
+        let pdf = PdfDocument::open_with_password(source, loader.password())?;
+        page_count = Some(pdf.page_count());
+        pdf.to_document()
+    });
+    let document = match loaded {
         Ok(document) => document,
         Err(error @ DocsightError::UnsupportedFeature { .. }) => {
-            return Ok(unavailable(pages, error));
+            return Ok(unavailable(page_count, error));
         }
         Err(error) => return Err(error),
     };
+    let pages = Some(document.pages.len() as u32);
     let warnings = document.warnings.clone();
     let capability_details = InspectCapabilityDetails::from_document(&document);
     let result = InspectResult {
@@ -2278,7 +2578,7 @@ fn inspect_pdf_source(
 
 fn outline(
     path: &PathBuf,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2286,7 +2586,7 @@ fn outline(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source, password)?;
+    let document = loader.load(&source)?;
     let headings: Vec<HeadingRecord> = document
         .headings()
         .map(|(block, heading)| HeadingRecord {
@@ -2348,7 +2648,7 @@ fn outline(
 struct PageCommandArgs<'a> {
     path: &'a PathBuf,
     number: u32,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     json: bool,
     ndjson: bool,
     limits: &'a QueryLimits,
@@ -2358,7 +2658,7 @@ struct PageCommandArgs<'a> {
 
 fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     if args.number == 0 {
         return Err(DocsightError::InvalidArgument {
             message: "page numbers are 1-based".to_owned(),
@@ -2579,7 +2879,7 @@ fn text_blocks_by_kind(document: &Document) -> BTreeMap<&'static str, usize> {
 
 fn document_text(
     path: &PathBuf,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2587,7 +2887,7 @@ fn document_text(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source, password)?;
+    let document = loader.load(&source)?;
     let blocks = text_records(&document);
 
     if ndjson {
@@ -2632,7 +2932,7 @@ fn document_text(
 
 fn tables(
     path: &PathBuf,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -2640,7 +2940,7 @@ fn tables(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source, password)?;
+    let document = loader.load(&source)?;
     let page_fidelity = docsight_core::page_fidelity(&document);
     let tables: Vec<TableSummary> = document
         .tables()
@@ -2739,7 +3039,7 @@ fn tables(
 
 struct TableCommandArgs<'a> {
     path: &'a PathBuf,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     object: &'a str,
     format: TableFormat,
     json: bool,
@@ -2751,7 +3051,7 @@ struct TableCommandArgs<'a> {
 
 fn table(args: TableCommandArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let target = document
         .tables()
         .find(|(block, _)| block.id.to_string() == args.object)
@@ -3191,7 +3491,7 @@ fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
 
 fn images(
     path: &PathBuf,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -3199,7 +3499,7 @@ fn images(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source, password)?;
+    let document = loader.load(&source)?;
     let images: Vec<ImageRecord> = document
         .figures()
         .map(|(block, fig)| ImageRecord {
@@ -3277,7 +3577,7 @@ fn images(
 
 fn links(
     path: &PathBuf,
-    password: &[u8],
+    loader: &DocumentLoader<'_>,
     json: bool,
     ndjson: bool,
     limits: &QueryLimits,
@@ -3285,7 +3585,7 @@ fn links(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open(path)?;
-    let document = load_document(&source, password)?;
+    let document = loader.load(&source)?;
     let links: Vec<LinkRecord> = document
         .links
         .iter()
@@ -3584,7 +3884,7 @@ fn continuation_scope(command: &str, parameter: &str) -> String {
 
 struct FindArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     pattern: &'a str,
     regex: bool,
     ignore_case: bool,
@@ -3610,7 +3910,7 @@ struct FindNdjsonSummary {
 
 fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let request = FindRequest {
         pattern: args.pattern.to_owned(),
         mode: if args.regex {
@@ -3746,7 +4046,7 @@ fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
 
 struct QueryArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     expression: &'a str,
     json: bool,
     ndjson: bool,
@@ -3757,7 +4057,7 @@ struct QueryArgs<'a> {
 
 fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let execution = execute_spatial_query(&document, args.expression)?;
     let mut warnings = document.warnings;
     warnings.extend(execution.warnings);
@@ -3862,7 +4162,7 @@ fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
 
 struct OverviewArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     json: bool,
     ndjson: bool,
     limits: &'a QueryLimits,
@@ -3872,7 +4172,7 @@ struct OverviewArgs<'a> {
 
 fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let result = document_overview(&document)?;
     let limits = bounded_machine_limits(args.limits, DEFAULT_VIEWPORT_ITEMS);
 
@@ -3965,7 +4265,7 @@ fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
 
 struct FocusArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     target: Option<&'a str>,
     pages: Option<PageRange>,
     related: bool,
@@ -3978,7 +4278,7 @@ struct FocusArgs<'a> {
 
 fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let (result, scope) = match (args.target, args.pages) {
         (Some(target), None) => (
             focus_object(&document, target, args.related)?,
@@ -4106,7 +4406,7 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
 
 struct PeekArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     page: Option<u32>,
     pages: Option<PageRange>,
     object: Option<&'a str>,
@@ -4121,7 +4421,7 @@ struct PeekArgs<'a> {
 
 fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let target_count = [
         args.page.is_some(),
         args.pages.is_some(),
@@ -4245,7 +4545,7 @@ fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
 
 struct ResolveArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     text: &'a str,
     kind: Option<SemanticKind>,
     pages: Option<PageRange>,
@@ -4258,7 +4558,7 @@ struct ResolveArgs<'a> {
 
 fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let result = resolve_descriptor(&document, args.text, args.kind, args.pages)?;
     let query_scope = serde_json::to_string(&result.query).map_err(output_serialization_error)?;
     let scope = continuation_scope("resolve", &query_scope);
@@ -4343,7 +4643,7 @@ fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
 
 struct ContextArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     object: Option<&'a str>,
     find: Option<&'a str>,
     kind: Option<SemanticKind>,
@@ -4363,7 +4663,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
         });
     }
     let source = DocumentSource::open(args.path)?;
-    let document = load_document(&source, args.password)?;
+    let document = args.loader.load(&source)?;
     let mut warnings = document.warnings.clone();
     let (status, selection, total_candidates, candidates, target) = match (args.object, args.find) {
         (Some(object), None) if args.kind.is_none() => {
@@ -5043,7 +5343,7 @@ fn fingerprint(
 
 struct EvidenceArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     object: &'a str,
     render_dpi: u16,
     json: bool,
@@ -5055,7 +5355,7 @@ struct EvidenceArgs<'a> {
 
 fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let doc = load_document(&source, args.password)?;
+    let doc = args.loader.load(&source)?;
     let obj_id = ObjectId::from_raw(args.object);
     let mut extra_warnings = Vec::new();
 
@@ -5066,7 +5366,7 @@ fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
             },
             dpi: args.render_dpi,
         };
-        match render_document_with_password(&source, &req, args.password) {
+        match render_document_with_password(&source, &req, args.loader.password()) {
             Ok(rendered) => {
                 let mut hasher = sha2::Sha256::new();
                 hasher.update(rendered.png());
@@ -5176,7 +5476,7 @@ fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
 
 struct CoverageArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     page: Option<u32>,
     regions: bool,
     json: bool,
@@ -5188,7 +5488,7 @@ struct CoverageArgs<'a> {
 
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let source = DocumentSource::open(args.path)?;
-    let doc = load_document(&source, args.password)?;
+    let doc = args.loader.load(&source)?;
     let glyph_coverage = document_glyph_coverage(&doc, &source);
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
 
@@ -5297,7 +5597,7 @@ fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
 
 struct HitArgs<'a> {
     path: &'a Path,
-    password: &'a [u8],
+    loader: &'a DocumentLoader<'a>,
     page: u32,
     point: Option<&'a str>,
     bbox: Option<&'a str>,
@@ -5352,7 +5652,7 @@ fn hit(args: HitArgs<'_>) -> Result<(), DocsightError> {
     };
 
     let source = DocumentSource::open(args.path)?;
-    let doc = load_document(&source, args.password)?;
+    let doc = args.loader.load(&source)?;
     let result = docsight_render::hit_test(&doc, args.page, &query)?;
 
     if args.ndjson {

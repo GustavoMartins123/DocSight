@@ -18,6 +18,7 @@
         "meta",
         "done",
         "capabilities",
+        "cache",
         "warning",
         "page.begin",
         "page.end",

@@ -18,7 +18,6 @@ Classification:
 
 | Item | Why it blocks v1 |
 | --- | --- |
-| Content-addressed cache between invocations | An agent workflow re-parses and re-lays-out the same document for every command. Tracked as A13. |
 | Per-invocation overrides for ingestion limits | The enforced values are centralized and published in `capabilities` under `ingestion_limits`, and each boundary is tested, but a caller cannot raise one for a document that legitimately exceeds it. Deferred until a real document forces the question, so the override surface is designed against an actual case rather than guessed. |
 
 ---
@@ -45,6 +44,8 @@ Classification:
 - PDF caption reconstruction, which would let the `caption` DQL selector work for PDF instead of failing closed.
 - Table detection quality: calibrated confidence for unruled and partially-ruled tables, and a second detector with declared provenance.
 - Richer `diff` lineage across versions, reducing `DIFF_LINEAGE_AMBIGUOUS`.
+- Caching beyond the document IR: raster output, crops, traces, proof bundles and diff results are recomputed on every invocation.
+- Encrypted cache entries, which would allow caching the IR of password-protected PDFs and protect cached content at rest.
 - Distribution authentication: signing and macOS notarization, with maintainer credentials and clean-machine validation. Native package generation, checksums, installation instructions and a five-target validation workflow are implemented; their existence does not prove a release has been built or published.
 
 ---
