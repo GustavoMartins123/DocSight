@@ -16,6 +16,7 @@ pub struct DocxParts {
     pub document: String,
     pub styles: Option<String>,
     pub numbering: Option<String>,
+    pub settings: Option<String>,
     pub rels: Option<String>,
     pub headers: Vec<(String, String)>,
     pub footers: Vec<(String, String)>,
@@ -42,6 +43,7 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
     })?;
     let styles = read_xml_part(&mut archive, "word/styles.xml")?;
     let numbering = read_xml_part(&mut archive, "word/numbering.xml")?;
+    let settings = read_xml_part(&mut archive, "word/settings.xml")?;
     let rels = read_xml_part(&mut archive, "word/_rels/document.xml.rels")?;
     let footnotes = read_xml_part(&mut archive, "word/footnotes.xml")?;
     let endnotes = read_xml_part(&mut archive, "word/endnotes.xml")?;
@@ -107,6 +109,7 @@ pub fn read_parts(bytes: &[u8]) -> Result<DocxParts, DocsightError> {
         document,
         styles,
         numbering,
+        settings,
         rels,
         headers,
         footers,

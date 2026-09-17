@@ -225,7 +225,7 @@ fn every_emitted_diagnostic_code_is_documented() -> Result<(), Box<dyn std::erro
     let scope = read_document("PRODUCT_SCOPE.md")?;
     let emitted = diagnostic_codes_in_sources()?;
     assert!(
-        emitted.len() >= 25 && emitted.contains("DOCX_SECTIONS_COLLAPSED"),
+        emitted.len() >= 25 && emitted.contains("DOCX_LAYOUT_PAGINATED"),
         "the diagnostic code scan found {} codes, which means it stopped matching the sources",
         emitted.len()
     );

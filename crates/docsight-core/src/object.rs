@@ -90,6 +90,59 @@ impl<'a> DocumentObject<'a> {
         }
     }
 
+    pub fn fragments(&self) -> Vec<(u32, Rect)> {
+        match self {
+            Self::Block {
+                block,
+                container: None,
+            } => block.fragments().collect(),
+            _ => self.page().zip(self.bbox()).into_iter().collect(),
+        }
+    }
+
+    pub fn continuations(&self) -> &'a [crate::BlockContinuation] {
+        match self {
+            Self::Block {
+                block,
+                container: None,
+            } => &block.continuations,
+            _ => &[],
+        }
+    }
+
+    pub fn occupies_page(&self, page: u32) -> bool {
+        match self {
+            Self::Block {
+                block,
+                container: None,
+            } => block.occupies_page(page),
+            _ => self.page() == Some(page),
+        }
+    }
+
+    pub fn bbox_on_page(&self, page: u32) -> Option<Rect> {
+        match self {
+            Self::Block {
+                block,
+                container: None,
+            } => block.bbox_on_page(page),
+            _ => self.bbox().filter(|_| self.page() == Some(page)),
+        }
+    }
+
+    pub fn location_at_char(&self, char_index: usize) -> (Option<u32>, Option<Rect>) {
+        match self {
+            Self::Block {
+                block,
+                container: None,
+            } if !block.continuations.is_empty() => match block.fragment_at_char(char_index) {
+                Some((page, bbox)) => (Some(page), Some(bbox)),
+                None => (self.page(), self.bbox()),
+            },
+            _ => (self.page(), self.bbox()),
+        }
+    }
+
     pub fn text(&self) -> String {
         match self {
             Self::Block { block, .. } => block.text(),

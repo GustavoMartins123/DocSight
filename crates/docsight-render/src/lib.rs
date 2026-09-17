@@ -94,6 +94,9 @@ pub fn render_docx(
             (page, Some(bbox), Some(id.clone()))
         }
     };
+    let continuation_warning = crop_object
+        .as_deref()
+        .and_then(|id| continued_crop_warning(&laid_out.document, id, page_num));
     let page = laid_out
         .pages
         .into_iter()
@@ -102,6 +105,7 @@ pub fn render_docx(
             object: format!("page {page_num}"),
         })?;
     let mut warnings = laid_out.document.warnings;
+    warnings.extend(continuation_warning);
     let crop_box = match (crop_box, crop_object) {
         (Some(bbox), Some(object)) => {
             let page_bbox = Rect::new(0.0, 0.0, page.width_pt, page.height_pt)?;
@@ -273,6 +277,29 @@ fn missing_crop_geometry(
         _ => format!("object {id} has no crop geometry"),
     };
     DocsightError::UnsupportedFeature { feature }
+}
+
+fn continued_crop_warning(document: &Document, id: &str, page: u32) -> Option<Diagnostic> {
+    let block = document.find_block(id)?;
+    let continued: Vec<String> = block
+        .continuations
+        .iter()
+        .map(|continuation| continuation.page.to_string())
+        .collect();
+    if continued.is_empty() {
+        return None;
+    }
+    Some(Diagnostic {
+        code: "OBJECT_CROP_CONTINUES_ON_OTHER_PAGES".to_owned(),
+        severity: docsight_core::DiagnosticSeverity::Warning,
+        message: format!(
+            "object {id} starts on page {page} and continues on pages {}",
+            continued.join(", ")
+        ),
+        effect: "the crop contains only the first page fragment; crop each continuation page by its region to see the rest".to_owned(),
+        object: Some(block.id.clone()),
+        page: Some(page),
+    })
 }
 
 fn clipped_crop_warning(object: &str, page: u32) -> Diagnostic {

@@ -1019,12 +1019,12 @@ fn trace_tables(document: &Document, page: u32) -> Vec<TraceTableSizing> {
 
 fn trace_pagination(document: &Document, page: u32) -> Vec<TracePaginationDecision> {
     document
-        .page_blocks(page)
+        .blocks_on_page(page)
         .map(|block| TracePaginationDecision {
             object_id: block.id.to_string(),
             kind: block.kind,
             page,
-            bbox: block.bbox,
+            bbox: block.bbox_on_page(page),
             reading_order: block.reading_order,
         })
         .collect()
@@ -1040,14 +1040,14 @@ fn selected_evidence(
     let object_ids = match &target.selector {
         TraceSelector::Object { id } => vec![ObjectId::from_raw(id)],
         TraceSelector::Page { page } => document
-            .page_blocks(*page)
+            .blocks_on_page(*page)
             .map(|block| block.id.clone())
             .collect(),
         TraceSelector::Region { page, bbox } => document
-            .page_blocks(*page)
+            .blocks_on_page(*page)
             .filter(|block| {
                 block
-                    .bbox
+                    .bbox_on_page(*page)
                     .is_some_and(|block_bbox| block_bbox.intersects(*bbox))
             })
             .map(|block| block.id.clone())

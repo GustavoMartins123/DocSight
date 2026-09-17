@@ -1,7 +1,8 @@
 use crate::{Diagnostic, DocsightError, DocumentFormat, ObjectId, Rect};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
-pub const IR_SCHEMA_VERSION: &str = "1.2";
+pub const IR_SCHEMA_VERSION: &str = "1.3";
 pub const IR_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -218,6 +219,15 @@ pub struct LayoutFlags {
     pub keep_with_next: bool,
     #[serde(default)]
     pub keep_lines: bool,
+    #[serde(default)]
+    pub widow_control: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlockContinuation {
+    pub page: u32,
+    pub bbox: Rect,
+    pub text_start_char: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -234,6 +244,8 @@ pub struct Block {
     pub flags: LayoutFlags,
     #[serde(default, skip_serializing_if = "ParagraphFormat::is_default")]
     pub format: ParagraphFormat,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub continuations: Vec<BlockContinuation>,
     pub content: BlockContent,
 }
 
@@ -251,6 +263,79 @@ impl Block {
             source: self.source.clone(),
             confidence: self.confidence,
         })
+    }
+
+    pub fn fragments(&self) -> impl Iterator<Item = (u32, Rect)> + '_ {
+        let primary = self.page.zip(self.bbox);
+        primary.into_iter().chain(
+            self.continuations
+                .iter()
+                .map(|continuation| (continuation.page, continuation.bbox)),
+        )
+    }
+
+    pub fn occupies_page(&self, page: u32) -> bool {
+        self.fragments().any(|(number, _)| number == page)
+    }
+
+    pub fn bbox_on_page(&self, page: u32) -> Option<Rect> {
+        self.fragments()
+            .find(|(number, _)| *number == page)
+            .map(|(_, bbox)| bbox)
+    }
+
+    pub fn fragment_at_char(&self, char_index: usize) -> Option<(u32, Rect)> {
+        let primary = self.page.zip(self.bbox)?;
+        Some(
+            self.continuations
+                .iter()
+                .take_while(|continuation| continuation.text_start_char <= char_index)
+                .last()
+                .map(|continuation| (continuation.page, continuation.bbox))
+                .unwrap_or(primary),
+        )
+    }
+
+    pub fn text_on_page(&self, page: u32) -> Result<Option<String>, DocsightError> {
+        if self.bbox_on_page(page).is_none() {
+            return Ok(None);
+        }
+
+        let text = self.text();
+        let text_len = text.chars().count();
+        let (start, end) = if self.page == Some(page) {
+            (
+                0,
+                self.continuations
+                    .first()
+                    .map_or(text_len, |continuation| continuation.text_start_char),
+            )
+        } else {
+            let Some(index) = self
+                .continuations
+                .iter()
+                .position(|continuation| continuation.page == page)
+            else {
+                return Ok(None);
+            };
+            (
+                self.continuations[index].text_start_char,
+                self.continuations
+                    .get(index + 1)
+                    .map_or(text_len, |continuation| continuation.text_start_char),
+            )
+        };
+
+        if start > end || end > text_len {
+            return Err(DocsightError::MalformedDocument {
+                message: format!(
+                    "block {} has an invalid text continuation range {start}..{end} on page {page} for {text_len} characters",
+                    self.id
+                ),
+            });
+        }
+
+        Ok(Some(text.chars().skip(start).take(end - start).collect()))
     }
 
     pub fn text(&self) -> String {
@@ -315,8 +400,47 @@ pub struct Page {
     pub number: u32,
     pub width_pt: f32,
     pub height_pt: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_index: Option<u32>,
     pub block_ids: Vec<ObjectId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub continued_block_ids: Vec<ObjectId>,
     pub overlays: Vec<Overlay>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionStart {
+    #[default]
+    NextPage,
+    Continuous,
+    EvenPage,
+    OddPage,
+    NextColumn,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderFooterKind {
+    Header,
+    Footer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderFooterVariant {
+    Default,
+    First,
+    Even,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SectionHeaderFooter {
+    pub kind: HeaderFooterKind,
+    pub variant: HeaderFooterVariant,
+    pub part: String,
+    pub text: String,
+    pub inherited: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -331,6 +455,42 @@ pub struct Section {
     pub margin_left_pt: Option<f32>,
     pub header_text: Option<String>,
     pub footer_text: Option<String>,
+    #[serde(default)]
+    pub start: SectionStart,
+    #[serde(default)]
+    pub title_page: bool,
+    #[serde(default)]
+    pub even_and_odd_headers: bool,
+    #[serde(default)]
+    pub header_distance_pt: Option<f32>,
+    #[serde(default)]
+    pub footer_distance_pt: Option<f32>,
+    #[serde(default = "default_section_columns")]
+    pub columns: u32,
+    #[serde(default)]
+    pub page_number_start: Option<u32>,
+    #[serde(default)]
+    pub page_number_format: Option<String>,
+    #[serde(default)]
+    pub headers_footers: Vec<SectionHeaderFooter>,
+    #[serde(default)]
+    pub last_block_id: Option<ObjectId>,
+}
+
+fn default_section_columns() -> u32 {
+    1
+}
+
+impl Section {
+    pub fn header_footer(
+        &self,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) -> Option<&SectionHeaderFooter> {
+        self.headers_footers
+            .iter()
+            .find(|entry| entry.kind == kind && entry.variant == variant)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -482,6 +642,88 @@ impl Document {
         self.blocks
             .iter()
             .filter(move |block| block.page == Some(number))
+    }
+
+    pub fn blocks_on_page(&self, number: u32) -> impl Iterator<Item = &Block> {
+        self.blocks
+            .iter()
+            .filter(move |block| block.occupies_page(number))
+    }
+
+    pub fn section_block_ranges(&self) -> Result<Vec<std::ops::Range<usize>>, DocsightError> {
+        if self.sections.is_empty() {
+            return Err(DocsightError::MalformedDocument {
+                message: "DOCX layout requires at least one section".to_owned(),
+            });
+        }
+        let positions: std::collections::BTreeMap<&ObjectId, usize> = self
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(index, block)| (&block.id, index))
+            .collect();
+        let last_section = self.sections.len() - 1;
+        let mut ranges = Vec::with_capacity(self.sections.len());
+        let mut start = 0_usize;
+        for (position, section) in self.sections.iter().enumerate() {
+            let declared_end = match &section.last_block_id {
+                Some(id) => positions
+                    .get(id)
+                    .map(|index| index + 1)
+                    .filter(|end| *end > start)
+                    .ok_or_else(|| DocsightError::MalformedDocument {
+                        message: format!(
+                            "DOCX section {} ends at block {id}, which is not after the previous section",
+                            section.section_index
+                        ),
+                    })?,
+                None => start,
+            };
+            let end = if position == last_section {
+                self.blocks.len()
+            } else {
+                declared_end
+            };
+            ranges.push(start..end);
+            start = end;
+        }
+        Ok(ranges)
+    }
+
+    pub fn section_page_numbers(&self, section_index: u32) -> Result<BTreeSet<u32>, DocsightError> {
+        let ranges = self.section_block_ranges()?;
+        let mut pages: BTreeSet<u32> = self
+            .section_pages(section_index)
+            .map(|page| page.number)
+            .collect();
+        for (section, range) in self.sections.iter().zip(ranges) {
+            if section.section_index != section_index {
+                continue;
+            }
+            for block in &self.blocks[range] {
+                pages.extend(block.fragments().map(|(page, _)| page));
+            }
+        }
+        Ok(pages)
+    }
+
+    pub fn section_for_block(&self, id: &ObjectId) -> Result<Option<&Section>, DocsightError> {
+        let Some(position) = self.blocks.iter().position(|block| block.id == *id) else {
+            return Ok(None);
+        };
+        let ranges = self.section_block_ranges()?;
+        Ok(self
+            .sections
+            .iter()
+            .zip(ranges)
+            .find(|(_, range)| range.contains(&position))
+            .map(|(section, _)| section))
+    }
+
+    pub fn section_pages(&self, section_index: u32) -> impl Iterator<Item = &Page> {
+        self.pages
+            .iter()
+            .filter(move |page| page.section_index == Some(section_index))
     }
 }
 

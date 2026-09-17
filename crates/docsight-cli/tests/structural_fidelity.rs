@@ -319,7 +319,7 @@ fn every_block_kind_declared_by_the_ir_is_reachable_or_documented()
     }
     assert!(
         !seen.contains(&BlockKind::Shape),
-        "Shape blocks are now produced; PRODUCT_SCOPE.md must stop declaring them absent"
+        "the static fixture corpus now covers Shape blocks; add Shape to the required kinds"
     );
     Ok(())
 }

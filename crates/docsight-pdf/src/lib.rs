@@ -664,7 +664,9 @@ impl<'a> PdfDocument<'a> {
                 number: page_num,
                 width_pt: page_record.media_box.width(),
                 height_pt: page_record.media_box.height(),
+                section_index: None,
                 block_ids: reconstructed.block_ids,
+                continued_block_ids: Vec::new(),
                 overlays,
             });
         }

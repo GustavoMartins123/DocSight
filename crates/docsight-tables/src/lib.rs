@@ -131,6 +131,7 @@ impl InferredTable {
             confidence: self.confidence,
             flags: LayoutFlags::default(),
             format: Default::default(),
+            continuations: Vec::new(),
             content: BlockContent::Table(table_block),
         }
     }

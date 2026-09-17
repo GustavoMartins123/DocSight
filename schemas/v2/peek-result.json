@@ -244,6 +244,52 @@
         },
         "text_truncated": {
           "type": "boolean"
+        },
+        "continuations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "page",
+              "bbox",
+              "text_start_char"
+            ],
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "bbox": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "x0",
+                  "y0",
+                  "x1",
+                  "y1"
+                ],
+                "properties": {
+                  "x0": {
+                    "type": "number"
+                  },
+                  "y0": {
+                    "type": "number"
+                  },
+                  "x1": {
+                    "type": "number"
+                  },
+                  "y1": {
+                    "type": "number"
+                  }
+                }
+              },
+              "text_start_char": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
         }
       },
       "additionalProperties": false

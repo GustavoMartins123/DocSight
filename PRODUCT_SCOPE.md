@@ -87,10 +87,21 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 
 | Limitation | Diagnostic |
 | --- | --- |
-| Multiple sections collapse to the first section's page geometry | `DOCX_SECTIONS_COLLAPSED` |
 | Missing `sectPr`; a default Letter section is synthesized | `DOCX_SECTION_DEFAULTED` |
-| Pagination never splits a block, so widows, orphans and `keep-lines` are approximated by whole-block moves | `DOCX_PAGINATION_BLOCK_GRANULAR` |
+| Missing section geometry values use declared deterministic defaults | `DOCX_SECTION_GEOMETRY_DEFAULTED` |
+| Binding gutters are parsed but not added to the body margins | `DOCX_SECTION_GUTTER_IGNORED` |
+| Multi-column sections are laid out as one column | `DOCX_SECTION_COLUMNS_UNSUPPORTED` |
+| A `nextColumn` section break starts a new page because multi-column flow is unsupported | `DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED` |
+| Widow/orphan control is relaxed only when the declared constraint cannot fit on an empty page | `DOCX_WIDOW_CONTROL_RELAXED` |
+| Tables move as a whole because row-level table splitting is not implemented | `DOCX_PAGINATION_BLOCK_GRANULAR` |
 | A block taller than the content area overflows the page | `DOCX_BLOCK_TALLER_THAN_PAGE` |
+| A header or footer reference cannot be resolved to an available package part | `DOCX_HEADER_FOOTER_UNRESOLVED` |
+| Unsupported header or footer fields retain their cached source result, which can be stale | `DOCX_HEADER_FOOTER_FIELD_CACHED` |
+| Header and footer content is projected as deterministic plain text without source formatting, tab stops, tables, drawings, or positioned content | `DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED` |
+| A header or footer extends into the body because body flow does not reserve additional space for it | `DOCX_HEADER_FOOTER_OVERLAPS_BODY` |
+| A header or footer extends outside the physical page and is clipped | `DOCX_HEADER_FOOTER_OUTSIDE_PAGE` |
+| Unsupported page-number formats render as decimal | `DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED` |
+| Recognized DrawingML lines are preserved as `Shape` blocks, but their floating position, extent, stroke, and pixels are not projected | `DOCX_SHAPE_VISUAL_OMITTED` |
 | Layout is computed rather than read from the source | `DOCX_LAYOUT_PAGINATED` |
 | Text is measured with a deterministic proportional fallback font, not the document's own font | `DOCX_FONT_SUBSTITUTED` |
 | An embedded image is neither a supported PNG nor JPEG, or its bytes fail strict decoding, so a placeholder box is rendered instead of its pixels; the diagnostic names the detected format or decoding failure | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
@@ -146,7 +157,7 @@ PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette
 
 ### Cross-cutting
 
-- `Shape` blocks and `Watermark` overlays exist in the IR but no parser produces them yet.
+- Recognized DrawingML lines produce `Shape` blocks. Other Office shapes and `Watermark` overlays are not produced yet.
 - Headers, footers and comment markers are DOCX-only and come from layout; `Annotation` overlays are PDF-only and come from page annotations.
 - Annotation appearance streams are not rendered. An annotation contributes its geometry and text to the IR, not its pixels.
 - Resource coverage counts figures and declared resources. A PDF whose content lives in an untraversed Form XObject therefore reports reduced resource coverage rather than silently reporting none.

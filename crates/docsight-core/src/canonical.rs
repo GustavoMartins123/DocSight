@@ -39,6 +39,34 @@ pub enum CanonicalViolation {
         page: u32,
         id: ObjectId,
     },
+    ContinuationWithoutPlacement {
+        id: ObjectId,
+    },
+    ContinuationOutOfOrder {
+        id: ObjectId,
+        page: u32,
+    },
+    ContinuationIndexUnknownBlock {
+        page: u32,
+        id: ObjectId,
+    },
+    ContinuationIndexForeignBlock {
+        page: u32,
+        id: ObjectId,
+    },
+    ContinuationIndexMissingBlock {
+        page: u32,
+        id: ObjectId,
+    },
+    ContinuationIndexOutOfOrder {
+        page: u32,
+        previous: ObjectId,
+        current: ObjectId,
+    },
+    PageSectionUnknown {
+        page: u32,
+        section_index: u32,
+    },
 }
 
 impl Display for CanonicalViolation {
@@ -92,6 +120,41 @@ impl Display for CanonicalViolation {
                 formatter,
                 "overlay {id} references page {page} which the document does not declare"
             ),
+            Self::ContinuationWithoutPlacement { id } => write!(
+                formatter,
+                "block {id} declares continuations without a primary page and bounding box"
+            ),
+            Self::ContinuationOutOfOrder { id, page } => write!(
+                formatter,
+                "block {id} continues on page {page} out of ascending page or text order"
+            ),
+            Self::ContinuationIndexUnknownBlock { page, id } => write!(
+                formatter,
+                "page {page} lists continued block {id} which does not exist"
+            ),
+            Self::ContinuationIndexForeignBlock { page, id } => write!(
+                formatter,
+                "page {page} lists continued block {id} which does not continue on that page"
+            ),
+            Self::ContinuationIndexMissingBlock { page, id } => write!(
+                formatter,
+                "block {id} continues on page {page} but is missing from its continued block index"
+            ),
+            Self::ContinuationIndexOutOfOrder {
+                page,
+                previous,
+                current,
+            } => write!(
+                formatter,
+                "page {page} lists continued block {current} after {previous} instead of reading order"
+            ),
+            Self::PageSectionUnknown {
+                page,
+                section_index,
+            } => write!(
+                formatter,
+                "page {page} references section {section_index} which the document does not declare"
+            ),
         }
     }
 }
@@ -103,6 +166,9 @@ pub fn canonical_violations(document: &Document) -> Vec<CanonicalViolation> {
     collect_block_order(document, &mut violations);
     collect_page_index(document, &mut violations);
     collect_overlay_pages(document, &mut violations);
+    collect_continuations(document, &mut violations);
+    collect_continuation_index(document, &mut violations);
+    collect_page_sections(document, &mut violations);
     violations
 }
 
@@ -264,6 +330,115 @@ fn collect_overlay_pages(document: &Document, violations: &mut Vec<CanonicalViol
                     id: overlay.id.clone(),
                 });
             }
+        }
+    }
+}
+
+fn collect_continuations(document: &Document, violations: &mut Vec<CanonicalViolation>) {
+    let page_numbers: BTreeSet<u32> = document.pages.iter().map(|page| page.number).collect();
+    for block in document
+        .blocks
+        .iter()
+        .filter(|block| !block.continuations.is_empty())
+    {
+        let Some(primary_page) = block.page.filter(|_| block.bbox.is_some()) else {
+            violations.push(CanonicalViolation::ContinuationWithoutPlacement {
+                id: block.id.clone(),
+            });
+            continue;
+        };
+        let mut previous_page = primary_page;
+        let mut previous_char = 0usize;
+        for continuation in &block.continuations {
+            if continuation.page <= previous_page
+                || continuation.text_start_char <= previous_char
+                || !page_numbers.contains(&continuation.page)
+            {
+                violations.push(CanonicalViolation::ContinuationOutOfOrder {
+                    id: block.id.clone(),
+                    page: continuation.page,
+                });
+            }
+            previous_page = continuation.page;
+            previous_char = continuation.text_start_char;
+        }
+    }
+}
+
+fn collect_continuation_index(document: &Document, violations: &mut Vec<CanonicalViolation>) {
+    let blocks_by_id: BTreeMap<&ObjectId, &Block> = document
+        .blocks
+        .iter()
+        .map(|block| (&block.id, block))
+        .collect();
+    for page in &document.pages {
+        let mut previous: Option<&Block> = None;
+        for id in &page.continued_block_ids {
+            let Some(block) = blocks_by_id.get(id) else {
+                violations.push(CanonicalViolation::ContinuationIndexUnknownBlock {
+                    page: page.number,
+                    id: id.clone(),
+                });
+                continue;
+            };
+            if !block
+                .continuations
+                .iter()
+                .any(|continuation| continuation.page == page.number)
+            {
+                violations.push(CanonicalViolation::ContinuationIndexForeignBlock {
+                    page: page.number,
+                    id: id.clone(),
+                });
+            }
+            if let Some(previous_block) = previous
+                && block.reading_order <= previous_block.reading_order
+            {
+                violations.push(CanonicalViolation::ContinuationIndexOutOfOrder {
+                    page: page.number,
+                    previous: previous_block.id.clone(),
+                    current: block.id.clone(),
+                });
+            }
+            previous = Some(block);
+        }
+    }
+    let mut expected: BTreeMap<u32, Vec<&ObjectId>> = BTreeMap::new();
+    for block in &document.blocks {
+        for continuation in &block.continuations {
+            expected
+                .entry(continuation.page)
+                .or_default()
+                .push(&block.id);
+        }
+    }
+    for page in &document.pages {
+        let indexed: BTreeSet<&ObjectId> = page.continued_block_ids.iter().collect();
+        for id in expected.get(&page.number).into_iter().flatten() {
+            if !indexed.contains(id) {
+                violations.push(CanonicalViolation::ContinuationIndexMissingBlock {
+                    page: page.number,
+                    id: (*id).clone(),
+                });
+            }
+        }
+    }
+}
+
+fn collect_page_sections(document: &Document, violations: &mut Vec<CanonicalViolation>) {
+    let section_indexes: BTreeSet<u32> = document
+        .sections
+        .iter()
+        .map(|section| section.section_index)
+        .collect();
+    for page in &document.pages {
+        if let Some(section_index) = page.section_index
+            && !section_indexes.contains(&section_index)
+        {
+            violations.push(CanonicalViolation::PageSectionUnknown {
+                page: page.number,
+                section_index,
+            });
         }
     }
 }

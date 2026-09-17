@@ -122,17 +122,13 @@ pub fn find(document: &Document, request: &FindRequest) -> Result<FindResult, Do
         if !request.kinds.is_empty() && !request.kinds.contains(&kind) {
             continue;
         }
-        if let Some((start, end)) = request.pages {
-            match object.page() {
-                Some(page) if page >= start && page <= end => {}
-                _ => continue,
-            }
-        }
-        if let Some(region) = request.region {
-            match object.bbox() {
-                Some(bbox) if bbox.intersects(region) => {}
-                _ => continue,
-            }
+        let fragments = object.fragments();
+        if request.pages.is_some()
+            && !fragments
+                .iter()
+                .any(|(page, bbox)| location_selected(request, Some(*page), Some(*bbox)))
+        {
+            continue;
         }
         searched_objects += 1;
         let text = object.text();
@@ -144,14 +140,19 @@ pub fn find(document: &Document, request: &FindRequest) -> Result<FindResult, Do
                     limit: MAX_FIND_MATCHES as u64,
                 });
             }
+            let start_char = text[..start_byte].chars().count();
+            let (page, bbox) = object.location_at_char(start_char);
+            if request.pages.is_some() && !location_selected(request, page, bbox) {
+                continue;
+            }
             matches.push(FindMatch {
                 object_id: object.id().clone(),
                 kind,
                 container_id: object.container().map(|container| container.id.clone()),
-                page: object.page(),
-                bbox: object.bbox(),
+                page,
+                bbox,
                 matched: TextMatch {
-                    start_char: text[..start_byte].chars().count(),
+                    start_char,
                     end_char: text[..end_byte].chars().count(),
                     text: text[start_byte..end_byte].to_owned(),
                 },
@@ -177,6 +178,19 @@ pub fn find(document: &Document, request: &FindRequest) -> Result<FindResult, Do
         geometry_unavailable_matches,
         matches,
     })
+}
+
+fn location_selected(request: &FindRequest, page: Option<u32>, bbox: Option<Rect>) -> bool {
+    let Some((start, end)) = request.pages else {
+        return true;
+    };
+    let Some(page) = page.filter(|page| *page >= start && *page <= end) else {
+        return false;
+    };
+    match request.region {
+        Some(region) => page == start && bbox.is_some_and(|bbox| bbox.intersects(region)),
+        None => true,
+    }
 }
 
 enum Matcher {

@@ -121,11 +121,7 @@ pub fn hit_test(
     let mut hits = Vec::new();
 
     for block in &document.blocks {
-        if block.page != Some(page_number) {
-            continue;
-        }
-
-        let Some(bbox) = block.bbox else {
+        let Some(bbox) = block.bbox_on_page(page_number) else {
             continue;
         };
 
@@ -139,7 +135,15 @@ pub fn hit_test(
         }
 
         let mut hit_cell = None;
-        let mut snippet = block.text();
+        let mut snippet =
+            block
+                .text_on_page(page_number)?
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: format!(
+                        "block {} has geometry on page {page_number} without fragment text",
+                        block.id
+                    ),
+                })?;
 
         if let BlockContent::Table(table) = &block.content {
             for cell in &table.cells {

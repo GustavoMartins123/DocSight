@@ -18,7 +18,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "h_5c5bd4fa20c240245a718728c89db972",
       "kind": "heading",
@@ -49,7 +50,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "h_67ec344cfa3f8255c9877664b0ac7fad",
       "kind": "heading",
@@ -79,7 +81,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "p_260f81f774d6c4b913cc09d739a5406d",
       "kind": "paragraph",
@@ -110,7 +113,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "h_75b91254dfe9c90f0e8652c71bcd3d93",
       "kind": "heading",
@@ -140,7 +144,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "p_de9c5d1d34774ca969e54cb4ebbeea4f",
       "kind": "paragraph",
@@ -254,7 +259,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "tbl_9be7ac4bff0dc8db97c13184d908cb6a",
       "kind": "table",
@@ -284,7 +290,8 @@
         "break_after": false,
         "keep_lines": false,
         "keep_with_next": false,
-        "page_break_before": false
+        "page_break_before": false,
+        "widow_control": false
       },
       "id": "p_952da7dc268586a1485bc393d644a088",
       "kind": "paragraph",
@@ -336,7 +343,7 @@
   },
   "version": {
     "engine_version": "<engine>",
-    "schema_version": "1.2"
+    "schema_version": "1.3"
   },
   "warnings": [
     {
