@@ -1,6 +1,8 @@
+mod layout_plan;
 mod package;
 mod parser;
 
+pub use layout_plan::{DocxLayoutPlan, SectionRun, build_layout_plan};
 pub use package::{
     MAX_BINARY_PART_BYTES, MAX_COMPRESSION_RATIO, MAX_PACKAGE_ENTRIES,
     MAX_TOTAL_UNCOMPRESSED_BYTES, MAX_XML_PART_BYTES, read_media_part,
