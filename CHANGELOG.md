@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Lay out every DOCX section with its own page size, orientation, margins, start type, title page, page numbering and default, first-page and even-page headers and footers, and link each DOCX page to its section through `section_index`.
+- Paginate DOCX paragraphs, headings, list items and notes by line with `keep-with-next`, `keep-lines` and widow/orphan control. A block that continues across pages keeps one identifier and exposes page-local `continuations`; `find`, `page`, `hit`, `focus`, `peek`, `resolve`, `context`, spatial queries and `crop` use the fragment on the relevant page.
+- Resolve `PAGE`, `NUMPAGES` and `SECTIONPAGES` header and footer fields per page, including simple and complex fields, restarts and roman or letter formats.
+- Advance the Document IR schema to 1.3 with additive section, page, layout flag and continuation fields, and add the optional `continuations` field to agent semantic objects and `continued` to page spans.
+- Stop emitting `DOCX_SECTIONS_COLLAPSED`; emit `DOCX_PAGINATION_BLOCK_GRANULAR` only for a table that moves to the next page as a whole, and report the remaining section, header, footer and page-number limitations with dedicated diagnostics.
+- Preserve DrawingML lines as `Shape` blocks with `DOCX_SHAPE_VISUAL_OMITTED` instead of rejecting the document.
+
 - Replace all permanent DS9-DS12 interpreter tooling and auxiliary tests with native Rust modules and integration tests in xtask.
 - Route release, notices, changelog, smoke, corpus, beta, validation and readiness through cargo xtask and guard the Rust-only architecture in CI.
 - Require both docsight and docsight-worker in every native archive.

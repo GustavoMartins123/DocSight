@@ -34,10 +34,12 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 
 - Paragraphs, headings, list items, structural tables, figures, footnotes and endnotes.
 - Table grid with row and column spans, nested tables, cell text and cell geometry.
-- Style definitions with `basedOn` inheritance, section geometry, page size and margins, headers and footers.
+- Style definitions with `basedOn` inheritance, including the default paragraph style and document defaults for `keepNext`, `keepLines`, `pageBreakBefore` and `widowControl`.
+- Sections from every paragraph-level and final `sectPr`: page size and orientation, margins, header and footer distances, start type (`nextPage`, `continuous`, `evenPage`, `oddPage`, `nextColumn`), title page, page-number restart and format, and default, first-page and even-page headers and footers inherited from the previous section as Word does. Every DOCX page records its `section_index`.
 - Hyperlinks, comments and tracked-change counts.
 - Package metadata from `docProps/core.xml` and `docProps/app.xml`: title, author, subject and the authoring application.
-- Deterministic pagination and geometry for a single section, honouring explicit page breaks and `keep-with-next`.
+- Deterministic pagination and geometry per section, honouring explicit page breaks, `pageBreakBefore`, `keep-with-next`, `keep-lines` and widow/orphan control, which applies unless a document default, style or paragraph disables `widowControl`. Paragraphs, headings, list items and notes split by line across pages; such a block keeps one identifier, its first page and bounding box, and page-local `continuations` whose `text_start_char` locates each later fragment in the block text.
+- Headers and footers projected per page from the section in effect, with `PAGE`, `NUMPAGES` and `SECTIONPAGES` fields resolved per page, including decimal, roman and letter page-number formats. Other header and footer fields keep their cached result with a diagnostic.
 - Paragraph formatting from the style cascade and direct properties: alignment (`w:jc`), spacing before and after and automatic line spacing (`w:spacing`), and left, right, first-line and hanging indentation (`w:ind`).
 - Unknown body elements are preserved as opaque nodes with a diagnostic; they are never dropped silently.
 

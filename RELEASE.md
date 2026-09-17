@@ -192,9 +192,12 @@ consistency of these artifacts is not independent certification.
 
 ## Remaining engine gaps and schema transition
 
-`release/known-gaps.json` continues to record multi-section DOCX geometry,
-line-level pagination and persistent content-addressed caching as open blockers.
-This tooling migration does not implement those engine features or close them.
+`release/known-gaps.json` records multi-section DOCX geometry and line-level
+pagination as resolved by the DS13 layout engine, and persistent
+content-addressed caching as the remaining open blocker. The readiness gate
+therefore still reports `OPEN_V1_PRODUCT_GAPS`. A resolved entry records an
+implemented and tested engine feature; it is not a claim of fidelity to Word,
+whose remaining layout limitations are listed in BACKLOG.md and PRODUCT_SCOPE.md.
 
 The current maintainer contract registry is `schemas/tooling/v2/evidence.json`.
 The validation receipt advances from v1 to v2 because native gate names, status
