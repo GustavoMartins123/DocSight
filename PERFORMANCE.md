@@ -5,13 +5,13 @@ DocSight keeps a versioned Linux x86_64 release benchmark for the scale classes 
 Run the same gate used by CI:
 
 ```bash
-cargo run --release -p xtask -- benchmark --check
+cargo run --locked --release -p xtask --bin xtask -- benchmark --check
 ```
 
 Write the measured report to a file while still emitting it on stdout:
 
 ```bash
-cargo run --release -p xtask -- benchmark --output target/ds9-performance.json
+cargo run --locked --release -p xtask --bin xtask -- benchmark --output target/ds9-performance.json
 ```
 
 The report has schema `docsight.performance-report/v1`. Each scenario runs three times in a fresh process. Timings use the median; peak memory uses the highest Linux `VmHWM` reading. The worker separately measures parsing, DOCX layout or PDF normalization, and end-to-end page-one render latency. Output size is the canonical serialized IR plus the rendered PNG. Throughput excludes rendering and is computed from parsing plus layout or normalization.

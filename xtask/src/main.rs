@@ -219,7 +219,7 @@ fn run() -> TaskResult<()> {
         }
         Some(command) => Err(failure(format!("unknown xtask command: {command}"))),
         None => Err(failure(
-            "usage: cargo run --release -p xtask -- benchmark [--check] [--budgets PATH] [--output PATH]",
+            "usage: cargo run --locked --release -p xtask --bin xtask -- benchmark [--check] [--budgets PATH] [--output PATH]",
         )),
     }
 }

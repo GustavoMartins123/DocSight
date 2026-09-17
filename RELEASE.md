@@ -63,7 +63,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features --target "$TARGET" -- -D warnings
 cargo test --locked --workspace --all-features --target "$TARGET"
 cargo build --locked --release --workspace --all-features --target "$TARGET"
-cargo metadata --locked --format-version 1 --all-features > target/release-metadata.json
+cargo metadata --locked --format-version 1 --all-features --filter-platform "$TARGET" > target/release-metadata.json
 cargo xtask notices --metadata target/release-metadata.json --out target/THIRD_PARTY_NOTICES.md
 cargo xtask release package --binary "target/$TARGET/release/docsight" --worker "target/$TARGET/release/docsight-worker" --target "$TARGET" --revision "$REVISION" --notices target/THIRD_PARTY_NOTICES.md --out dist
 cargo xtask release verify "dist/docsight-$VERSION-$TARGET.zip"
@@ -79,6 +79,10 @@ license texts and third-party notices. Order, timestamps and modes are fixed
 for identical inputs. This does not claim reproducible compiler outputs across
 arbitrary hosts. Notices include resolved build/test dependencies as well as
 application dependencies; they are not a runtime-only SBOM or legal assessment.
+Metadata is filtered to the packaged target, so each archive lists the packages
+resolved for that platform. Unfiltered metadata also resolves packages for
+unrelated platforms, and a package without distributable license text fails
+with `MISSING_LICENSE_TEXT` instead of producing incomplete notices.
 
 Once all five archives, sidecars and smoke receipts are in `dist`:
 
