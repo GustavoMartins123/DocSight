@@ -357,7 +357,98 @@ fn repository_corpus_manifest_satisfies_its_published_contract() -> TestResult {
     let root = workspace_root();
     let path = root.join("release/corpus.json");
     load_manifest(&path, Some(&root), &taxonomy())?;
-    assert_contract(&schema, "corpus-manifest", &read_json(&path)?)
+    assert_contract(&schema, "corpus-manifest", &read_json(&path)?)?;
+    assert_contract(
+        &schema,
+        "document-classes",
+        &read_json(&root.join("release/document-classes.json"))?,
+    )
+}
+
+#[test]
+fn generated_quality_artifacts_satisfy_their_contracts() -> TestResult {
+    let schema = evidence_schema()?;
+    let fixture = Fixture::new()?;
+    let document = b"docx under measurement";
+    let rejected = b"not a document";
+    fs::write(fixture.root.join("doc.docx"), document)?;
+    fs::write(fixture.root.join("bad.bin"), rejected)?;
+    let archive = fixture.package(native_target()?, "dist")?;
+    let mut manifest = one_case("doc.docx", document, "inspect");
+    manifest.cases[0].class = "docx-tabular".into();
+    let mut rejection = manifest.cases[0].clone();
+    rejection.id = "bad-inspect".into();
+    rejection.file = "bad.bin".into();
+    rejection.sha256 = xtask::tooling::common::digest(rejected);
+    rejection.format = "invalid".into();
+    rejection.class = "unsupported-format".into();
+    rejection.expected.exit_code = 10;
+    rejection.expected.diagnostic_codes = vec!["UNSUPPORTED_FORMAT".into()];
+    manifest.cases.push(rejection);
+    let manifest_path = fixture.root.join("corpus.json");
+    save(&manifest_path, &manifest)?;
+    let register_path = fixture.root.join("ground-truth");
+    fs::create_dir(&register_path)?;
+
+    let taxonomy = taxonomy();
+    let mut engine = FakeEngine::default();
+    let proposal = xtask::quality::prepare_with(
+        &archive,
+        &fixture.root.join("doc.docx"),
+        &[],
+        "docx-tabular",
+        &taxonomy,
+        &mut Callback(
+            |arguments: &[OsString],
+             _: &Path,
+             _: &ProcessLimits,
+             _: Option<&BTreeMap<OsString, OsString>>| engine.respond(arguments),
+        ),
+    )?;
+    assert_contract(&schema, "ground-truth", &serde_json::to_value(&proposal)?)?;
+    save(
+        &register_path.join(format!("{}.json", proposal.document_sha256)),
+        &proposal,
+    )?;
+    let register = xtask::quality::load_register(&register_path, &taxonomy)?;
+    let measure = |engine: &mut FakeEngine| {
+        xtask::quality::measure_with(
+            &xtask::quality::MeasureInputs {
+                archive: &archive,
+                manifest: &manifest_path,
+                root: &fixture.root,
+                taxonomy: &taxonomy,
+                classes_sha256: xtask::tooling::common::digest(b"classes"),
+                register: &register,
+            },
+            &mut Callback(
+                |arguments: &[OsString],
+                 _: &Path,
+                 _: &ProcessLimits,
+                 _: Option<&BTreeMap<OsString, OsString>>| {
+                    engine.respond(arguments)
+                },
+            ),
+        )
+    };
+    let baseline = measure(&mut FakeEngine::default())?;
+    assert_contract(&schema, "quality-report", &serde_json::to_value(&baseline)?)?;
+    let candidate = measure(&mut FakeEngine {
+        tables: 0,
+        ..FakeEngine::default()
+    })?;
+    assert_contract(
+        &schema,
+        "quality-report",
+        &serde_json::to_value(&candidate)?,
+    )?;
+    let comparison = xtask::quality::compare(&baseline, &candidate)?;
+    assert!(!comparison.regressions.is_empty());
+    assert_contract(
+        &schema,
+        "quality-comparison",
+        &serde_json::to_value(&comparison)?,
+    )
 }
 
 #[test]

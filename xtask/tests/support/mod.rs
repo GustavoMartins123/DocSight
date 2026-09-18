@@ -324,3 +324,181 @@ pub fn one_case(file: &str, data: &[u8], operation: &str) -> xtask::corpus::Mani
 pub fn code<T>(result: common::Result<T>) -> Option<&'static str> {
     result.err().map(|error| error.code)
 }
+
+/// A deterministic stand-in for the engine that answers the commands quality measurement runs.
+#[derive(Clone)]
+pub struct FakeEngine {
+    pub tables: u64,
+    pub text: String,
+    pub warnings: Vec<&'static str>,
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub render_px: (u32, u32),
+    pub self_diff_changes: u64,
+    pub pair_diff_changes: u64,
+    pub alternate_text: bool,
+    pub failing_extension: Option<&'static str>,
+    pub rejection: (i64, &'static str),
+    pub calls: u64,
+    pub text_calls: u64,
+}
+
+impl Default for FakeEngine {
+    fn default() -> Self {
+        Self {
+            tables: 2,
+            text: "Quarterly figures".to_owned(),
+            warnings: vec!["DOCX_FONT_SUBSTITUTED"],
+            width_pt: 10.2,
+            height_pt: 20.0,
+            render_px: (11, 20),
+            self_diff_changes: 0,
+            pair_diff_changes: 3,
+            alternate_text: false,
+            failing_extension: None,
+            rejection: (10, "UNSUPPORTED_FORMAT"),
+            calls: 0,
+            text_calls: 0,
+        }
+    }
+}
+
+impl FakeEngine {
+    fn envelope(result: Value, warnings: &[&str]) -> common::Result<ProcessResult> {
+        let warnings: Vec<Value> = warnings
+            .iter()
+            .map(|code| json!({"code": code, "severity": "warning", "message": "m", "effect": "e"}))
+            .collect();
+        Ok(outcome(
+            0,
+            json_bytes(&json!({
+                "schema": "docsight.agent/v2",
+                "result": result,
+                "warnings": warnings,
+                "limits": {"truncated": false},
+            }))?,
+            Vec::new(),
+        ))
+    }
+
+    pub fn respond(&mut self, arguments: &[OsString]) -> common::Result<ProcessResult> {
+        self.calls += 1;
+        let contains = |name: &str| arguments.iter().any(|argument| argument == name);
+        if contains("--version") {
+            return Ok(version());
+        }
+        let documents: Vec<String> = arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .filter(|argument| {
+                [".docx", ".pdf", ".bin"]
+                    .iter()
+                    .any(|extension| argument.ends_with(extension))
+            })
+            .collect();
+        if documents
+            .iter()
+            .any(|document| !Path::new(document).is_absolute())
+        {
+            return Ok(outcome(
+                40,
+                Vec::new(),
+                json_bytes(&json!({
+                    "schema": "docsight.agent/v2",
+                    "error": {"code": "IO_ERROR", "exit_code": 40},
+                }))?,
+            ));
+        }
+        let first = documents.first().cloned().unwrap_or_default();
+        if first.ends_with(".bin") {
+            return Ok(outcome(
+                self.rejection.0,
+                Vec::new(),
+                json_bytes(&json!({
+                    "schema": "docsight.agent/v2",
+                    "error": {"code": self.rejection.1, "exit_code": self.rejection.0},
+                }))?,
+            ));
+        }
+        if self
+            .failing_extension
+            .is_some_and(|extension| first.ends_with(extension))
+        {
+            return Ok(outcome(
+                11,
+                Vec::new(),
+                json_bytes(&json!({
+                    "schema": "docsight.agent/v2",
+                    "error": {"code": "MALFORMED_DOCUMENT", "exit_code": 11},
+                }))?,
+            ));
+        }
+        if contains("diff") {
+            let changes = if documents.len() == 2 && documents[0] == documents[1] {
+                self.self_diff_changes
+            } else {
+                self.pair_diff_changes
+            };
+            let counters = json!({"added": 0, "modified": changes, "moved": 0, "removed": 0});
+            return Self::envelope(
+                json!({"summary": {
+                    "semantic_changes": changes,
+                    "layout_changed_pages": 0,
+                    "pages_before": 2,
+                    "pages_after": 2,
+                    "tables": counters,
+                    "images": counters,
+                }}),
+                &[],
+            );
+        }
+        if contains("render") {
+            let index = arguments
+                .iter()
+                .position(|argument| argument == "--out")
+                .ok_or_else(|| common::ToolError::new("TEST_ARGUMENT", "Missing output"))?;
+            let path = arguments
+                .get(index + 1)
+                .ok_or_else(|| common::ToolError::new("TEST_ARGUMENT", "Missing output path"))?;
+            let (width, height) = self.render_px;
+            let pixels = vec![200u8; (width * height * 3) as usize];
+            let png = docsight_core::encode_png(width, height, &pixels)
+                .map_err(|_| common::ToolError::new("TEST_PNG", "Cannot encode test PNG"))?;
+            fs::write(path, png)?;
+            return Self::envelope(
+                json!({"page": 1, "dpi": 72, "width_px": width, "height_px": height}),
+                &[],
+            );
+        }
+        if contains("page") {
+            return Self::envelope(
+                json!({"number": 1, "width_pt": self.width_pt, "height_pt": self.height_pt, "spans": [{}, {}, {}]}),
+                &[],
+            );
+        }
+        if contains("text") {
+            self.text_calls += 1;
+            let content = if self.alternate_text && self.text_calls.is_multiple_of(2) {
+                format!("{} (variant)", self.text)
+            } else {
+                self.text.clone()
+            };
+            return Self::envelope(
+                json!({"blocks": [{"id": "p_1", "kind": "paragraph", "text": content}]}),
+                &[],
+            );
+        }
+        Self::envelope(
+            json!({
+                "format": if first.ends_with(".pdf") { "pdf" } else { "docx" },
+                "pages": 2,
+                "paragraphs": 5,
+                "headings": 1,
+                "tables": self.tables,
+                "figures": 0,
+                "blocks_by_kind": {"paragraph": 5, "table": self.tables},
+            }),
+            &self.warnings,
+        )
+    }
+}
