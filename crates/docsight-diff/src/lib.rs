@@ -648,10 +648,63 @@ fn text_similarity(before: &str, after: &str) -> f32 {
     intersection / union
 }
 
+/// Identical objects that occur the same number of times in both documents are paired in
+/// document order, so repeated headings, paragraphs or images are not reported as removed and
+/// added. A change in the number of identical copies stays ambiguous.
+fn ordered_duplicate_pairs(before: &[AlignItem], after: &[AlignItem]) -> Vec<CandidatePair> {
+    let before_groups = key_groups(before);
+    let after_groups = key_groups(after);
+    let mut pairs = Vec::new();
+    for (key, before_indices) in &before_groups {
+        let Some(after_indices) = after_groups.get(key) else {
+            continue;
+        };
+        if before_indices.len() < 2 || before_indices.len() != after_indices.len() {
+            continue;
+        }
+        let group: Option<Vec<CandidatePair>> = before_indices
+            .iter()
+            .zip(after_indices)
+            .map(|(&before_index, &after_index)| {
+                candidate_pair(
+                    before_index,
+                    after_index,
+                    &before[before_index],
+                    &after[after_index],
+                )
+                .filter(|candidate| candidate.exact)
+            })
+            .collect();
+        if let Some(group) = group {
+            pairs.extend(group);
+        }
+    }
+    pairs
+}
+
+fn key_groups(items: &[AlignItem]) -> BTreeMap<&str, Vec<usize>> {
+    let mut groups: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, item) in items.iter().enumerate() {
+        groups.entry(item.key.as_str()).or_default().push(index);
+    }
+    groups
+}
+
 fn align_items(before: &[AlignItem], after: &[AlignItem]) -> Alignment {
+    let ordered = ordered_duplicate_pairs(before, after);
+    let ordered_before: std::collections::BTreeSet<usize> =
+        ordered.iter().map(|pair| pair.before_index).collect();
+    let ordered_after: std::collections::BTreeSet<usize> =
+        ordered.iter().map(|pair| pair.after_index).collect();
     let mut candidates = Vec::new();
     for (before_index, before_item) in before.iter().enumerate() {
+        if ordered_before.contains(&before_index) {
+            continue;
+        }
         for (after_index, after_item) in after.iter().enumerate() {
+            if ordered_after.contains(&after_index) {
+                continue;
+            }
             if let Some(candidate) =
                 candidate_pair(before_index, after_index, before_item, after_item)
             {
@@ -701,7 +754,16 @@ fn align_items(before: &[AlignItem], after: &[AlignItem]) -> Alignment {
         after_ambiguous.keys().copied().collect();
     let mut before_matched = vec![false; before.len()];
     let mut after_matched = vec![false; after.len()];
-    let mut pairs = Vec::new();
+    let mut pairs: Vec<MatchedPair> = ordered
+        .into_iter()
+        .map(|candidate| MatchedPair {
+            before_index: candidate.before_index,
+            after_index: candidate.after_index,
+            exact: candidate.exact,
+            score: candidate.score,
+            evidence: candidate.evidence,
+        })
+        .collect();
     for candidate in &candidates {
         if ambiguous_before.contains(&candidate.before_index)
             || ambiguous_after.contains(&candidate.after_index)
@@ -2300,15 +2362,59 @@ mod m13_lineage_tests {
         let after = vec![
             item_with("after_a", "source/shared", "duplicate paragraph"),
             item_with("after_b", "source/shared", "duplicate paragraph"),
+            item_with("after_c", "source/shared", "duplicate paragraph"),
         ];
         let alignment = align_items(&before, &after);
         assert!(alignment.pairs.is_empty());
         assert_eq!(alignment.ambiguities.len(), 2);
         let record = ambiguous_lineage("paragraph", &alignment.ambiguities[0], &before, &after);
         assert_eq!(record.status, LineageStatus::Ambiguous);
-        assert_eq!(record.candidates.len(), 2);
+        assert_eq!(record.candidates.len(), 3);
         assert!(record.before_object.is_some());
         assert!(record.after_object.is_none());
+    }
+
+    #[test]
+    fn identical_copies_present_equally_often_pair_in_document_order() {
+        let before = vec![
+            item_with("before_a", "source/shared", "repeated heading"),
+            item("unique paragraph"),
+            item_with("before_b", "source/shared", "repeated heading"),
+        ];
+        let after = vec![
+            item_with("after_a", "source/shared", "repeated heading"),
+            item("unique paragraph"),
+            item_with("after_b", "source/shared", "repeated heading"),
+        ];
+        let alignment = align_items(&before, &after);
+        assert!(alignment.ambiguities.is_empty());
+        let pairs: Vec<(usize, usize, bool)> = alignment
+            .pairs
+            .iter()
+            .map(|pair| (pair.before_index, pair.after_index, pair.exact))
+            .collect();
+        assert_eq!(pairs, vec![(0, 0, true), (1, 1, true), (2, 2, true)]);
+        assert_eq!(moved_exact_pairs(&alignment.pairs).len(), 3);
+    }
+
+    #[test]
+    fn a_moved_object_between_identical_copies_is_still_detected() {
+        let before = vec![
+            item_with("before_a", "source/shared", "repeated heading"),
+            item("moving paragraph"),
+            item_with("before_b", "source/shared", "repeated heading"),
+            item("anchor paragraph"),
+        ];
+        let after = vec![
+            item_with("after_a", "source/shared", "repeated heading"),
+            item_with("after_b", "source/shared", "repeated heading"),
+            item("anchor paragraph"),
+            item("moving paragraph"),
+        ];
+        let alignment = align_items(&before, &after);
+        assert!(alignment.ambiguities.is_empty());
+        assert_eq!(alignment.pairs.len(), 4);
+        assert!(moved_exact_pairs(&alignment.pairs).len() < 4);
     }
 
     #[test]
