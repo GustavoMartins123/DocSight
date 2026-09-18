@@ -183,6 +183,9 @@ struct ToUnicodeMap {
 pub(crate) enum XObjectEntry {
     Image,
     Form(Box<FormXObject>),
+    /// A form XObject that is already being expanded higher up the resource chain. It is only
+    /// an error when content actually invokes it, which would recurse without end.
+    Recursive,
 }
 
 #[derive(Clone, Debug)]
@@ -874,6 +877,9 @@ fn parse_content_inner(
                             return Err(malformed("Do references an unknown XObject resource"));
                         };
                         match entry {
+                            XObjectEntry::Recursive => {
+                                return Err(malformed("cycle detected between PDF form XObjects"));
+                            }
                             XObjectEntry::Image => {
                                 let bbox =
                                     transformed_unit_bbox(&state.ctm, page_left, page_height)?;
