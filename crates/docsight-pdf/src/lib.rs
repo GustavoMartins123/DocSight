@@ -680,13 +680,24 @@ impl<'a> PdfDocument<'a> {
             });
         }
 
+        let metadata = match self.document_info() {
+            Ok(metadata) => metadata,
+            Err(
+                error @ (DocsightError::MalformedDocument { .. }
+                | DocsightError::MalformedDocumentAt { .. }),
+            ) => {
+                all_warnings.push(info_unreadable_warning(&error));
+                DocumentMetadata::default()
+            }
+            Err(error) => return Err(error),
+        };
         let document = Document {
             version: IrVersion::current(),
             id: self.source.id(),
             sha256: self.source.sha256().to_owned(),
             format: DocumentFormat::Pdf,
             size_bytes: self.source.size_bytes(),
-            metadata: self.document_info()?,
+            metadata,
             styles: Vec::new(),
             sections: Vec::new(),
             pages,
@@ -1440,6 +1451,14 @@ fn unmapped_text_warning(page: u32) -> Diagnostic {
         page: Some(page),
         occurrences: None,
     }
+}
+
+fn info_unreadable_warning(error: &DocsightError) -> Diagnostic {
+    Diagnostic::warning(
+        "PDF_INFO_UNREADABLE",
+        format!("the document information dictionary cannot be read: {error}"),
+        "title, author, subject, producer and dates are reported as unknown; text and structure are unaffected",
+    )
 }
 
 fn header_offset_warning(offset: usize) -> Diagnostic {
