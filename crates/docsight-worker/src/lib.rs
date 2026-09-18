@@ -12,13 +12,17 @@ pub const SANDBOX_CHILD_ENV: &str = "DOCSIGHT_SANDBOX_CHILD";
 pub const SANDBOX_READ_PATHS_ENV: &str = "DOCSIGHT_SANDBOX_READ_PATHS";
 pub const SANDBOX_WRITE_PATHS_ENV: &str = "DOCSIGHT_SANDBOX_WRITE_PATHS";
 pub const SANDBOX_TEMP_PATH_ENV: &str = "DOCSIGHT_SANDBOX_TEMP_PATH";
+pub const SANDBOX_POLICY_ENV: &str = "DOCSIGHT_SANDBOX_POLICY";
 
 pub(crate) const WORKER_BACKEND: &str = "worker";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
     pub max_memory_bytes: u64,
+    /// CPU time the operating system lets the worker consume before terminating it.
     pub cpu_timeout_secs: u64,
+    /// Elapsed time after which the parent stops a worker that is blocked rather than computing.
+    pub wall_timeout_secs: u64,
     pub isolated_temp_dir: bool,
     pub max_output_bytes: u64,
 }
@@ -28,6 +32,7 @@ impl Default for SandboxPolicy {
         Self {
             max_memory_bytes: 768 * 1024 * 1024,
             cpu_timeout_secs: 30,
+            wall_timeout_secs: 120,
             isolated_temp_dir: true,
             max_output_bytes: 64 * 1024 * 1024,
         }
@@ -42,13 +47,26 @@ pub struct SandboxLimitsReport {
     pub filesystem_isolated: bool,
 }
 
+/// Applies the resource limits of a sandboxed worker. The parent passes the policy it runs the
+/// worker under; `fallback` applies only to a worker started without one.
 pub fn apply_sandbox_limits_if_child(
-    policy: &SandboxPolicy,
+    fallback: &SandboxPolicy,
 ) -> Result<Option<SandboxLimitsReport>, DocsightError> {
     if std::env::var_os(SANDBOX_CHILD_ENV).is_none() {
         return Ok(None);
     }
-    platform::apply_resource_limits(policy).map(Some)
+    let policy = match std::env::var_os(SANDBOX_POLICY_ENV) {
+        Some(value) => {
+            let value = value.to_str().ok_or_else(|| {
+                platform::sandbox_failure(format!("{SANDBOX_POLICY_ENV} is not valid UTF-8"))
+            })?;
+            serde_json::from_str(value).map_err(|error| {
+                platform::sandbox_failure(format!("{SANDBOX_POLICY_ENV} is invalid: {error}"))
+            })?
+        }
+        None => fallback.clone(),
+    };
+    platform::apply_resource_limits(&policy).map(Some)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +132,13 @@ pub fn run_in_sandbox_with_env(
     };
 
     let (read_paths, write_paths) = sandbox_paths(args, extra_env)?;
+    let mut environment = extra_env.to_vec();
+    environment.push((
+        SANDBOX_POLICY_ENV.to_owned(),
+        serde_json::to_string(policy).map_err(|error| {
+            platform::sandbox_failure(format!("failed to serialize the sandbox policy: {error}"))
+        })?,
+    ));
 
     let temp_guard = if policy.isolated_temp_dir {
         Some(tempfile::tempdir().map_err(|error| DocsightError::Io {
@@ -128,7 +153,7 @@ pub fn run_in_sandbox_with_env(
         &SpawnRequest {
             binary: &binary,
             args,
-            environment: extra_env,
+            environment: &environment,
             read_paths: &read_paths,
             write_paths: &write_paths,
             temp_dir: temp_guard.as_ref().map(tempfile::TempDir::path),
@@ -145,7 +170,7 @@ pub fn run_in_sandbox_with_env(
     let stdout_reader = spawn_pipe_reader(stdout, policy.max_output_bytes)?;
     let stderr_reader = spawn_pipe_reader(stderr, policy.max_output_bytes)?;
 
-    let timeout = Duration::from_secs(policy.cpu_timeout_secs);
+    let timeout = Duration::from_secs(policy.wall_timeout_secs);
     let start = Instant::now();
 
     loop {
@@ -159,8 +184,8 @@ pub fn run_in_sandbox_with_env(
                 if start.elapsed() >= timeout {
                     terminate_and_drain(child, stdout_reader, stderr_reader)?;
                     return Err(worker_failure(format!(
-                        "isolated worker exceeded CPU timeout of {} seconds",
-                        policy.cpu_timeout_secs
+                        "isolated worker exceeded its wall-clock limit of {} seconds",
+                        policy.wall_timeout_secs
                     )));
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -195,11 +220,17 @@ fn collect_output(
 
     let exit_code = match exit {
         #[cfg(unix)]
+        ProcessExit::Signal(signal) if signal == libc::SIGXCPU || signal == libc::SIGKILL => {
+            return Err(cpu_limit(policy));
+        }
+        #[cfg(unix)]
         ProcessExit::Signal(signal) => {
             return Err(worker_failure(format!(
                 "isolated worker killed by signal {signal}"
             )));
         }
+        #[cfg(target_os = "windows")]
+        ProcessExit::Code(WINDOWS_JOB_QUOTA_EXIT_CODE) => return Err(cpu_limit(policy)),
         ProcessExit::Code(code) if (0..=255).contains(&code) => code as u8,
         ProcessExit::Code(_) => {
             return Err(worker_failure(
@@ -213,6 +244,17 @@ fn collect_output(
         stdout: stdout.bytes,
         stderr: stderr.bytes,
     })
+}
+
+/// Exit status Windows assigns to a job process that exceeds its CPU time limit.
+#[cfg(target_os = "windows")]
+const WINDOWS_JOB_QUOTA_EXIT_CODE: i64 = 1816;
+
+fn cpu_limit(policy: &SandboxPolicy) -> DocsightError {
+    worker_failure(format!(
+        "isolated worker exceeded its CPU time limit of {} seconds",
+        policy.cpu_timeout_secs
+    ))
 }
 
 fn output_limit(limit: u64) -> DocsightError {

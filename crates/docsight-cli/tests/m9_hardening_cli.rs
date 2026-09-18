@@ -424,6 +424,7 @@ fn sandbox_memory_limit_kills_worker_as_backend_failure() -> Result<(), Box<dyn 
     let policy = SandboxPolicy {
         max_memory_bytes: 256 * 1024 * 1024,
         cpu_timeout_secs: 30,
+        wall_timeout_secs: 120,
         isolated_temp_dir: false,
         max_output_bytes: 64 * 1024 * 1024,
     };

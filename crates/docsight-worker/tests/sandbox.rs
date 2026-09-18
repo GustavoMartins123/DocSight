@@ -90,6 +90,66 @@ fn cpu_budget_terminates_busy_worker() -> Result<(), Box<dyn std::error::Error>>
         }
     };
     assert_eq!(error.exit_code(), 30);
+    #[cfg(unix)]
+    assert!(
+        error.to_string().contains("CPU time limit of 1 seconds"),
+        "{error}"
+    );
+    Ok(())
+}
+
+fn sleeping_worker(
+    policy: &SandboxPolicy,
+    milliseconds: u64,
+) -> Result<docsight_worker::WorkerOutput, docsight_core::DocsightError> {
+    run_in_sandbox_with_env(
+        Some(Path::new(env!("CARGO_BIN_EXE_docsight-worker"))),
+        policy,
+        &[
+            "--sleep-for-test".to_owned(),
+            "inspect".to_owned(),
+            "unused".to_owned(),
+        ],
+        &[
+            (SANDBOX_CHILD_ENV.to_owned(), "1".to_owned()),
+            (
+                "DOCSIGHT_SLEEP_PROBE_MS".to_owned(),
+                milliseconds.to_string(),
+            ),
+        ],
+    )
+}
+
+#[test]
+fn waiting_does_not_count_against_the_cpu_budget() -> Result<(), Box<dyn std::error::Error>> {
+    let policy = SandboxPolicy {
+        cpu_timeout_secs: 1,
+        wall_timeout_secs: 20,
+        ..SandboxPolicy::default()
+    };
+    let output = sleeping_worker(&policy, 2_500)?;
+    assert_eq!(output.exit_code, 0);
+    Ok(())
+}
+
+#[test]
+fn a_blocked_worker_is_stopped_at_the_wall_clock_limit() -> Result<(), Box<dyn std::error::Error>> {
+    let policy = SandboxPolicy {
+        cpu_timeout_secs: 30,
+        wall_timeout_secs: 1,
+        ..SandboxPolicy::default()
+    };
+    let start = Instant::now();
+    let error = match sleeping_worker(&policy, 60_000) {
+        Err(error) => error,
+        Ok(_) => return Err("a worker blocked past its wall-clock limit completed".into()),
+    };
+    assert!(start.elapsed() < Duration::from_secs(10));
+    assert_eq!(error.exit_code(), 30);
+    assert!(
+        error.to_string().contains("wall-clock limit of 1 seconds"),
+        "{error}"
+    );
     Ok(())
 }
 
