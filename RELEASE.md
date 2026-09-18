@@ -159,9 +159,14 @@ qualify a different source revision or set of inputs.
 successful DOCX/PDF primary inputs and 25 consented real inputs per format. The
 original plan specifies 5-10 users and a broad corpus, not the numeric 100/25
 thresholds. These numbers remain engineering proposals requiring policy review,
-not automatically approved product criteria. Changes require a reviewed commit
-and rationale, not silent relaxation to make a candidate appear ready. Repeats
-and diff-only references do not inflate the distinct primary-input count.
+not automatically approved product criteria. The policy records this as
+`threshold_status: engineering-proposal`, and the readiness report repeats it in
+`policy_thresholds`. The report shows `approved` only when a reviewed commit sets
+`threshold_status: approved` and the recorded `policy` review for that exact
+policy digest is approved; until then `ready_for_v1` stays false even if every
+criterion passes. Changes require a reviewed commit and rationale, not silent
+relaxation to make a candidate appear ready. Repeats and diff-only references do
+not inflate the distinct primary-input count.
 
 ## Quality measurement by document class
 

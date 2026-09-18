@@ -27,6 +27,7 @@ fn criterion<'a>(report: &'a Report, name: &str) -> TestResult<(bool, Option<&'a
 fn policy(minimum_beta_participants: u64, reviews: &[&str]) -> Value {
     json!({
         "schema": "docsight.readiness-policy/v1",
+        "threshold_status": "approved",
         "minimum_beta_participants": minimum_beta_participants,
         "minimum_corpus_documents": 2,
         "minimum_real_documents_per_format": 1,
@@ -281,6 +282,38 @@ fn complete_consistent_evidence_satisfies_every_criterion() -> TestResult {
         report.policy_sha256,
         sha256_file(&candidate.root().join("release/readiness-policy.json"))?
     );
+    assert_eq!(report.policy_thresholds, "approved");
+    Ok(())
+}
+
+#[test]
+fn proposed_thresholds_keep_v1_blocked_even_when_every_criterion_passes() -> TestResult {
+    let candidate = Candidate::new()?;
+    let mut proposed = policy(5, &REVIEWS);
+    proposed["threshold_status"] = json!("engineering-proposal");
+    save(
+        &candidate.root().join("release/readiness-policy.json"),
+        &proposed,
+    )?;
+    candidate.write_reviews(true)?;
+    let report = candidate.assess()?;
+    assert!(report.criteria.iter().all(|criterion| criterion.passed));
+    assert_eq!(report.policy_thresholds, "engineering-proposal");
+    assert!(!report.ready_for_v1);
+
+    candidate.write_reviews(false)?;
+    let mut approved = policy(5, &REVIEWS);
+    approved["threshold_status"] = json!("approved");
+    save(
+        &candidate.root().join("release/readiness-policy.json"),
+        &approved,
+    )?;
+    let report = candidate.assess()?;
+    assert_eq!(
+        report.policy_thresholds, "engineering-proposal",
+        "a policy file cannot approve its own thresholds without a recorded policy review"
+    );
+    assert!(!report.ready_for_v1);
     Ok(())
 }
 
@@ -523,9 +556,14 @@ fn repository_policy_is_valid_and_resolved_gaps_leave_evidence_blocking_v1() -> 
     let root = workspace_root();
     let loaded = load_policy(&root)?;
     assert_eq!(loaded.required_reviews, REVIEWS);
+    assert_eq!(
+        loaded.threshold_status, "engineering-proposal",
+        "the 100-document and 25-real-per-format thresholds are not an approved policy"
+    );
     let directory = tempfile::tempdir()?;
     let report = assess(&directory.path().join("absent"), REVISION, &root)?;
     assert!(!report.ready_for_v1);
+    assert_eq!(report.policy_thresholds, "engineering-proposal");
     assert_eq!(report.criteria.len(), CRITERIA.len());
     assert_eq!(criterion(&report, "known-v1-gaps")?, (true, None));
     assert!(
@@ -547,6 +585,14 @@ fn readiness_policy_cannot_lower_participants_or_drop_reviews() -> TestResult {
     );
     fs::remove_file(&path)?;
     save(&path, &policy(5, &REVIEWS[..5]))?;
+    assert_eq!(
+        code(load_policy(&fixture.root)),
+        Some("INVALID_READINESS_POLICY")
+    );
+    fs::remove_file(&path)?;
+    let mut unknown = policy(5, &REVIEWS);
+    unknown["threshold_status"] = json!("assumed");
+    save(&path, &unknown)?;
     assert_eq!(
         code(load_policy(&fixture.root)),
         Some("INVALID_READINESS_POLICY")

@@ -547,6 +547,12 @@
           "pattern": "^[0-9a-f]{64}$",
           "type": "string"
         },
+        "policy_thresholds": {
+          "enum": [
+            "engineering-proposal",
+            "approved"
+          ]
+        },
         "ready_for_v1": {
           "type": "boolean"
         },
@@ -569,6 +575,7 @@
         "version",
         "revision",
         "policy_sha256",
+        "policy_thresholds",
         "ready_for_v1",
         "criteria",
         "scope"
