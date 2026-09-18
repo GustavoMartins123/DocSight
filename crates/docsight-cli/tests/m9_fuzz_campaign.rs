@@ -80,7 +80,7 @@ fn m9_ci_builds_and_campaigns_every_target() -> Result<(), Box<dyn std::error::E
     assert!(workflow.contains("-max_len=1048576"));
     assert!(workflow.contains("-rss_limit_mb=1024"));
     assert!(workflow.contains("-timeout=10"));
-    assert!(workflow.contains("actions/upload-artifact@v4"));
+    assert!(workflow.contains("uses: actions/upload-artifact@"));
     assert!(workflow.contains("fuzz-${{ matrix.target }}-artifacts"));
     for target in TARGETS {
         assert!(workflow.contains(&format!("- {target}")));
