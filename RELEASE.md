@@ -166,6 +166,37 @@ signing or attestation step runs without its policy condition, or if another job
 receives elevated permissions. None of these credentials authorizes a
 publication: releases remain a separate, explicitly authorized action.
 
+## Update and rollback verification
+
+INSTALL.md tells users to keep each release in its own directory and switch
+versions through their PATH entry. The maintainer verifier exercises that
+procedure on the native host for a previous release and a candidate:
+
+```sh
+cargo xtask release lifecycle --previous docsight-0.1.4-TARGET.zip --candidate docsight-0.1.5-TARGET.zip --out lifecycle-TARGET.json
+```
+
+Both archives must verify against their sidecars and target the host, and the
+candidate version must be newer. The verifier installs the previous release in
+an empty root, records its version, capabilities and inspection of the packaged
+examples, installs the candidate beside it, confirms that no previous file
+changed, runs the candidate on the previous examples, compares the two
+capability sets, rolls back by running the previous release again and requires
+byte-identical inspections, removes the candidate and checks that the previous
+installation still verifies. Every command runs with isolated home,
+configuration, cache, data and temporary directories, and the last check fails
+if DocSight wrote anything into them.
+
+The receipt (`docsight.release-lifecycle/v1`) lists each check in order and
+stops at the first failure. `compatibility` names every removed command,
+changed error code or exit code, removed document format or schema file and any
+protocol or coordinate system change. Such a breaking change fails with
+`UNDECLARED_BREAKING_CHANGE` unless the candidate raises the major version, or
+the minor version while the major version is 0. A candidate can only be checked
+against a release that exists: until a first release is published there is no
+previous archive to verify against, and the check applies from the second
+release on.
+
 ## Local native build example
 
 This example is for Linux x64. `VERSION=0.1.4` matches the current Cargo workspace;

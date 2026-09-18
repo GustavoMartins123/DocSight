@@ -2,6 +2,7 @@ pub mod archive;
 pub mod binary;
 pub mod changelog;
 pub mod distribution;
+pub mod lifecycle;
 pub mod notices;
 pub mod provenance;
 pub mod signature;

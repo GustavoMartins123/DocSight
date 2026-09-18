@@ -51,6 +51,9 @@
     },
     {
       "$ref": "#/$defs/provenance-report"
+    },
+    {
+      "$ref": "#/$defs/lifecycle-report"
     }
   ],
   "$defs": {
@@ -2126,6 +2129,191 @@
               }
             }
           }
+        }
+      }
+    },
+    "lifecycle-report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "target",
+        "previous",
+        "candidate",
+        "checks",
+        "compatibility",
+        "passed"
+      ],
+      "properties": {
+        "schema": {
+          "const": "docsight.release-lifecycle/v1"
+        },
+        "target": {
+          "enum": [
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin"
+          ]
+        },
+        "previous": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "revision",
+            "archive_sha256"
+          ],
+          "properties": {
+            "version": {
+              "$ref": "#/$defs/version"
+            },
+            "revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "archive_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "candidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "revision",
+            "archive_sha256"
+          ],
+          "properties": {
+            "version": {
+              "$ref": "#/$defs/version"
+            },
+            "revision": {
+              "$ref": "#/$defs/revision"
+            },
+            "archive_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "passed",
+              "error_code",
+              "elapsed_ms"
+            ],
+            "properties": {
+              "name": {
+                "enum": [
+                  "install_previous",
+                  "baseline_previous",
+                  "install_candidate_side_by_side",
+                  "previous_unchanged",
+                  "candidate_runs",
+                  "candidate_reads_previous_examples",
+                  "compatibility",
+                  "rollback",
+                  "remove_candidate",
+                  "no_external_state"
+                ]
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "error_code": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "elapsed_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3600000
+              }
+            }
+          }
+        },
+        "compatibility": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "protocol_changed",
+                "coordinate_system_changed",
+                "removed_commands",
+                "changed_error_codes",
+                "removed_document_formats",
+                "removed_schemas",
+                "breaking",
+                "breaking_change_declared"
+              ],
+              "properties": {
+                "protocol_changed": {
+                  "type": "boolean"
+                },
+                "coordinate_system_changed": {
+                  "type": "boolean"
+                },
+                "removed_commands": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "changed_error_codes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "removed_document_formats": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "removed_schemas": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "breaking": {
+                  "type": "boolean"
+                },
+                "breaking_change_declared": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        },
+        "passed": {
+          "type": "boolean"
         }
       }
     }

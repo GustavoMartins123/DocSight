@@ -77,9 +77,32 @@ The quickstart in README.md covers discovery, navigation, evidence and password
 files. Unsupported document features fail explicitly or carry the documented
 fidelity diagnostics.
 
-## Upgrade and uninstall
+## Upgrade, roll back and uninstall
 
-Extract a new release into a new directory and check its version and capabilities
-before replacing the PATH entry. Keep the previous directory until your scripts
-pass their smoke tests. Uninstall by removing the PATH entry and the extracted
-directory. DocSight does not install a service or schedule telemetry.
+Keep each release in its own directory, named after the archive, and select the
+active one through your PATH entry. DocSight writes only to the output paths
+and the `--cache-dir` you pass, plus a temporary directory that `--sandbox`
+removes when it finishes. It installs no service and keeps no configuration, so
+switching directories switches versions completely.
+
+```text
+tools/
+  docsight-0.1.4-x86_64-unknown-linux-gnu/    previous release, left untouched
+  docsight-0.1.5-x86_64-unknown-linux-gnu/    new release, extracted beside it
+```
+
+1. Update: verify and extract the new archive beside the current one, run its
+   `--version` and `--agent capabilities` and your own smoke tests with its full
+   path, then point your PATH entry at the new directory.
+2. Roll back: point the PATH entry back at the previous directory. Its files
+   were never modified, so it behaves exactly as before the update.
+3. Uninstall: remove the PATH entry and delete the release directory.
+
+`--agent capabilities` states the protocol, commands, error codes with their exit
+codes and document formats of each version. A release that removes or changes
+any of them, or removes a published schema, changes the major version (the
+minor version while the major version is 0); scripts pinned to an older version
+should compare capabilities before switching.
+
+Maintainers exercise exactly this procedure for every pair of consecutive
+releases with `cargo xtask release lifecycle`, described in RELEASE.md.

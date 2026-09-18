@@ -776,3 +776,40 @@ impl Fixture {
         )
     }
 }
+
+pub fn relabel(archive: &Path, version: &str) -> TestResult<PathBuf> {
+    let manifest = release::archive::verify_archive(archive)?;
+    let old_base = release::basename(&manifest.version, &manifest.target)?;
+    let new_base = release::basename(version, &manifest.target)?;
+    let path = archive.with_file_name(format!("{new_base}.zip"));
+    fs::copy(archive, &path)?;
+    rewrite_archive(&path, |entries| {
+        for entry in entries.iter_mut() {
+            entry.name = entry.name.replacen(&old_base, &new_base, 1);
+            if entry.name.ends_with("/release-manifest.json") {
+                let mut value: Value = serde_json::from_slice(&entry.bytes).unwrap_or(Value::Null);
+                value["version"] = json!(version);
+                entry.bytes = json_bytes(&value).unwrap_or_default();
+            }
+        }
+    })?;
+    fs::write(
+        path.with_file_name(format!("{new_base}.zip.sha256")),
+        format!("{}  {new_base}.zip\n", sha256_file(&path)?),
+    )?;
+    release::archive::verify_archive(&path)?;
+    Ok(path)
+}
+
+pub fn installed_version(binary: &Path) -> String {
+    let directory = binary
+        .parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    directory
+        .strip_prefix("docsight-")
+        .and_then(|rest| rest.split_once('-'))
+        .map(|(version, _)| version.to_owned())
+        .unwrap_or_default()
+}

@@ -943,3 +943,54 @@ fn release_workflow_gates_signing_and_provenance_on_the_distribution_policy() ->
     );
     Ok(())
 }
+
+#[test]
+fn lifecycle_receipts_satisfy_their_contract() -> TestResult {
+    use xtask::release::lifecycle::verify_lifecycle_with;
+    let schema = evidence_schema()?;
+    let fixture = Fixture::new()?;
+    let previous = fixture.package(native_target()?, "dist")?;
+    let candidate = relabel(&previous, "0.1.5")?;
+    for commands in [vec!["inspect", "find"], vec!["inspect"]] {
+        let mut calls = 0;
+        let mut runner = Callback(
+            |arguments: &[OsString],
+             _: &Path,
+             _: &ProcessLimits,
+             _: Option<&BTreeMap<OsString, OsString>>| {
+                let version = installed_version(Path::new(&arguments[0]));
+                if arguments.iter().any(|argument| argument == "--version") {
+                    return Ok(outcome(
+                        0,
+                        format!("docsight {version}\n").into_bytes(),
+                        Vec::new(),
+                    ));
+                }
+                if arguments.iter().any(|argument| argument == "capabilities") {
+                    calls += 1;
+                    let names = if calls == 1 {
+                        vec!["inspect", "find"]
+                    } else {
+                        commands.clone()
+                    };
+                    return agent(json!({
+                        "protocol": "docsight.agent/v2",
+                        "coordinate_system": "points",
+                        "document_formats": ["docx", "pdf"],
+                        "errors": {"codes": [{"code": "USAGE", "exit_code": 2}]},
+                        "commands": names.iter().map(|name| json!({"name": name})).collect::<Vec<_>>(),
+                    }));
+                }
+                agent(json!({"format": "docx", "pages": 1}))
+            },
+        );
+        let receipt = verify_lifecycle_with(&previous, &candidate, native_target()?, &mut runner)?;
+        assert_eq!(receipt.passed, commands.len() == 2);
+        assert_contract(
+            &schema,
+            "lifecycle-report",
+            &serde_json::to_value(&receipt)?,
+        )?;
+    }
+    Ok(())
+}
