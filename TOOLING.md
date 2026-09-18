@@ -12,6 +12,8 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | Strict JSON, bounded IO, hashing, safe paths, exclusive publication | `xtask/src/tooling/common.rs` | `tooling_common.rs` |
 | Deadline, combined stdout/stderr budget, process-tree cleanup | `xtask/src/tooling/process.rs` | `tooling_process.rs` |
 | `release matrix`, `configuration`, `version`, `package`, `verify`, `collect` | `xtask/src/release/{mod,archive,binary}.rs` | `tooling_release.rs`, `tooling_cli.rs` |
+| `release signature ARCHIVE --out FILE`, embedded Mach-O and PE signature inspection, `release/distribution-policy.json` | `xtask/src/release/{signature,distribution}.rs` | `tooling_signature.rs`, `tooling_distribution.rs` |
+| `release provenance ARCHIVE --out FILE` | `xtask/src/release/provenance.rs` | `tooling_provenance.rs` |
 | `notices --metadata FILE --out FILE` | `xtask/src/release/notices.rs` | `tooling_notices.rs` |
 | `changelog --revision SHA --since SHA --out FILE` | `xtask/src/release/changelog.rs` | `tooling_changelog.rs` |
 | `smoke ARCHIVE --out FILE` | `xtask/src/smoke.rs` | `tooling_smoke.rs` |
@@ -52,7 +54,9 @@ responsibility. Do not run a candidate from an untrusted publisher just because
 its checksum is internally consistent.
 
 The release verifier requires both the CLI and worker and all required schemas,
-licenses and offline guides. The candidate remains unsigned. Notices validate
+licenses and offline guides. Signature and provenance receipts follow the
+distribution policy; while its entries are pending the candidate remains
+unsigned and readiness says so. Notices validate
 resolved package identity against Cargo.lock and omit host paths; maintainers
 still review redistribution obligations. Changelog references are full commit
 identifiers with checked ancestry. No maintenance command force-pushes, merges,
