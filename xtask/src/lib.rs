@@ -2,6 +2,7 @@ pub mod architecture;
 pub mod beta;
 pub mod cli;
 pub mod corpus;
+pub mod quality;
 pub mod readiness;
 pub mod release;
 pub mod smoke;

@@ -45,7 +45,7 @@ fn error_envelope(code: &str, exit: i64) -> TestResult<ProcessResult> {
 #[test]
 fn repository_corpus_manifest_is_hash_pinned_and_complete() -> TestResult {
     let root = workspace_root();
-    let manifest = load_manifest(&root.join("release/corpus.json"), Some(&root))?;
+    let manifest = load_manifest(&root.join("release/corpus.json"), Some(&root), &taxonomy())?;
     assert_eq!(manifest.cases.len(), 12);
     assert!(manifest.cases.iter().all(|case| case.origin == "synthetic"));
     assert!(
@@ -70,7 +70,7 @@ fn invalid_manifests_fail_with_specific_codes() -> TestResult {
     let mut variants: Vec<(Manifest, &str)> = Vec::new();
 
     let mut manifest = base.clone();
-    manifest.schema = "docsight.corpus/v2".into();
+    manifest.schema = "docsight.corpus/v3".into();
     variants.push((manifest, "INVALID_CORPUS_MANIFEST"));
 
     let mut manifest = base.clone();
@@ -128,8 +128,28 @@ fn invalid_manifests_fail_with_specific_codes() -> TestResult {
         variants.push((manifest, "INVALID_CORPUS_ASSERTIONS"));
     }
 
+    let mut manifest = base.clone();
+    manifest.cases[0].class = "unknown-class".into();
+    variants.push((manifest, "UNKNOWN_DOCUMENT_CLASS"));
+
+    let mut manifest = base.clone();
+    manifest.cases[0].class = "pdf-tabular".into();
+    variants.push((manifest, "CORPUS_CLASS_MISMATCH"));
+
+    let mut manifest = base.clone();
+    manifest.cases[0].class = "unsupported-format".into();
+    variants.push((manifest, "CORPUS_CLASS_MISMATCH"));
+
+    let mut manifest = base.clone();
+    manifest.cases[0].expected.exit_code = 10;
+    manifest.cases[0].expected.diagnostic_codes = vec!["UNSUPPORTED_FORMAT".into()];
+    variants.push((manifest, "CORPUS_CLASS_MISMATCH"));
+
     for (manifest, expected) in variants {
-        assert_eq!(code(validate_manifest(manifest, None)), Some(expected));
+        assert_eq!(
+            code(validate_manifest(manifest, None, &taxonomy())),
+            Some(expected)
+        );
     }
     Ok(())
 }
@@ -139,10 +159,14 @@ fn manifest_digests_are_checked_against_the_corpus_root() -> TestResult {
     let fixture = Fixture::new()?;
     fs::write(fixture.root.join("doc.docx"), b"reviewed bytes")?;
     let manifest = one_case("doc.docx", b"reviewed bytes", "inspect");
-    assert!(validate_manifest(manifest.clone(), Some(&fixture.root)).is_ok());
+    assert!(validate_manifest(manifest.clone(), Some(&fixture.root), &taxonomy()).is_ok());
     fs::write(fixture.root.join("doc.docx"), b"changed bytes")?;
     assert_eq!(
-        code(validate_manifest(manifest, Some(&fixture.root))),
+        code(validate_manifest(
+            manifest,
+            Some(&fixture.root),
+            &taxonomy()
+        )),
         Some("CORPUS_DIGEST_MISMATCH")
     );
     Ok(())
@@ -302,6 +326,7 @@ impl Campaign {
             &self.archive,
             &self.manifest,
             &self.fixture.root,
+            &taxonomy(),
             &mut runner,
         )
     }
@@ -543,6 +568,7 @@ fn archives_for_another_platform_are_not_executed() -> TestResult {
             &archive,
             &manifest_path,
             &fixture.root,
+            &taxonomy(),
             &mut runner
         )),
         Some("CORPUS_HOST_MISMATCH")

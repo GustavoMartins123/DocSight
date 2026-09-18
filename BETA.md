@@ -92,8 +92,12 @@ register, a small synthetic corpus or a few successful demonstrations.
 4. Execute the same hashed inputs against the candidate on every target. Link
    both the pre-fix failure and the passing regression in `release/beta-issues.json`.
 
-The manifest requires `schema: docsight.corpus/v1` and a `cases` array. Each case
-has `id`, `file`, `sha256`, `origin`, `format`, `operation` and `expected`.
+The manifest requires `schema: docsight.corpus/v2` and a `cases` array. Each case
+has `id`, `file`, `sha256`, `origin`, `format`, `class`, `operation` and
+`expected`. The `class` names a document class declared in
+`release/document-classes.json`, so results are reported per class instead of
+being extrapolated from one sample to every DOCX or PDF; its format must match
+the case and only an adversarial class may expect a non-zero exit code.
 The expectation contains `exit_code`, sorted `diagnostic_codes`, scalar
 `pointer_equals` assertions and `repeat` (1-3). Use the tracked
 `release/corpus.json` as a concrete example. Paths must remain under the supplied

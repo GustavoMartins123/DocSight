@@ -1,0 +1,110 @@
+{
+  "schema": "docsight.document-classes/v1",
+  "note": "Classes describe the kind of document a corpus case represents, so quality is measured per class instead of extrapolated from one synthetic sample to every DOCX or PDF. Signals are the minimum observable properties a document of the class must show in an inspect result; they identify mislabelled cases, they do not define quality.",
+  "classes": [
+    {
+      "id": "docx-text",
+      "format": "docx",
+      "complexity": "simple",
+      "expects_failure": false,
+      "description": "DOCX whose body is running text without headings, tables or figures.",
+      "signals": {"tables": {"max": 0}, "figures": {"max": 0}, "paragraphs": {"min": 1}}
+    },
+    {
+      "id": "docx-structured",
+      "format": "docx",
+      "complexity": "moderate",
+      "expects_failure": false,
+      "description": "DOCX with a heading hierarchy, lists and notes.",
+      "signals": {"headings": {"min": 1}}
+    },
+    {
+      "id": "docx-tabular",
+      "format": "docx",
+      "complexity": "moderate",
+      "expects_failure": false,
+      "description": "DOCX whose evidence depends on structural tables.",
+      "signals": {"tables": {"min": 1}}
+    },
+    {
+      "id": "docx-multi-section",
+      "format": "docx",
+      "complexity": "complex",
+      "expects_failure": false,
+      "description": "DOCX with more than one section, headers, footers or page-number fields.",
+      "signals": {"pages": {"min": 2}}
+    },
+    {
+      "id": "docx-visual",
+      "format": "docx",
+      "complexity": "complex",
+      "expects_failure": false,
+      "description": "DOCX carrying figures, shapes or comment anchors.",
+      "signals": {"figures": {"min": 1}}
+    },
+    {
+      "id": "pdf-text",
+      "format": "pdf",
+      "complexity": "simple",
+      "expects_failure": false,
+      "description": "PDF with a text layer and no reconstructed tables or figures.",
+      "signals": {"tables": {"max": 0}, "figures": {"max": 0}, "paragraphs": {"min": 1}}
+    },
+    {
+      "id": "pdf-structured",
+      "format": "pdf",
+      "complexity": "moderate",
+      "expects_failure": false,
+      "description": "PDF whose headings and paragraphs are reconstructed from the text layer.",
+      "signals": {"headings": {"min": 1}}
+    },
+    {
+      "id": "pdf-tabular",
+      "format": "pdf",
+      "complexity": "moderate",
+      "expects_failure": false,
+      "description": "PDF whose evidence depends on inferred tables.",
+      "signals": {"tables": {"min": 1}}
+    },
+    {
+      "id": "pdf-visual",
+      "format": "pdf",
+      "complexity": "complex",
+      "expects_failure": false,
+      "description": "PDF carrying image XObjects or annotation overlays.",
+      "signals": {"figures": {"min": 1}}
+    },
+    {
+      "id": "unsupported-format",
+      "format": "invalid",
+      "complexity": "adversarial",
+      "expects_failure": true,
+      "description": "Input that is neither DOCX nor PDF and must be rejected before parsing.",
+      "signals": {}
+    },
+    {
+      "id": "malformed-container",
+      "format": "invalid",
+      "complexity": "adversarial",
+      "expects_failure": true,
+      "description": "Container whose package or object structure is broken and must be rejected with a typed error.",
+      "signals": {}
+    },
+    {
+      "id": "malformed-syntax",
+      "format": "invalid",
+      "complexity": "adversarial",
+      "expects_failure": true,
+      "description": "Document whose markup or syntax is invalid and must be rejected with a typed error.",
+      "signals": {}
+    },
+    {
+      "id": "resource-limit",
+      "format": "invalid",
+      "complexity": "adversarial",
+      "expects_failure": true,
+      "description": "Input that exceeds a published ingestion limit and must be rejected before parsing.",
+      "signals": {}
+    }
+  ]
+}

@@ -292,15 +292,23 @@ pub fn synthetic_engine(
     agent(json!({"format": format, "pages": 1}))
 }
 
+pub fn taxonomy() -> xtask::quality::Taxonomy {
+    match xtask::quality::load_taxonomy(&common::workspace_root()) {
+        Ok(taxonomy) => taxonomy,
+        Err(_) => unreachable!("the repository taxonomy is validated by its own test"),
+    }
+}
+
 pub fn one_case(file: &str, data: &[u8], operation: &str) -> xtask::corpus::Manifest {
     xtask::corpus::Manifest {
-        schema: "docsight.corpus/v1".into(),
+        schema: "docsight.corpus/v2".into(),
         cases: vec![xtask::corpus::Case {
             id: "unit-case".into(),
             file: file.into(),
             sha256: common::digest(data),
             origin: "synthetic".into(),
             format: "docx".into(),
+            class: "docx-structured".into(),
             operation: operation.into(),
             reference: None,
             expected: xtask::corpus::Expectation {

@@ -356,7 +356,7 @@ fn repository_corpus_manifest_satisfies_its_published_contract() -> TestResult {
     let schema = evidence_schema()?;
     let root = workspace_root();
     let path = root.join("release/corpus.json");
-    load_manifest(&path, Some(&root))?;
+    load_manifest(&path, Some(&root), &taxonomy())?;
     assert_contract(&schema, "corpus-manifest", &read_json(&path)?)
 }
 
@@ -398,7 +398,7 @@ fn generated_corpus_and_beta_reports_satisfy_their_contracts() -> TestResult {
     let manifest = fixture.root.join("corpus.json");
     save(&manifest, &one_case("doc.docx", b"document", "inspect"))?;
     let mut runner = Callback(synthetic_engine);
-    let report = run_corpus_with(&archive, &manifest, &fixture.root, &mut runner)?;
+    let report = run_corpus_with(&archive, &manifest, &fixture.root, &taxonomy(), &mut runner)?;
     assert!(report.passed);
     assert_contract(&schema, "corpus-report", &serde_json::to_value(&report)?)?;
 

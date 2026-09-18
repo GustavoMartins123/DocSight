@@ -58,6 +58,11 @@ impl Candidate {
             &root.join("release/beta-issues.json"),
             &json!({"schema": "docsight.beta-issues/v1", "issues": []}),
         )?;
+        fs::create_dir_all(root.join("release"))?;
+        fs::copy(
+            workspace_root().join("release/document-classes.json"),
+            root.join("release/document-classes.json"),
+        )?;
         let mut candidate = Self {
             fixture,
             packages: BTreeMap::new(),
@@ -160,6 +165,7 @@ impl Candidate {
                 sha256: digest(id.as_bytes()),
                 origin: origin.into(),
                 format: format.into(),
+                class: format!("{format}-structured"),
                 operation: "inspect".into(),
                 expected: Expectation {
                     exit_code: 0,
@@ -177,6 +183,7 @@ impl Candidate {
             id: case.id.clone(),
             origin: case.origin.clone(),
             format: case.format.clone(),
+            class: case.class.clone(),
             document_sha256: case.sha256.clone(),
             reference_sha256: None,
             operation: case.operation.clone(),
@@ -195,7 +202,7 @@ impl Candidate {
         save(
             &manifest_path,
             &corpus::Manifest {
-                schema: "docsight.corpus/v1".into(),
+                schema: "docsight.corpus/v2".into(),
                 cases: cases.clone(),
             },
         )?;
