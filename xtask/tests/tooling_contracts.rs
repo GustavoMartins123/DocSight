@@ -921,7 +921,10 @@ fn release_workflow_gates_signing_and_provenance_on_the_distribution_policy() ->
     }
     assert_eq!(secrets.len(), 6);
     for name in &secrets {
-        assert!(release.contains(&format!("| `{name}` |")), "{name} is undocumented");
+        assert!(
+            release.contains(&format!("| `{name}` |")),
+            "{name} is undocumented"
+        );
     }
     assert!(jobs["package"].contains("cargo xtask release signature"));
     assert!(jobs["provenance"].contains("cargo xtask release provenance"));
