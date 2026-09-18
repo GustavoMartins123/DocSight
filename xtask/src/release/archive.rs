@@ -414,6 +414,28 @@ pub fn extract_verified(path: &Path, destination: &Path) -> Result<(PathBuf, Man
     result
 }
 
+pub fn packaged_executables(path: &Path, manifest: &Manifest) -> Result<Vec<(String, Vec<u8>)>> {
+    let base = basename(&manifest.version, &manifest.target)?;
+    let (binary, worker) = binary_names(&manifest.target)?;
+    let mut archive = ZipArchive::new(File::open(path)?).map_err(corrupt)?;
+    let mut executables = Vec::new();
+    for name in [binary, worker] {
+        let record = manifest
+            .files
+            .iter()
+            .find(|record| record.path == name && record.executable)
+            .ok_or_else(|| corrupt(()))?;
+        let bytes = read_entry(&mut archive, &format!("{base}/{name}"), record.size)?;
+        require(
+            digest(&bytes) == record.sha256,
+            "ARCHIVE_CHANGED",
+            "Archive changed after verification",
+        )?;
+        executables.push((name.to_owned(), bytes));
+    }
+    Ok(executables)
+}
+
 pub fn verify_sidecar(path: &Path) -> Result<String> {
     let hash = sha256_file(path)?;
     let name = path
@@ -452,7 +474,7 @@ pub fn collect(directory: &Path, root: &Path) -> Result<Value> {
         let signature: SignatureReceipt = decode(read_json(
             &directory.join(format!("signature-{}.json", manifest.target)),
         )?)?;
-        validate_signature_receipt(&signature, &manifest, &hash, &policy)?;
+        validate_signature_receipt(&signature, &path, &manifest, &hash, &policy)?;
         signatures.insert(manifest.target.clone(), signature.status);
         targets.insert(manifest.target.clone());
         identities.insert((manifest.version, manifest.revision, manifest.toolchain));

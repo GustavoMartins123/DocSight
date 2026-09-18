@@ -17,8 +17,6 @@ use xtask::tooling::common::{ToolError, sha256_file};
 use xtask::tooling::process::{ProcessLimits, ProcessResult, Termination};
 
 const LINUX: &str = "x86_64-unknown-linux-gnu";
-const REPOSITORY: &str = "GustavoMartins123/DocSight";
-const SIGNER: &str = "GustavoMartins123/DocSight/.github/workflows/release.yml";
 
 type Mutation = Box<dyn Fn(&mut Value)>;
 
@@ -28,40 +26,6 @@ fn require_provenance(fixture: &Fixture) -> TestResult {
     policy.provenance.status = ProvenanceStatus::Required;
     fs::remove_file(&path)?;
     save(&path, &policy)
-}
-
-fn verification(archive_sha256: &str) -> Value {
-    json!([{
-        "attestation": {"bundle": {"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"}},
-        "verificationResult": {
-            "mediaType": "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
-            "signature": {"certificate": {
-                "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
-                "subjectAlternativeName": format!("https://github.com/{SIGNER}@refs/heads/main"),
-                "issuer": "https://token.actions.githubusercontent.com",
-                "githubWorkflowRepository": REPOSITORY,
-                "githubWorkflowRef": "refs/heads/main",
-                "buildSignerURI": format!("https://github.com/{SIGNER}@refs/heads/main"),
-                "runnerEnvironment": "github-hosted",
-                "sourceRepositoryURI": format!("https://github.com/{REPOSITORY}"),
-                "sourceRepositoryDigest": REVISION,
-                "sourceRepositoryRef": "refs/heads/main",
-                "runInvocationURI": format!("https://github.com/{REPOSITORY}/actions/runs/1/attempts/1"),
-                "sourceRepositoryVisibilityAtSigning": "public"
-            }},
-            "verifiedTimestamps": [{"type": "Tlog", "uri": "https://rekor.sigstore.dev", "timestamp": "2026-09-18T10:00:00Z"}],
-            "verifiedIdentity": {},
-            "statement": {
-                "_type": "https://in-toto.io/Statement/v1",
-                "subject": [
-                    {"name": "SHA256SUMS", "digest": {"sha256": "0".repeat(64)}},
-                    {"name": "docsight.zip", "digest": {"sha256": archive_sha256}}
-                ],
-                "predicateType": SLSA_PROVENANCE,
-                "predicate": {}
-            }
-        }
-    }])
 }
 
 struct Gh {

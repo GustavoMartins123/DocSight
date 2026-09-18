@@ -138,7 +138,7 @@ fn readiness_reports_missing_evidence_instead_of_manufacturing_approval() -> Tes
     assert_eq!(output.status.code(), Some(1));
     let report = parse_json(&output.stdout)?;
     assert_eq!(report["ready_for_v1"], false);
-    assert_eq!(report["criteria"].as_array().ok_or("criteria")?.len(), 7);
+    assert_eq!(report["criteria"].as_array().ok_or("criteria")?.len(), 8);
     Ok(())
 }
 #[test]

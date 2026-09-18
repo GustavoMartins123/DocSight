@@ -1,8 +1,12 @@
 use super::identity;
+use crate::release::distribution::{
+    ProvenanceStatus, SignatureReceipt, SigningStatus, load_policy, validate_signature_receipt,
+};
+use crate::release::provenance::{ProvenanceReceipt, validate_provenance_receipt};
 use crate::release::{
     SmokeReceipt, TARGETS,
     archive::{verify_archive, verify_sidecar},
-    validate_smoke_receipt,
+    basename, validate_smoke_receipt,
 };
 use crate::tooling::common::*;
 use crate::validation::{CHECK_NAMES, Report as ValidationReport, Status};
@@ -112,4 +116,50 @@ pub fn package_evidence(
         "Readiness requires the exact native platform matrix",
     )?;
     Ok(found)
+}
+
+pub fn distribution_evidence(
+    directory: &Path,
+    root: &Path,
+    packages: &BTreeMap<String, String>,
+    version: &str,
+) -> Result<()> {
+    let loaded = load_policy(root)?;
+    require(
+        packages.len() == TARGETS.len(),
+        "MISSING_NATIVE_PACKAGES",
+        "Authenticated distribution requires the five native packages",
+    )?;
+    for target in TARGETS {
+        let path = directory.join(format!("{}.zip", basename(version, target)?));
+        let manifest = verify_archive(&path)?;
+        let hash = sha256_file(&path)?;
+        require(
+            packages.get(target) == Some(&hash),
+            "EVIDENCE_CANDIDATE_MISMATCH",
+            "Distribution receipts must describe the verified native packages",
+        )?;
+        let signature: SignatureReceipt = decode(read_json(
+            &directory.join(format!("signature-{target}.json")),
+        )?)?;
+        validate_signature_receipt(&signature, &path, &manifest, &hash, &loaded)?;
+        let provenance: ProvenanceReceipt = decode(read_json(
+            &directory.join(format!("provenance-{target}.json")),
+        )?)?;
+        validate_provenance_receipt(&provenance, &manifest, &hash, &loaded)?;
+    }
+    require(
+        loaded
+            .policy
+            .signing
+            .iter()
+            .all(|entry| entry.status != SigningStatus::PendingCredential),
+        "SIGNING_CREDENTIAL_PENDING",
+        "Code signing remains pending until the maintainer credentials exist",
+    )?;
+    require(
+        loaded.policy.provenance.status == ProvenanceStatus::Required,
+        "PROVENANCE_PENDING",
+        "Artifact provenance remains pending until GitHub attestations are available",
+    )
 }

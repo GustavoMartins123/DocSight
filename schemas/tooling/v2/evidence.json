@@ -530,6 +530,7 @@
                 "enum": [
                   "workspace-validation",
                   "five-native-packages",
+                  "authenticated-distribution",
                   "beta-observations",
                   "broad-corpus",
                   "manual-reviews",
@@ -548,8 +549,8 @@
             ],
             "type": "object"
           },
-          "maxItems": 7,
-          "minItems": 7,
+          "maxItems": 8,
+          "minItems": 8,
           "type": "array"
         },
         "policy_sha256": {
