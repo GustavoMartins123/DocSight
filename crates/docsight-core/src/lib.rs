@@ -56,6 +56,9 @@ pub struct Diagnostic {
     pub object: Option<ObjectId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<u32>,
+    /// Number of identical diagnostics an output merged into this one. The IR never sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrences: Option<u32>,
 }
 
 impl Diagnostic {
@@ -67,6 +70,7 @@ impl Diagnostic {
             effect: effect.to_owned(),
             object: None,
             page: None,
+            occurrences: None,
         }
     }
 }
@@ -199,6 +203,7 @@ impl DocsightError {
             effect: effect.to_owned(),
             object: None,
             page,
+            occurrences: None,
         }
     }
 

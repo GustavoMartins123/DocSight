@@ -390,6 +390,7 @@ pub fn record_trace_with_password(
                     .to_owned(),
             object: None,
             page: Some(rendered.metadata.page),
+            occurrences: None,
         });
     }
     let raster_bytes = checked_len(rendered.png().len(), "raster artifact bytes")?;

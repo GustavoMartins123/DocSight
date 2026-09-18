@@ -176,6 +176,7 @@ fn image_warning(
             .to_owned(),
         object: Some(object.clone()),
         page: None,
+        occurrences: None,
     }
 }
 
@@ -299,6 +300,7 @@ fn continued_crop_warning(document: &Document, id: &str, page: u32) -> Option<Di
         effect: "the crop contains only the first page fragment; crop each continuation page by its region to see the rest".to_owned(),
         object: Some(block.id.clone()),
         page: Some(page),
+        occurrences: None,
     })
 }
 
@@ -310,6 +312,7 @@ fn clipped_crop_warning(object: &str, page: u32) -> Diagnostic {
         effect: "the crop contains only the portion intersecting the assigned page".to_owned(),
         object: Some(docsight_core::ObjectId::from_raw(object)),
         page: Some(page),
+        occurrences: None,
     }
 }
 

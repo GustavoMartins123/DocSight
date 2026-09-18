@@ -451,6 +451,7 @@ fn preserve_inert_parts(
                 .to_owned(),
             object: Some(id),
             page: None,
+            occurrences: None,
         });
     }
 }
@@ -651,6 +652,7 @@ fn extract_figures(
                 effect: "the line's floating position, extent, stroke, and pixels are not reproduced; its structural identity remains available as a shape".to_owned(),
                 object: Some(shape_id.clone()),
                 page: None,
+                occurrences: None,
             });
             figures.push(Block {
                 id: shape_id,
@@ -698,6 +700,7 @@ fn extract_figures(
                     .to_owned(),
                 object: None,
                 page: None,
+                occurrences: None,
             }
             };
             let Some((relationship_type, target)) = rels.get(embed) else {
@@ -912,6 +915,7 @@ fn figure_warnings<'a>(
                 .to_owned(),
             object: Some(figure.id.clone()),
             page: None,
+            occurrences: None,
         });
     }
 }
@@ -1150,6 +1154,7 @@ fn parse_unknown_body_element(
         effect: "the element content is retained without semantic interpretation".to_owned(),
         object: Some(id.clone()),
         page: None,
+        occurrences: None,
     });
     Block {
         id,
@@ -1709,6 +1714,7 @@ fn warn_unsupported_run_content(
                 .to_owned(),
             object: Some(block_id.clone()),
             page: None,
+            occurrences: None,
         });
     }
 }

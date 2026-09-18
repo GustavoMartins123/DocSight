@@ -79,6 +79,7 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             effect: "line wrapping and page boundaries are computed approximations".to_owned(),
             object: None,
             page: None,
+            occurrences: None,
         },
         Diagnostic {
             code: "DOCX_FONT_SUBSTITUTED".to_owned(),
@@ -87,6 +88,7 @@ pub fn layout_docx(mut doc: Document) -> Result<LaidOutDocument, DocsightError> 
             effect: "glyph metrics follow standard proportional reference widths".to_owned(),
             object: None,
             page: None,
+            occurrences: None,
         },
     ];
     warnings.extend(pagination_warnings);
@@ -286,6 +288,7 @@ fn anchor_links_and_comments(
                 effect: "the link has no page attribution; geometry is unknown".to_owned(),
                 object: Some(link.id.clone()),
                 page: None,
+                occurrences: None,
             }),
         }
     }

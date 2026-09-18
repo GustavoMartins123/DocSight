@@ -648,12 +648,12 @@
     {
       "file": "agent-envelope.json",
       "id": "https://docsight.dev/schemas/v2/agent-envelope.json",
-      "sha256": "68b3bc71fd27826aad42ed92da19e7760487618462c0ad1f3a5bc99838e178ce"
+      "sha256": "b5d1edcea8730b91aae5360a6eeedac9c8c2c25211b6d882b6bd4fffb19d2a10"
     },
     {
       "file": "bundle-result.json",
       "id": "https://docsight.dev/schemas/v2/bundle-result.json",
-      "sha256": "3ae3c5baf8ea685d7420c33727ac5778dec17d7609eb3e35bc22950d632d8954"
+      "sha256": "ef795c3723be7f6f40d79162ba02ee69cf2b1c28ee210d3bf14ae7143a30a281"
     },
     {
       "file": "cache-result.json",
@@ -683,7 +683,7 @@
     {
       "file": "diagnostic.json",
       "id": "https://docsight.dev/schemas/v2/diagnostic.json",
-      "sha256": "f63192faa837b5621f702e622f15de9561f890e7fbbfabded7983c199aa0954d"
+      "sha256": "c43263b84c2ebf08f296af1e8371e6d11fccaa1da37eb780618d631b90b5f066"
     },
     {
       "file": "diff-result.json",
@@ -763,17 +763,17 @@
     {
       "file": "proof-bundle-manifest.json",
       "id": "https://docsight.dev/schemas/v2/proof-bundle-manifest.json",
-      "sha256": "93bddbd7fb6d522f767d0b28d16318551b24df070a3a42a9a71479d3d2199d96"
+      "sha256": "6c58a235a09c31f15644f7bcd411dd4cf1010a4b23f070321fafd498444571ec"
     },
     {
       "file": "render-result.json",
       "id": "https://docsight.dev/schemas/v2/render-result.json",
-      "sha256": "3c0900e7c2dae745c239d71f58bd3d0e2d088857228b830bf51833c4ec680c85"
+      "sha256": "108947ae7bc0eec1eefd398b71daae9a07b56369fb06f904f6b409e5fdd1941b"
     },
     {
       "file": "replay-result.json",
       "id": "https://docsight.dev/schemas/v2/replay-result.json",
-      "sha256": "e10f661b1bccf1e85361d3b3ffc3fa57c59062662ff35f1361f081e3298f6909"
+      "sha256": "eb556ad90d1420c04a9cd4b8c6088e48dc52893033692aea33a17b8f07286768"
     },
     {
       "file": "resolve-result.json",
@@ -813,12 +813,12 @@
     {
       "file": "trace-manifest.json",
       "id": "https://docsight.dev/schemas/v2/trace-manifest.json",
-      "sha256": "b33050495fae5dd80acced779c395999aebd2df6fbdce0e8555e1c41203d1faf"
+      "sha256": "9c976768ee0e4714ed979c4dc4f0bb74998878f6b5a0cd8305d779d270f36841"
     },
     {
       "file": "trace-result.json",
       "id": "https://docsight.dev/schemas/v2/trace-result.json",
-      "sha256": "6164ef91c4f3b8bab6aa8cd9ae503204b900ce6334bc6ef1b81fe77f10f890b1"
+      "sha256": "aa8b22c29289c859e5902bef74f131599314b7b14070b7051af4fa3215a165ca"
     },
     {
       "file": "verify-result.json",
