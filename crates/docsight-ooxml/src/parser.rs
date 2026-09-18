@@ -280,6 +280,21 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         ));
     }
 
+    let styles_root = parts.styles.as_deref().map(parse_xml).transpose()?;
+    let rounded_measures = rounded_twips_measures(xml.root())
+        + styles_root
+            .as_ref()
+            .map_or(0, |styles| rounded_twips_measures(styles.root()));
+    if rounded_measures > 0 {
+        warnings.push(Diagnostic::warning(
+            "DOCX_MEASURE_ROUNDED",
+            format!(
+                "{rounded_measures} length measures are written as decimals within {TWIPS_ROUNDING_TOLERANCE} of a whole number of twentieths of a point"
+            ),
+            "each measure was read as the nearest whole number of twentieths of a point",
+        ));
+    }
+
     if sections.is_empty() || section_start_block < blocks.len() {
         warnings.push(Diagnostic::warning(
             "DOCX_SECTION_DEFAULTED",
@@ -1311,13 +1326,78 @@ pub(crate) fn on_off_value(value: Option<&str>) -> bool {
     }
 }
 
+/// Largest distance from a whole number of twentieths of a point that is still read as that
+/// whole number. Some generators write values such as `240.00000000000003`.
+const TWIPS_ROUNDING_TOLERANCE: f64 = 0.001;
+/// Elements and attributes whose values are lengths in twentieths of a point.
+const TWIPS_MEASURES: [(&str, &[&str]); 4] = [
+    ("spacing", &["before", "after"]),
+    (
+        "ind",
+        &["left", "start", "right", "end", "firstLine", "hanging"],
+    ),
+    ("pgSz", &["w", "h"]),
+    (
+        "pgMar",
+        &[
+            "top", "right", "bottom", "left", "header", "footer", "gutter",
+        ],
+    ),
+];
+
+/// Parses a length in twentieths of a point, reporting whether it had to be rounded.
+fn twips_value(value: &str) -> Option<(i64, bool)> {
+    let value = value.trim();
+    if let Ok(twips) = value.parse::<i64>() {
+        return Some((twips, false));
+    }
+    let (whole, fraction) = value.split_once('.')?;
+    let digits = whole.strip_prefix('-').unwrap_or(whole);
+    if digits.is_empty()
+        || fraction.is_empty()
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let parsed: f64 = value.parse().ok()?;
+    let rounded = parsed.round();
+    if !rounded.is_finite()
+        || (parsed - rounded).abs() > TWIPS_ROUNDING_TOLERANCE
+        || rounded.abs() > i64::MAX as f64
+    {
+        return None;
+    }
+    Some((rounded as i64, true))
+}
+
+/// Counts twips measures written as decimals that are read as a rounded whole value.
+fn rounded_twips_measures(root: Node<'_, '_>) -> usize {
+    root.descendants()
+        .filter(Node::is_element)
+        .filter_map(|node| {
+            TWIPS_MEASURES
+                .iter()
+                .find(|(element, _)| node.has_tag_name((W_NS, *element)))
+                .map(|(_, attributes)| (node, *attributes))
+        })
+        .map(|(node, attributes)| {
+            attributes
+                .iter()
+                .filter(|name| {
+                    node.attribute((W_NS, **name))
+                        .and_then(twips_value)
+                        .is_some_and(|(_, rounded)| rounded)
+                })
+                .count()
+        })
+        .sum()
+}
+
 pub(crate) fn twips_to_points(value: &str, field: &str) -> Result<f32, DocsightError> {
-    let twips: i64 = value
-        .trim()
-        .parse()
-        .map_err(|_| DocsightError::MalformedDocument {
-            message: format!("{field} must be an integer in twentieths of a point"),
-        })?;
+    let (twips, _) = twips_value(value).ok_or_else(|| DocsightError::MalformedDocument {
+        message: format!("{field} must be an integer in twentieths of a point"),
+    })?;
     let points = twips as f32 / 20.0;
     if !points.is_finite() {
         return Err(DocsightError::MalformedDocument {

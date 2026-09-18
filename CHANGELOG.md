@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Read DOCX spacing, indentation, page size and margin lengths written as decimals within 0.001 of a whole number of twentieths of a point, such as `240.00000000000003`, as that whole number and report them once with `DOCX_MEASURE_ROUNDED`, instead of rejecting the document. Other non-integer lengths are still rejected.
 - Pair identical headings, paragraphs and images that occur the same number of times in both documents in document order, so a document compared with itself reports no semantic changes and repeated content is no longer reported as removed and added. A change in the number of identical copies remains ambiguous.
 - Accept PDF form XObjects whose resources list the form itself or an ancestor, including forms that inherit their parent's resources, and reject a form XObject cycle only when content actually invokes it.
 - Classify every corpus case by document class and complexity using the versioned taxonomy in `release/document-classes.json`, and require the case format and expected outcome to agree with its class.

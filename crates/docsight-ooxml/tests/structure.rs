@@ -916,3 +916,63 @@ fn a_supported_jpeg_figure_is_not_reported_as_a_placeholder()
     );
     Ok(())
 }
+
+fn spacing_document(after: &str) -> String {
+    format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:spacing w:after="{after}"/></w:pPr><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440.0000000001" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>"#
+    )
+}
+
+#[test]
+fn rounds_twips_written_as_near_integer_decimals_with_a_diagnostic()
+-> Result<(), Box<dyn std::error::Error>> {
+    let styles = format!(
+        r#"<w:styles xmlns:w="{W_NS}"><w:style w:type="paragraph" w:styleId="Body"><w:pPr><w:ind w:left="719.9999999999999"/></w:pPr></w:style></w:styles>"#
+    );
+    let source = DocumentSource::from_bytes(package(
+        &spacing_document("240.00000000000003"),
+        Some(&styles),
+        None,
+    )?)?;
+    let parsed = parse_docx(&source)?;
+
+    assert_eq!(parsed.blocks[0].format.space_after_pt, Some(12.0));
+    assert_eq!(parsed.sections[0].margin_top_pt, Some(72.0));
+    let rounded: Vec<_> = parsed
+        .warnings
+        .iter()
+        .filter(|warning| warning.code == "DOCX_MEASURE_ROUNDED")
+        .collect();
+    assert_eq!(rounded.len(), 1, "one diagnostic summarizes every rounding");
+    assert!(rounded[0].message.starts_with("3 length measures"));
+
+    let exact = DocumentSource::from_bytes(package(
+        &spacing_document("240").replace("1440.0000000001", "1440"),
+        None,
+        None,
+    )?)?;
+    assert!(
+        parse_docx(&exact)?
+            .warnings
+            .iter()
+            .all(|warning| warning.code != "DOCX_MEASURE_ROUNDED")
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_twips_that_are_not_whole_numbers() -> Result<(), Box<dyn std::error::Error>> {
+    for value in [
+        "240.5", "240.002", "1e2", "inf", "240.", ".5", "24 0", "0x10",
+    ] {
+        let source = DocumentSource::from_bytes(package(&spacing_document(value), None, None)?)?;
+        match parse_docx(&source) {
+            Err(DocsightError::MalformedDocument { message }) => assert_eq!(
+                message, "paragraph spacing after must be an integer in twentieths of a point",
+                "{value}"
+            ),
+            other => return Err(format!("{value} was accepted: {other:?}").into()),
+        }
+    }
+    Ok(())
+}
