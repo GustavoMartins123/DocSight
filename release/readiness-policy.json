@@ -1,5 +1,6 @@
 {
   "schema": "docsight.readiness-policy/v1",
+  "threshold_status": "engineering-proposal",
   "minimum_beta_participants": 5,
   "minimum_corpus_documents": 100,
   "minimum_real_documents_per_format": 25,

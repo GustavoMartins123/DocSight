@@ -15,6 +15,7 @@ pub const REVIEWS: [&str; 6] = [
     "security-and-fuzzing",
     "beta-participation-and-triage",
 ];
+pub const THRESHOLD_STATUSES: [&str; 2] = ["engineering-proposal", "approved"];
 pub const CRITERIA: [&str; 7] = [
     "workspace-validation",
     "five-native-packages",
@@ -29,6 +30,7 @@ pub const CRITERIA: [&str; 7] = [
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub schema: String,
+    pub threshold_status: String,
     pub minimum_beta_participants: u64,
     pub minimum_corpus_documents: u64,
     pub minimum_real_documents_per_format: u64,
@@ -46,6 +48,11 @@ pub fn load_policy(root: &Path) -> Result<Policy> {
                 .eq(REVIEWS),
         "INVALID_READINESS_POLICY",
         "Readiness policy must preserve every review category",
+    )?;
+    require(
+        THRESHOLD_STATUSES.contains(&policy.threshold_status.as_str()),
+        "INVALID_READINESS_POLICY",
+        "Readiness thresholds are either an engineering proposal or an approved policy",
     )?;
     require(
         (5..=999).contains(&policy.minimum_beta_participants)
@@ -82,6 +89,7 @@ pub struct Report {
     pub version: String,
     pub revision: String,
     pub policy_sha256: String,
+    pub policy_thresholds: String,
     pub criteria: Vec<Criterion>,
     pub ready_for_v1: bool,
     pub scope: String,
@@ -153,13 +161,23 @@ pub fn assess(directory: &Path, revision: &str, root: &Path) -> Result<Report> {
         reviews::regression_evidence(directory, &cases, root, revision),
     );
     let _recorded = record(&mut criteria, CRITERIA[6], reviews::known_gaps(root));
-    let ready_for_v1 =
-        criteria.len() == CRITERIA.len() && criteria.iter().all(|criterion| criterion.passed);
+    let reviewed_policy = criteria
+        .iter()
+        .any(|criterion| criterion.name == CRITERIA[4] && criterion.passed);
+    let policy_thresholds = if policy.threshold_status == "approved" && reviewed_policy {
+        "approved"
+    } else {
+        "engineering-proposal"
+    };
+    let ready_for_v1 = criteria.len() == CRITERIA.len()
+        && criteria.iter().all(|criterion| criterion.passed)
+        && policy_thresholds == "approved";
     Ok(Report {
         schema: "docsight.readiness/v1".into(),
         version: version.into(),
         revision: revision.into(),
         policy_sha256: sha256_file(&root.join("release/readiness-policy.json"))?,
+        policy_thresholds: policy_thresholds.into(),
         ready_for_v1,
         criteria,
         scope: "artifact consistency plus explicitly recorded human reviews; not independent certification".into(),
