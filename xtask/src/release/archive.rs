@@ -1,3 +1,4 @@
+use super::distribution::{SignatureReceipt, load_policy, validate_signature_receipt};
 use super::{
     DOCUMENTS, EXAMPLES, SmokeReceipt, TARGETS, basename, binary, binary_names,
     validate_smoke_receipt,
@@ -429,7 +430,8 @@ pub fn verify_sidecar(path: &Path) -> Result<String> {
     Ok(hash)
 }
 
-pub fn collect(directory: &Path) -> Result<Value> {
+pub fn collect(directory: &Path, root: &Path) -> Result<Value> {
+    let policy = load_policy(root)?;
     let paths = flat_files(directory, "zip", 10_000)?;
     require(
         paths.len() == TARGETS.len(),
@@ -438,6 +440,7 @@ pub fn collect(directory: &Path) -> Result<Value> {
     )?;
     let mut targets = BTreeSet::new();
     let mut identities = BTreeSet::new();
+    let mut signatures = BTreeMap::new();
     let mut sums = String::new();
     for path in paths {
         let manifest = verify_archive(&path)?;
@@ -446,6 +449,11 @@ pub fn collect(directory: &Path) -> Result<Value> {
             &directory.join(format!("smoke-{}.json", manifest.target)),
         )?)?;
         validate_smoke_receipt(&receipt, &manifest, &hash)?;
+        let signature: SignatureReceipt = decode(read_json(
+            &directory.join(format!("signature-{}.json", manifest.target)),
+        )?)?;
+        validate_signature_receipt(&signature, &manifest, &hash, &policy)?;
+        signatures.insert(manifest.target.clone(), signature.status);
         targets.insert(manifest.target.clone());
         identities.insert((manifest.version, manifest.revision, manifest.toolchain));
         let name = path
@@ -462,5 +470,13 @@ pub fn collect(directory: &Path) -> Result<Value> {
     let (version, revision, toolchain) =
         identities.into_iter().next().ok_or_else(|| corrupt(()))?;
     write_new(&directory.join("SHA256SUMS"), sums.as_bytes(), false)?;
-    Ok(json!({"version":version,"revision":revision,"toolchain":toolchain,"targets":targets}))
+    Ok(json!({
+        "version": version,
+        "revision": revision,
+        "toolchain": toolchain,
+        "targets": targets,
+        "distribution_policy_sha256": policy.sha256,
+        "provenance": policy.policy.provenance.status,
+        "signatures": signatures,
+    }))
 }

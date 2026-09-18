@@ -719,3 +719,74 @@ fn workflow_checkouts_do_not_persist_credentials() -> TestResult {
     assert!(violations.is_empty(), "{violations:?}");
     Ok(())
 }
+
+#[test]
+fn distribution_policy_and_signature_receipts_satisfy_their_contracts() -> TestResult {
+    use xtask::release::distribution::{
+        POLICY_PATH, Policy, SigningStatus, verify_signatures_with,
+    };
+    let schema = evidence_schema()?;
+    assert_contract(
+        &schema,
+        "distribution-policy",
+        &read_json(&workspace_root().join(POLICY_PATH))?,
+    )?;
+    let fixture = Fixture::new()?;
+    for target in xtask::release::TARGETS {
+        let archive = fixture.package(target, target)?;
+        let receipt = fixture.signature(&archive)?;
+        assert_contract(
+            &schema,
+            "signature-report",
+            &serde_json::to_value(&receipt)?,
+        )?;
+    }
+    let windows = "x86_64-pc-windows-msvc";
+    let subject = "CN=Example Publisher";
+    let mut policy: Policy = serde_json::from_value(read_json(&fixture.root.join(POLICY_PATH))?)?;
+    policy.signing[0].status = SigningStatus::Required;
+    policy.signing[0].publisher = Some(subject.into());
+    fs::remove_file(fixture.root.join(POLICY_PATH))?;
+    save(&fixture.root.join(POLICY_PATH), &policy)?;
+    assert_contract(
+        &schema,
+        "distribution-policy",
+        &serde_json::to_value(&policy)?,
+    )?;
+    let archive = fixture.package_bytes(
+        windows,
+        "signed",
+        &signed_portable_executable(Some((64, 0x0200, 2))),
+    )?;
+    for (status, expected) in [("Valid", "verified"), ("NotTrusted", "failed")] {
+        let mut runner = Callback(
+            |_: &[OsString],
+             _: &Path,
+             _: &ProcessLimits,
+             _: Option<&BTreeMap<OsString, OsString>>| {
+                Ok(outcome(
+                    0,
+                    serde_json::to_vec(
+                        &json!({"status": status, "subject": subject, "timestamped": true}),
+                    )
+                    .map_err(|_| ToolError::new("TEST_JSON", "cannot encode"))?,
+                    Vec::new(),
+                ))
+            },
+        );
+        let receipt = verify_signatures_with(
+            &archive,
+            &fixture.root,
+            windows,
+            &signing_tools(),
+            &mut runner,
+        )?;
+        assert_eq!(serde_json::to_value(receipt.status)?, expected);
+        assert_contract(
+            &schema,
+            "signature-report",
+            &serde_json::to_value(&receipt)?,
+        )?;
+    }
+    Ok(())
+}

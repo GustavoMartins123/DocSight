@@ -86,6 +86,8 @@ jobs:
         run: cargo xtask smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
       - name: Execute the reviewed synthetic corpus on the native package
         run: cargo xtask corpus run --archive "dist/docsight-$VERSION-$TARGET.zip" --out "dist/corpus-$TARGET.json"
+      - name: Verify executable signatures against the distribution policy
+        run: cargo xtask release signature "dist/docsight-$VERSION-$TARGET.zip" --out "dist/signature-$TARGET.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: docsight-package-${{ matrix.target }}
@@ -98,6 +100,7 @@ jobs:
           path: |
             dist/smoke-*.json
             dist/corpus-*.json
+            dist/signature-*.json
             target/ds9-performance.json
           if-no-files-found: ignore
 
