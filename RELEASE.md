@@ -45,6 +45,22 @@ Failed jobs retain available receipts for diagnosis. The workflow uploads a
 candidate artifact only: no push, tag, merge, GitHub Release, signing or
 notarization is performed.
 
+## Pinned CI actions
+
+Every workflow step that uses an action names a full commit, not a tag or
+branch that its owner could move. Checkouts do not persist the job token in the
+working copy. A contract test rejects any workflow reference that differs from
+this register, and any registered action no workflow uses. To upgrade an
+action, resolve the new release tag to its commit and change the workflows and
+this table in the same commit.
+
+| Action | Upstream reference | Commit |
+| --- | --- | --- |
+| `actions/checkout` | `v4.4.0` | `11d5960a326750d5838078e36cf38b85af677262` |
+| `actions/upload-artifact` | `v4.6.2` | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
+| `actions/download-artifact` | `v4.3.0` | `d3f86a106a0bac45b974a628896c90dbdf5c8093` |
+| `dtolnay/rust-toolchain` | `master` | `02cb101ec7c40f2c49e1d9714d64511d8e1b74de` |
+
 ## Local native build example
 
 This example is for Linux x64. `VERSION=0.1.4` matches the current Cargo workspace;

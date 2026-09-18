@@ -27,10 +27,11 @@ jobs:
       matrix: ${{ steps.configuration.outputs.matrix }}
       version: ${{ steps.configuration.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: "1.96.0"
       - id: configuration
@@ -57,8 +58,10 @@ jobs:
       RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-D warnings -C target-feature=+crt-static' || '-D warnings' }}
       MACOSX_DEPLOYMENT_TARGET: "15.0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: "1.96.0"
           components: rustfmt, clippy
@@ -83,13 +86,13 @@ jobs:
         run: cargo xtask smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
       - name: Execute the reviewed synthetic corpus on the native package
         run: cargo xtask corpus run --archive "dist/docsight-$VERSION-$TARGET.zip" --out "dist/corpus-$TARGET.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: docsight-package-${{ matrix.target }}
           path: dist/
           if-no-files-found: error
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: docsight-checks-${{ matrix.target }}
           path: |
@@ -102,13 +105,14 @@ jobs:
     needs: [configuration, package]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: "1.96.0"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: docsight-package-*
           merge-multiple: true
@@ -121,7 +125,7 @@ jobs:
         env:
           PREVIOUS_REVISION: ${{ inputs.previous_revision }}
         run: cargo xtask changelog --revision "$GITHUB_SHA" --since "$PREVIOUS_REVISION" --out dist/RELEASE_NOTES.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: docsight-release-candidate
           path: dist/
