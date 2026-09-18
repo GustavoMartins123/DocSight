@@ -3,6 +3,7 @@ pub mod binary;
 pub mod changelog;
 pub mod distribution;
 pub mod notices;
+pub mod provenance;
 pub mod signature;
 
 use crate::tooling::common::*;

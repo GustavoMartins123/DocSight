@@ -790,3 +790,46 @@ fn distribution_policy_and_signature_receipts_satisfy_their_contracts() -> TestR
     }
     Ok(())
 }
+
+#[test]
+fn provenance_receipts_satisfy_their_contract() -> TestResult {
+    use xtask::release::distribution::{POLICY_PATH, Policy, ProvenanceStatus};
+    use xtask::release::provenance::verify_provenance_with;
+    let schema = evidence_schema()?;
+    let fixture = Fixture::new()?;
+    let archive = fixture.package(native_target()?, "dist")?;
+    let pending = verify_provenance_with(
+        &archive,
+        &fixture.root,
+        Path::new("gh"),
+        &mut Callback(refuse_processes),
+    )?;
+    assert_contract(
+        &schema,
+        "provenance-report",
+        &serde_json::to_value(&pending)?,
+    )?;
+    let mut policy: Policy = serde_json::from_value(read_json(&fixture.root.join(POLICY_PATH))?)?;
+    policy.provenance.status = ProvenanceStatus::Required;
+    fs::remove_file(fixture.root.join(POLICY_PATH))?;
+    save(&fixture.root.join(POLICY_PATH), &policy)?;
+    let failed = verify_provenance_with(
+        &archive,
+        &fixture.root,
+        Path::new("gh"),
+        &mut Callback(
+            |_: &[OsString],
+             _: &Path,
+             _: &ProcessLimits,
+             _: Option<&BTreeMap<OsString, OsString>>| {
+                Ok(outcome(1, Vec::new(), b"no attestations found\n".to_vec()))
+            },
+        ),
+    )?;
+    assert_eq!(failed.error_code.as_deref(), Some("PROVENANCE_UNVERIFIED"));
+    assert_contract(
+        &schema,
+        "provenance-report",
+        &serde_json::to_value(&failed)?,
+    )
+}
