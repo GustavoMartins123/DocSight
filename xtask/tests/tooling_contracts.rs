@@ -645,3 +645,77 @@ fn workflows_pin_the_repository_toolchain_and_lock_dependencies() -> TestResult 
     assert!(violations.is_empty(), "{violations:?}");
     Ok(())
 }
+
+fn pinned_action_register() -> TestResult<BTreeMap<String, (String, String)>> {
+    let release = fs::read_to_string(workspace_root().join("RELEASE.md"))?;
+    let row = Regex::new(
+        r"^\| `([a-z0-9-]+/[a-z0-9-]+)` \| `(v[0-9.]+|master)` \| `([0-9a-f]{40})` \|$",
+    )?;
+    let mut register = BTreeMap::new();
+    for line in release.lines() {
+        if let Some(captures) = row.captures(line) {
+            let previous = register.insert(
+                captures[1].to_owned(),
+                (captures[2].to_owned(), captures[3].to_owned()),
+            );
+            assert!(previous.is_none(), "{} is registered twice", &captures[1]);
+        }
+    }
+    Ok(register)
+}
+
+#[test]
+fn workflow_actions_are_pinned_to_registered_commits() -> TestResult {
+    let register = pinned_action_register()?;
+    let reference = Regex::new(r"^\s*(?:- )?uses: ([^@\s]+)@(\S+)$")?;
+    let mut used = BTreeSet::new();
+    let mut violations = Vec::new();
+    for (name, content) in operational_files()?
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(".github/"))
+    {
+        for (index, line) in content.lines().enumerate() {
+            let Some(captures) = reference.captures(line) else {
+                assert!(!line.contains("uses:"), "{name}:{} is unparsed", index + 1);
+                continue;
+            };
+            used.insert(captures[1].to_owned());
+            match register.get(&captures[1]) {
+                Some((_, commit)) if *commit == captures[2] => {}
+                _ => violations.push(format!("{name}:{} {}", index + 1, &captures[0])),
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{violations:?}");
+    assert_eq!(used, register.keys().cloned().collect::<BTreeSet<_>>());
+    Ok(())
+}
+
+#[test]
+fn workflow_checkouts_do_not_persist_credentials() -> TestResult {
+    let mut violations = Vec::new();
+    for (name, content) in operational_files()?
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(".github/"))
+    {
+        let lines: Vec<&str> = content.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.contains("uses: actions/checkout@") {
+                continue;
+            }
+            let options: Vec<&str> = lines[index + 1..]
+                .iter()
+                .take_while(|option| !option.trim_start().starts_with("- "))
+                .copied()
+                .collect();
+            if !options
+                .iter()
+                .any(|option| option.trim() == "persist-credentials: false")
+            {
+                violations.push(format!("{name}:{}", index + 1));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{violations:?}");
+    Ok(())
+}
