@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Rasterize PDF strokes by testing each segment, join and cap only over the pixels it can reach instead of every pixel of the whole stroke. Output is byte-identical; a page whose table borders are long polylines rendered in about 0.04 s instead of 17 s.
 - Accept a PDF whose `%PDF-` header follows only whitespace or NUL bytes within the first 1024 bytes, read its byte offsets relative to the header as PDF readers do, and report `PDF_HEADER_OFFSET`. Other leading bytes are still rejected.
 - Read DOCX spacing, indentation, page size and margin lengths written as decimals within 0.001 of a whole number of twentieths of a point, such as `240.00000000000003`, as that whole number and report them once with `DOCX_MEASURE_ROUNDED`, instead of rejecting the document. Other non-integer lengths are still rejected.
 - Pair identical headings, paragraphs and images that occur the same number of times in both documents in document order, so a document compared with itself reports no semantic changes and repeated content is no longer reported as removed and added. A change in the number of identical copies remains ambiguous.
