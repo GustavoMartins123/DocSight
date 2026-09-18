@@ -117,6 +117,14 @@ enum ReleaseCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    Lifecycle {
+        #[arg(long)]
+        previous: PathBuf,
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -322,6 +330,20 @@ pub fn execute(cli: Cli) -> Result<bool> {
                 )?;
                 emit(&receipt, Some(&out))?;
                 return Ok(receipt.status != release::provenance::ProvenanceResult::Failed);
+            }
+            ReleaseCommand::Lifecycle {
+                previous,
+                candidate,
+                out,
+            } => {
+                let receipt = release::lifecycle::verify_lifecycle_with(
+                    &previous,
+                    &candidate,
+                    release::native_target()?,
+                    &mut NativeRunner,
+                )?;
+                emit(&receipt, Some(&out))?;
+                return Ok(receipt.passed);
             }
             ReleaseCommand::Collect { directory } => {
                 emit(&release::archive::collect(&directory, &root)?, None)?

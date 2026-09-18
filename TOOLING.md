@@ -14,6 +14,7 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | `release matrix`, `configuration`, `version`, `package`, `verify`, `collect` | `xtask/src/release/{mod,archive,binary}.rs` | `tooling_release.rs`, `tooling_cli.rs` |
 | `release signature ARCHIVE --out FILE`, embedded Mach-O and PE signature inspection, `release/distribution-policy.json` | `xtask/src/release/{signature,distribution}.rs` | `tooling_signature.rs`, `tooling_distribution.rs` |
 | `release provenance ARCHIVE --out FILE` | `xtask/src/release/provenance.rs` | `tooling_provenance.rs` |
+| `release lifecycle --previous ARCHIVE --candidate ARCHIVE --out FILE` | `xtask/src/release/lifecycle.rs` | `tooling_lifecycle.rs` |
 | `notices --metadata FILE --out FILE` | `xtask/src/release/notices.rs` | `tooling_notices.rs` |
 | `changelog --revision SHA --since SHA --out FILE` | `xtask/src/release/changelog.rs` | `tooling_changelog.rs` |
 | `smoke ARCHIVE --out FILE` | `xtask/src/smoke.rs` | `tooling_smoke.rs` |
