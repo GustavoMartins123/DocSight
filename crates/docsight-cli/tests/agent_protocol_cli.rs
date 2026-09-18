@@ -814,3 +814,98 @@ fn capabilities_expose_the_same_contract_in_both_modes() -> Result<(), Box<dyn s
     assert!(!codes.is_empty(), "the error catalog must be published");
     Ok(())
 }
+
+fn pdf_with_repeated_graphics_state() -> Vec<u8> {
+    let content: String = [360, 240, 120]
+        .iter()
+        .map(|y| format!("/GS1 gs BT /F1 12 Tf 20 {y} Td (Line at {y}) Tj ET "))
+        .collect();
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 4 0 R >> /ExtGState << /GS1 << /Type /ExtGState /OP true >> >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
+#[test]
+fn repeated_diagnostics_are_reported_once_with_their_count_in_every_output()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("repeated_state.pdf");
+    std::fs::write(&path, pdf_with_repeated_graphics_state())?;
+    let path = path.to_str().ok_or("path")?;
+
+    let extgstate = |warnings: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        warnings
+            .iter()
+            .filter(|warning| warning["code"] == "PDF_EXTGSTATE_IGNORED")
+            .cloned()
+            .collect()
+    };
+    for command in ["inspect", "text", "tables", "overview"] {
+        let output = docsight().args(["--agent", command, path]).output()?;
+        assert!(output.status.success(), "{command}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let warnings = value["warnings"].as_array().ok_or("warnings")?;
+        let merged = extgstate(warnings);
+        assert_eq!(merged.len(), 1, "{command}: {merged:?}");
+        assert!(
+            merged[0]["occurrences"]
+                .as_u64()
+                .is_some_and(|count| count >= 3),
+            "{command}: {merged:?}"
+        );
+        assert!(merged[0].get("object").is_none(), "{command}");
+    }
+
+    let ndjson = docsight()
+        .args(["--agent", "--ndjson", "text", path])
+        .output()?;
+    assert!(ndjson.status.success());
+    let records: Vec<serde_json::Value> = ndjson
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<_, _>>()?;
+    let diagnostics: Vec<serde_json::Value> = records
+        .iter()
+        .filter(|record| record["type"] == "warning")
+        .map(|record| record["diagnostic"].clone())
+        .collect();
+    assert_eq!(extgstate(&diagnostics).len(), 1);
+
+    let human = docsight().args(["text", path]).output()?;
+    assert!(human.status.success());
+    let stderr = String::from_utf8(human.stderr)?;
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("PDF_EXTGSTATE_IGNORED"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{stderr}");
+    assert!(lines[0].ends_with("occurrences)"), "{stderr}");
+    Ok(())
+}

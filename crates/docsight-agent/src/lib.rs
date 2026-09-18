@@ -1,6 +1,6 @@
 use docsight_core::{Diagnostic, DocsightError, DocumentSource, ErrorLocation};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -109,7 +109,7 @@ where
             engine: env!("CARGO_PKG_VERSION"),
             document: source.into(),
             result,
-            warnings,
+            warnings: consolidate_warnings(warnings),
             limits: OutputLimits::default(),
         }
     }
@@ -125,7 +125,7 @@ where
             engine: env!("CARGO_PKG_VERSION"),
             document: source.into(),
             result,
-            warnings,
+            warnings: consolidate_warnings(warnings),
             limits,
         }
     }
@@ -256,6 +256,42 @@ pub struct QueryLimits {
     pub select: Option<Vec<String>>,
     pub budget_bytes: Option<usize>,
     pub budget_profile: Option<ProjectionProfile>,
+}
+
+/// Merges diagnostics that repeat the same code, severity, message, effect and page, as happens
+/// when one condition affects many objects, keeping the first occurrence's position and recording
+/// how many diagnostics were merged. The object survives only if every merged diagnostic names it.
+pub fn consolidate_warnings(warnings: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let mut merged: Vec<Diagnostic> = Vec::with_capacity(warnings.len());
+    let mut positions: BTreeMap<(String, bool, String, String, Option<u32>), usize> =
+        BTreeMap::new();
+    for warning in warnings {
+        let key = (
+            warning.code.clone(),
+            warning.severity == docsight_core::DiagnosticSeverity::Error,
+            warning.message.clone(),
+            warning.effect.clone(),
+            warning.page,
+        );
+        match positions.get(&key) {
+            Some(&position) => {
+                let existing = &mut merged[position];
+                let total = existing
+                    .occurrences
+                    .unwrap_or(1)
+                    .saturating_add(warning.occurrences.unwrap_or(1));
+                existing.occurrences = Some(total);
+                if existing.object != warning.object {
+                    existing.object = None;
+                }
+            }
+            None => {
+                positions.insert(key, merged.len());
+                merged.push(warning);
+            }
+        }
+    }
+    merged
 }
 
 pub fn apply_text_limit(text: &str, limit: Option<usize>) -> (String, bool) {
@@ -800,6 +836,7 @@ pub fn apply_bounded_collection<T: Clone + Serialize, F>(
 where
     F: Fn(Vec<T>) -> Result<serde_json::Value, DocsightError>,
 {
+    let warnings = consolidate_warnings(warnings);
     let start_offset = if let Some(ref token) = limits.continue_token {
         ContinuationToken::decode(token, command, source.sha256())?
     } else {
@@ -1126,6 +1163,15 @@ impl<W: Write> NdjsonWriter<W> {
         Ok(true)
     }
 
+    /// Writes the consolidated form of `warnings`, so a condition that affects many objects is
+    /// one record with an occurrence count.
+    pub fn write_warnings(&mut self, warnings: &[Diagnostic]) -> Result<(), DocsightError> {
+        for warning in consolidate_warnings(warnings.to_vec()) {
+            self.write_warning(&warning)?;
+        }
+        Ok(())
+    }
+
     pub fn write_warning(&mut self, diag: &Diagnostic) -> Result<bool, DocsightError> {
         self.warnings_seen += 1;
         let seq = self.seq.saturating_add(1);
@@ -1274,6 +1320,78 @@ mod tests {
     use super::*;
     use docsight_core::DocumentSource;
     use serde::Serialize;
+
+    fn diagnostic(
+        code: &str,
+        message: &str,
+        page: Option<u32>,
+        object: Option<&str>,
+    ) -> Diagnostic {
+        let mut diagnostic = Diagnostic::warning(code, message.to_owned(), "effect");
+        diagnostic.page = page;
+        diagnostic.object = object.map(docsight_core::ObjectId::from_raw);
+        diagnostic
+    }
+
+    type WarningSummary<'a> = (&'a str, Option<u32>, Option<u32>, Option<&'a str>);
+
+    #[test]
+    fn identical_diagnostics_are_merged_with_an_occurrence_count() {
+        let warnings = vec![
+            diagnostic(
+                "PDF_EXTGSTATE_IGNORED",
+                "page 1 entry OP",
+                Some(1),
+                Some("p_a"),
+            ),
+            diagnostic("APPROXIMATED_PDF_FONT", "page 1 font", Some(1), None),
+            diagnostic(
+                "PDF_EXTGSTATE_IGNORED",
+                "page 1 entry OP",
+                Some(1),
+                Some("p_b"),
+            ),
+            diagnostic(
+                "PDF_EXTGSTATE_IGNORED",
+                "page 2 entry OP",
+                Some(2),
+                Some("p_c"),
+            ),
+            diagnostic(
+                "PDF_EXTGSTATE_IGNORED",
+                "page 1 entry OP",
+                Some(1),
+                Some("p_d"),
+            ),
+            diagnostic("DOCX_FONT_SUBSTITUTED", "font", None, Some("h_1")),
+            diagnostic("DOCX_FONT_SUBSTITUTED", "font", None, Some("h_1")),
+        ];
+        let merged = consolidate_warnings(warnings);
+        let summary: Vec<WarningSummary<'_>> = merged
+            .iter()
+            .map(|warning| {
+                (
+                    warning.code.as_str(),
+                    warning.page,
+                    warning.occurrences,
+                    warning.object.as_ref().map(|id| id.as_str()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("PDF_EXTGSTATE_IGNORED", Some(1), Some(3), None),
+                ("APPROXIMATED_PDF_FONT", Some(1), None, None),
+                ("PDF_EXTGSTATE_IGNORED", Some(2), None, Some("p_c")),
+                ("DOCX_FONT_SUBSTITUTED", None, Some(2), Some("h_1")),
+            ]
+        );
+        assert_eq!(consolidate_warnings(merged.clone()), merged);
+        let mut split = merged.clone();
+        split.extend(merged.clone());
+        assert_eq!(consolidate_warnings(split)[0].occurrences, Some(6));
+    }
 
     #[derive(Clone, Serialize)]
     struct ResultValue {

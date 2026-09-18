@@ -2425,9 +2425,7 @@ fn inspect(
         writer.write_meta(&(&source).into())?;
         let val = serde_json::to_value(&result).map_err(output_serialization_error)?;
         writer.write_item("inspect", &val)?;
-        for warning in &warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -2614,9 +2612,7 @@ fn outline(
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -2746,9 +2742,7 @@ fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
             idx += 1;
         }
         writer.write_page_end(args.number)?;
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -2907,9 +2901,7 @@ fn document_text(
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -2980,9 +2972,7 @@ fn tables(
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -3530,9 +3520,7 @@ fn images(
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -3615,9 +3603,7 @@ fn links(
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -3671,6 +3657,7 @@ fn write_single_json<T: Serialize>(
         validate_projection(&val, select)?;
         val = project_json(&val, select);
     }
+    let warnings = docsight_agent::consolidate_warnings(warnings);
     let total_warnings = warnings.len();
     let mut selected_warnings = warnings;
     let mut warnings_truncated = false;
@@ -3727,9 +3714,7 @@ fn write_single_ndjson<T: Serialize>(
     writer.write_meta(&source.into())?;
     let value = serde_json::to_value(result).map_err(output_serialization_error)?;
     writer.write_item(item_type, &value)?;
-    for warning in warnings {
-        writer.write_warning(warning)?;
-    }
+    writer.write_warnings(warnings)?;
     writer.finish()?;
     Ok(())
 }
@@ -3751,7 +3736,7 @@ fn emit_warnings(
     }
     let stderr = io::stderr();
     let mut writer = stderr.lock();
-    for warning in warnings {
+    for warning in &docsight_agent::consolidate_warnings(warnings.to_vec()) {
         if json_errors {
             let val = serde_json::json!({
                 "schema": docsight_agent::AGENT_SCHEMA,
@@ -3759,6 +3744,13 @@ fn emit_warnings(
             });
             let line = serde_json::to_string(&val).map_err(output_serialization_error)?;
             writeln!(writer, "{line}").map_err(stderr_error)?;
+        } else if let Some(occurrences) = warning.occurrences {
+            writeln!(
+                writer,
+                "{}: {} ({occurrences} occurrences)",
+                warning.code, warning.message
+            )
+            .map_err(stderr_error)?;
         } else {
             writeln!(writer, "{}: {}", warning.code, warning.message).map_err(stderr_error)?;
         }
@@ -3960,9 +3952,7 @@ fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("find.summary", &summary)? {
-            for warning in &warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -3975,9 +3965,7 @@ fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
                 break;
             }
         }
-        for warning in &warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4083,9 +4071,7 @@ fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("query.summary", &summary)? {
-            for warning in &warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -4100,9 +4086,7 @@ fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
                 }
             }
         }
-        for warning in &warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4195,9 +4179,7 @@ fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("overview.summary", &summary)? {
-            for warning in &document.warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -4212,9 +4194,7 @@ fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
                 }
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4324,9 +4304,7 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("focus.summary", &summary)? {
-            for warning in &document.warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -4351,9 +4329,7 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
                 }
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4477,9 +4453,7 @@ fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("peek.summary", &summary)? {
-            for warning in &document.warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -4492,9 +4466,7 @@ fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4582,9 +4554,7 @@ fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("resolve.summary", &summary)? {
-            for warning in &document.warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -4597,9 +4567,7 @@ fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
                 break;
             }
         }
-        for warning in &document.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4776,9 +4744,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
         .map_err(output_serialization_error)?;
         let offset = writer.continuation_offset();
         if offset == 0 && !writer.write_item("context", &summary)? {
-            for warning in &warnings {
-                writer.write_warning(warning)?;
-            }
+            writer.write_warnings(&warnings)?;
             writer.finish()?;
             return Ok(());
         }
@@ -4791,9 +4757,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
                 break;
             }
         }
-        for warning in &warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -4915,6 +4879,7 @@ fn build_context_package(
                 effect: "context omits the containing section".to_owned(),
                 object: Some(target_id.clone()),
                 page: target.page,
+                occurrences: None,
             });
             (
                 None,
@@ -4960,6 +4925,7 @@ fn build_context_package(
                         .to_owned(),
                     object: Some(target_id.clone()),
                     page: target.page,
+                    occurrences: None,
                 });
                 Some(ContextFidelity {
                     available: false,
@@ -5200,9 +5166,7 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
                 break;
             }
         }
-        for warning in &diff_result.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&diff_result.warnings)?;
         writer.finish()?;
         return Ok(());
     }
@@ -5385,6 +5349,7 @@ fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
                     effect: "visual provenance for this object is missing".to_owned(),
                     object: Some(obj_id.clone()),
                     page: None,
+                    occurrences: None,
                 });
                 None
             }
@@ -5511,9 +5476,7 @@ fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
                 break;
             }
         }
-        for warning in &doc.warnings {
-            writer.write_warning(warning)?;
-        }
+        writer.write_warnings(&doc.warnings)?;
         writer.finish()?;
         return Ok(());
     }

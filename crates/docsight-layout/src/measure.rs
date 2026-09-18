@@ -363,6 +363,7 @@ pub(crate) fn emit_atomic(
                         effect: "columns fall back to equal widths".to_owned(),
                         object: Some(block_id.clone()),
                         page: block_page,
+                        occurrences: None,
                     });
                     vec![content_width / columns as f32; columns as usize]
                 }

@@ -37,6 +37,11 @@
         "integer",
         "null"
       ]
+    },
+    "occurrences": {
+      "type": "integer",
+      "minimum": 2,
+      "description": "number of identical diagnostics merged into this record; absent when the diagnostic occurred once"
     }
   },
   "additionalProperties": false

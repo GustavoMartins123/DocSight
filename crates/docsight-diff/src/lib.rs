@@ -448,6 +448,7 @@ fn visual_diff_evidence_warning(reason_codes: &[String]) -> Diagnostic {
             .to_owned(),
         object: None,
         page: None,
+        occurrences: None,
     }
 }
 
@@ -472,6 +473,7 @@ fn lineage_ambiguity_warning(record: &LineageRecord) -> Option<Diagnostic> {
             .to_owned(),
         object,
         page: None,
+        occurrences: None,
     })
 }
 

@@ -168,6 +168,7 @@ fn project_entry(
             effect: "body text is not moved to make room, so the header or footer overlaps content that Word would push away".to_owned(),
             object: Some(id.clone()),
             page: Some(record.number),
+            occurrences: None,
         });
     }
     if bbox.y0 < 0.0 || bbox.y1 > geometry.page_height {
@@ -182,6 +183,7 @@ fn project_entry(
                 .to_owned(),
             object: Some(id.clone()),
             page: Some(record.number),
+            occurrences: None,
         });
     }
     for (index, line) in lines.iter().enumerate() {
@@ -275,6 +277,7 @@ fn unsupported_format_warning(section: &Section) -> Diagnostic {
         effect: "page number fields in this section are shown as decimal numbers where the format or number is unsupported".to_owned(),
         object: Some(section.id.clone()),
         page: None,
+        occurrences: None,
     }
 }
 
@@ -290,5 +293,6 @@ fn approximated_layout_warning(section: &Section, entry: &SectionHeaderFooter) -
             .to_owned(),
         object: Some(section.id.clone()),
         page: None,
+        occurrences: None,
     }
 }

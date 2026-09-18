@@ -138,6 +138,7 @@ impl Paginator<'_> {
                         .to_owned(),
                     object: Some(section_record.id.clone()),
                     page: Some(page),
+                    occurrences: None,
                 });
                 self.open_page(section, true)
             }
@@ -437,6 +438,7 @@ fn object_warning(
         effect: effect.to_owned(),
         object: Some(id.clone()),
         page: Some(page),
+        occurrences: None,
     }
 }
 

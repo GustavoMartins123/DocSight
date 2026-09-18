@@ -575,5 +575,6 @@ fn section_warning(code: &str, section_id: &ObjectId, message: String, effect: &
         effect: effect.to_owned(),
         object: Some(section_id.clone()),
         page: None,
+        occurrences: None,
     }
 }

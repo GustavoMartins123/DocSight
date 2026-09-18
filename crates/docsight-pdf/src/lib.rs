@@ -1426,6 +1426,7 @@ fn no_text_layer_warning(page: u32) -> Diagnostic {
             .to_owned(),
         object: None,
         page: Some(page),
+        occurrences: None,
     }
 }
 
@@ -1437,6 +1438,7 @@ fn unmapped_text_warning(page: u32) -> Diagnostic {
         effect: "those codes are extracted as the Unicode replacement character".to_owned(),
         object: None,
         page: Some(page),
+        occurrences: None,
     }
 }
 
@@ -1457,6 +1459,7 @@ fn font_approximation_warning(page: u32) -> Diagnostic {
             .to_owned(),
         object: None,
         page: Some(page),
+        occurrences: None,
     }
 }
 
@@ -1469,6 +1472,7 @@ fn xobject_placeholder_warning(page: u32) -> Diagnostic {
             .to_owned(),
         object: None,
         page: Some(page),
+        occurrences: None,
     }
 }
 
@@ -1614,6 +1618,7 @@ fn visual_warning(page: u32, issue: VisualIssue, object: Option<ObjectId>) -> Di
         effect: effect.to_owned(),
         object,
         page: Some(page),
+        occurrences: None,
     }
 }
 
