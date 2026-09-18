@@ -46,8 +46,21 @@ fn error_envelope(code: &str, exit: i64) -> TestResult<ProcessResult> {
 fn repository_corpus_manifest_is_hash_pinned_and_complete() -> TestResult {
     let root = workspace_root();
     let manifest = load_manifest(&root.join("release/corpus.json"), Some(&root), &taxonomy())?;
-    assert_eq!(manifest.cases.len(), 12);
+    assert_eq!(manifest.cases.len(), 17);
     assert!(manifest.cases.iter().all(|case| case.origin == "synthetic"));
+    for class in [
+        "unsupported-format",
+        "malformed-container",
+        "malformed-syntax",
+        "resource-limit",
+    ] {
+        assert!(
+            manifest.cases.iter().any(|case| case.class == class
+                && case.expected.exit_code != 0
+                && case.expected.repeat == 2),
+            "no repeated adversarial case for {class}"
+        );
+    }
     assert!(
         manifest
             .cases
