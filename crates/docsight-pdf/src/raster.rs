@@ -449,11 +449,50 @@ impl Canvas {
         if pieces.is_empty() {
             return;
         }
-        let half_width = if style.width == 0.0 {
+        let half_width = self.stroke_half_width(style);
+        let Some(area) = self.stroke_area(pieces, half_width, style) else {
+            return;
+        };
+        let masks = self.stroke_masks(pieces, &area, half_width, style);
+        for y in area.y0..area.y1 {
+            for x in area.x0..area.x1 {
+                let mask = masks[area.index(x, y)];
+                if mask == 0 {
+                    continue;
+                }
+                let covered = COVERAGE_SAMPLES
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, (sample_x, sample_y))| {
+                        mask & (1 << bit) != 0
+                            && clips.iter().all(|clip| {
+                                clip_contains(clip, self.sample_point(x, y, *sample_x, *sample_y))
+                            })
+                    })
+                    .count();
+                let coverage = covered as f32 / COVERAGE_SAMPLES.len() as f32;
+                if coverage > 0.0 {
+                    self.blend_pixel(x, y, paint.color, coverage * paint.alpha);
+                }
+            }
+        }
+    }
+
+    fn stroke_half_width(&self, style: &StrokeStyle) -> f32 {
+        if style.width == 0.0 {
             0.5 / self.scale
         } else {
             style.width / 2.0
-        };
+        }
+    }
+
+    /// Pixels a stroke may touch: the bounds of all its points, expanded by the widest join.
+    fn stroke_area(
+        &self,
+        pieces: &[StrokePiece],
+        half_width: f32,
+        style: &StrokeStyle,
+    ) -> Option<PixelArea> {
         let expansion = half_width * style.miter_limit.max(1.0) + 1.0 / self.scale;
         let min_x = pieces
             .iter()
@@ -479,26 +518,101 @@ impl Canvas {
             .map(|point| point.y)
             .fold(f32::NEG_INFINITY, f32::max)
             + expansion;
-        let x0 = self.pixel_floor_x(min_x).max(0);
-        let y0 = self.pixel_floor_y(min_y).max(0);
-        let x1 = self.pixel_ceil_x(max_x).min(self.width as i32);
-        let y1 = self.pixel_ceil_y(max_y).min(self.height as i32);
+        let area = PixelArea {
+            x0: self.pixel_floor_x(min_x).max(0),
+            y0: self.pixel_floor_y(min_y).max(0),
+            x1: self.pixel_ceil_x(max_x).min(self.width as i32),
+            y1: self.pixel_ceil_y(max_y).min(self.height as i32),
+        };
+        (area.x1 > area.x0 && area.y1 > area.y0).then_some(area)
+    }
+
+    /// Coverage-sample bitmask of every pixel in `area`, testing each segment, join and cap
+    /// only over the pixels it can reach instead of over the whole stroke.
+    fn stroke_masks(
+        &self,
+        pieces: &[StrokePiece],
+        area: &PixelArea,
+        half_width: f32,
+        style: &StrokeStyle,
+    ) -> Vec<u16> {
+        let mut masks = vec![0u16; area.len()];
+        let margin = 1.0 / self.scale;
+        let strip_reach = half_width + margin;
+        let vertex_reach = half_width * style.miter_limit.max(1.5) + margin;
+        for piece in pieces {
+            for pair in piece.points.windows(2) {
+                let bounds = PointBounds::around(&[pair[0], pair[1]], strip_reach);
+                self.mark_samples(&mut masks, area, bounds, |point| {
+                    point_in_segment_strip(point, pair[0], pair[1], half_width)
+                });
+            }
+            let vertices = if piece.closed && piece.points.len() > 2 {
+                &piece.points[..piece.points.len() - 1]
+            } else {
+                &piece.points[..]
+            };
+            if piece.closed {
+                for index in 0..vertices.len() {
+                    let previous = vertices[(index + vertices.len() - 1) % vertices.len()];
+                    let current = vertices[index];
+                    let next = vertices[(index + 1) % vertices.len()];
+                    let bounds = PointBounds::around(&[current], vertex_reach);
+                    self.mark_samples(&mut masks, area, bounds, |point| {
+                        point_in_join(point, previous, current, next, half_width, style)
+                    });
+                }
+            } else {
+                for window in vertices.windows(3) {
+                    let bounds = PointBounds::around(&[window[1]], vertex_reach);
+                    self.mark_samples(&mut masks, area, bounds, |point| {
+                        point_in_join(point, window[0], window[1], window[2], half_width, style)
+                    });
+                }
+                if vertices.len() >= 2 {
+                    let last = vertices.len() - 1;
+                    for (endpoint, adjacent) in [
+                        (vertices[0], vertices[1]),
+                        (vertices[last], vertices[last - 1]),
+                    ] {
+                        let bounds = PointBounds::around(&[endpoint], vertex_reach);
+                        self.mark_samples(&mut masks, area, bounds, |point| {
+                            point_in_cap(point, endpoint, adjacent, half_width, style.cap)
+                        });
+                    }
+                }
+            }
+        }
+        masks
+    }
+
+    /// Sets the bit of every coverage sample inside `area` and `bounds` that `contains` accepts.
+    fn mark_samples(
+        &self,
+        masks: &mut [u16],
+        area: &PixelArea,
+        bounds: PointBounds,
+        contains: impl Fn(Point) -> bool,
+    ) {
+        let x0 = self.pixel_floor_x(bounds.min_x).max(area.x0);
+        let y0 = self.pixel_floor_y(bounds.min_y).max(area.y0);
+        let x1 = self.pixel_ceil_x(bounds.max_x).min(area.x1);
+        let y1 = self.pixel_ceil_y(bounds.max_y).min(area.y1);
         for y in y0..y1 {
             for x in x0..x1 {
-                let coverage = COVERAGE_SAMPLES
-                    .iter()
-                    .filter(|(sample_x, sample_y)| {
-                        let point = self.sample_point(x, y, *sample_x, *sample_y);
-                        pieces
-                            .iter()
-                            .any(|piece| stroke_contains(piece, point, half_width, style))
-                            && clips.iter().all(|clip| clip_contains(clip, point))
-                    })
-                    .count() as f32
-                    / COVERAGE_SAMPLES.len() as f32;
-                if coverage > 0.0 {
-                    self.blend_pixel(x, y, paint.color, coverage * paint.alpha);
+                let index = area.index(x, y);
+                let mut mask = masks[index];
+                if mask == u16::MAX {
+                    continue;
                 }
+                for (bit, (sample_x, sample_y)) in COVERAGE_SAMPLES.iter().enumerate() {
+                    if mask & (1 << bit) == 0
+                        && contains(self.sample_point(x, y, *sample_x, *sample_y))
+                    {
+                        mask |= 1 << bit;
+                    }
+                }
+                masks[index] = mask;
             }
         }
     }
@@ -633,6 +747,50 @@ struct StrokePiece {
     closed: bool,
 }
 
+/// Half-open pixel rectangle `[x0, x1) x [y0, y1)` of the raster.
+struct PixelArea {
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+}
+
+impl PixelArea {
+    fn len(&self) -> usize {
+        (self.x1 - self.x0) as usize * (self.y1 - self.y0) as usize
+    }
+
+    fn index(&self, x: i32, y: i32) -> usize {
+        (y - self.y0) as usize * (self.x1 - self.x0) as usize + (x - self.x0) as usize
+    }
+}
+
+/// Axis-aligned bounds in page space that contain every point a stroke primitive can cover.
+struct PointBounds {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+}
+
+impl PointBounds {
+    fn around(points: &[Point], reach: f32) -> Self {
+        let mut bounds = Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+        };
+        for point in points {
+            bounds.min_x = bounds.min_x.min(point.x - reach);
+            bounds.min_y = bounds.min_y.min(point.y - reach);
+            bounds.max_x = bounds.max_x.max(point.x + reach);
+            bounds.max_y = bounds.max_y.max(point.y + reach);
+        }
+        bounds
+    }
+}
+
 fn dashed_pieces(points: &[Point], pattern: &[f32], phase: f32) -> Vec<StrokePiece> {
     if points.len() < 2 {
         return Vec::new();
@@ -712,6 +870,7 @@ fn dashed_pieces(points: &[Point], pattern: &[f32], phase: f32) -> Vec<StrokePie
     result
 }
 
+#[cfg(test)]
 fn stroke_contains(
     piece: &StrokePiece,
     point: Point,
@@ -1321,6 +1480,101 @@ mod tests {
 
     use super::*;
     use crate::font::FontPoint;
+
+    fn brute_force_masks(
+        canvas: &Canvas,
+        area: &PixelArea,
+        pieces: &[StrokePiece],
+        half_width: f32,
+        style: &StrokeStyle,
+    ) -> Vec<u16> {
+        let mut masks = vec![0u16; area.len()];
+        for y in area.y0..area.y1 {
+            for x in area.x0..area.x1 {
+                let mut mask = 0u16;
+                for (bit, (sample_x, sample_y)) in COVERAGE_SAMPLES.iter().enumerate() {
+                    let point = canvas.sample_point(x, y, *sample_x, *sample_y);
+                    if pieces
+                        .iter()
+                        .any(|piece| stroke_contains(piece, point, half_width, style))
+                    {
+                        mask |= 1 << bit;
+                    }
+                }
+                masks[area.index(x, y)] = mask;
+            }
+        }
+        masks
+    }
+
+    #[test]
+    fn culled_stroke_coverage_matches_testing_every_primitive_at_every_pixel() {
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            pixels: vec![255; 64 * 64 * 3],
+            scale: 1.75,
+            offset_x: 3.3,
+            offset_y: -2.1,
+        };
+        let point = |x: f32, y: f32| Point { x, y };
+        let zigzag = vec![
+            point(4.0, 5.0),
+            point(30.0, 8.0),
+            point(10.0, 20.0),
+            point(40.0, 33.0),
+            point(38.0, 34.5),
+            point(39.0, 34.6),
+            point(20.0, 38.0),
+        ];
+        let open = StrokePiece {
+            points: zigzag.clone(),
+            closed: false,
+        };
+        let closed = StrokePiece {
+            points: vec![
+                point(8.0, 22.0),
+                point(30.0, 36.0),
+                point(5.0, 38.0),
+                point(8.0, 22.0),
+            ],
+            closed: true,
+        };
+        let piece_sets = [vec![open, closed], dashed_pieces(&zigzag, &[5.0, 3.0], 1.5)];
+        let mut compared = 0;
+        for width in [0.0, 1.0, 5.5] {
+            for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+                for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+                    for miter_limit in [1.0, 1.5, 10.0] {
+                        let style = StrokeStyle {
+                            width,
+                            cap,
+                            join,
+                            miter_limit,
+                            dash: Vec::new(),
+                            dash_phase: 0.0,
+                        };
+                        let half_width = canvas.stroke_half_width(&style);
+                        for pieces in &piece_sets {
+                            let Some(area) = canvas.stroke_area(pieces, half_width, &style) else {
+                                continue;
+                            };
+                            let culled = canvas.stroke_masks(pieces, &area, half_width, &style);
+                            let reference =
+                                brute_force_masks(&canvas, &area, pieces, half_width, &style);
+                            assert!(
+                                culled == reference,
+                                "width {width}, join {join:?}, cap {cap:?}, miter limit {miter_limit}"
+                            );
+                            assert!(culled.iter().any(|mask| *mask != 0));
+                            compared += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(compared, 162);
+    }
 
     #[test]
     fn embedded_outline_uses_fractional_pixel_coverage() {
