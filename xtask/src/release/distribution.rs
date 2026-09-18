@@ -1,4 +1,4 @@
-use super::archive::{Manifest, extract_verified, verify_archive};
+use super::archive::{Manifest, extract_verified, packaged_executables, verify_archive};
 use super::signature::{EmbeddedSignature, inspect};
 use super::{TARGETS, binary_names};
 use crate::tooling::common::*;
@@ -590,6 +590,7 @@ pub fn verify_signatures<R: Runner>(
 
 pub fn validate_signature_receipt(
     receipt: &SignatureReceipt,
+    archive: &Path,
     manifest: &Manifest,
     archive_sha256: &str,
     loaded: &LoadedPolicy,
@@ -606,27 +607,50 @@ pub fn validate_signature_receipt(
         "INVALID_SIGNATURE_RECEIPT",
         "Signature receipt does not attest this exact candidate archive and policy",
     )?;
-    let (binary, worker) = binary_names(&manifest.target)?;
-    let declared: BTreeMap<&str, &str> = manifest
-        .files
-        .iter()
-        .map(|record| (record.path.as_str(), record.sha256.as_str()))
-        .collect();
+    let executables = packaged_executables(archive, manifest)?;
     require(
-        receipt.executables.len() == 2
-            && receipt
-                .executables
-                .iter()
-                .zip([binary, worker])
-                .all(|(record, name)| {
-                    record.path == name && declared.get(name) == Some(&record.sha256.as_str())
-                }),
+        receipt.executables.len() == executables.len(),
         "INVALID_SIGNATURE_RECEIPT",
         "Signature receipt must describe both packaged executables",
     )?;
+    for (record, (name, bytes)) in receipt.executables.iter().zip(&executables) {
+        let inspection = inspect(bytes, &manifest.target)?;
+        require(
+            record.path == *name
+                && record.sha256 == digest(bytes)
+                && record.embedded == inspection.embedded
+                && record.hardened_runtime == inspection.hardened_runtime,
+            "INVALID_SIGNATURE_RECEIPT",
+            "Signature receipt differs from the executables in the archive",
+        )?;
+    }
     require(
-        receipt.status == SignatureStatus::expected(entry.status) && receipt.error_code.is_none(),
+        receipt.status == SignatureStatus::expected(entry.status)
+            && receipt.error_code.is_none()
+            && receipt
+                .executables
+                .iter()
+                .all(|record| satisfies(entry, record)),
         "SIGNATURE_POLICY_UNMET",
         "Signature verification does not satisfy the distribution policy",
     )
+}
+
+fn satisfies(entry: &TargetSigning, record: &ExecutableSignature) -> bool {
+    match entry.status {
+        SigningStatus::NotApplicable => {
+            record.embedded == EmbeddedSignature::NotApplicable && record.publisher.is_none()
+        }
+        SigningStatus::PendingCredential => {
+            record.embedded != EmbeddedSignature::Cms && record.publisher.is_none()
+        }
+        SigningStatus::Required => {
+            let notarized = entry.mechanism == SigningMechanism::DeveloperIdNotarized;
+            record.embedded == EmbeddedSignature::Cms
+                && record.publisher == entry.publisher
+                && record.timestamped == Some(true)
+                && record.notarized == notarized.then_some(true)
+                && (!notarized || record.hardened_runtime == Some(true))
+        }
+    }
 }

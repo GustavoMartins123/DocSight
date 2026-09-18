@@ -42,7 +42,14 @@ struct Candidate {
 
 impl Candidate {
     fn new() -> TestResult<Self> {
+        Self::with_distribution(true)
+    }
+
+    fn with_distribution(authenticated: bool) -> TestResult<Self> {
         let fixture = Fixture::new()?;
+        if authenticated {
+            require_authenticated_distribution(&fixture.root)?;
+        }
         let root = fixture.root.clone();
         save(
             &root.join("release/readiness-policy.json"),
@@ -69,7 +76,7 @@ impl Candidate {
             packages: BTreeMap::new(),
         };
         candidate.write_validation()?;
-        candidate.write_packages()?;
+        candidate.write_packages(authenticated)?;
         candidate.write_beta(5)?;
         candidate.write_corpus("consented-real")?;
         candidate.write_reviews(true)?;
@@ -110,9 +117,15 @@ impl Candidate {
         Ok(())
     }
 
-    fn write_packages(&mut self) -> TestResult {
+    fn write_packages(&mut self, authenticated: bool) -> TestResult {
         for target in TARGETS {
-            let archive = self.fixture.package(target, "evidence")?;
+            let archive = if authenticated {
+                self.fixture
+                    .package_bytes(target, "evidence", &distributable_binary(target))?
+            } else {
+                self.fixture.package(target, "evidence")?
+            };
+            self.fixture.distribution(&archive)?;
             let receipt = self.fixture.receipt(&archive)?;
             self.packages
                 .insert(target.to_owned(), receipt.archive_sha256);
@@ -597,5 +610,101 @@ fn readiness_policy_cannot_lower_participants_or_drop_reviews() -> TestResult {
         code(load_policy(&fixture.root)),
         Some("INVALID_READINESS_POLICY")
     );
+    Ok(())
+}
+
+type ReceiptCase = (&'static str, &'static str, fn(&mut Value));
+
+fn archive_of(candidate: &Candidate, target: &str) -> TestResult<PathBuf> {
+    Ok(candidate.evidence().join(format!(
+        "{}.zip",
+        xtask::release::basename(workspace_version(), target)?
+    )))
+}
+
+fn edit_receipt(candidate: &Candidate, name: &str, edit: impl FnOnce(&mut Value)) -> TestResult {
+    let path = candidate.evidence().join(name);
+    let mut value = read_json(&path)?;
+    edit(&mut value);
+    fs::remove_file(&path)?;
+    save(&path, &value)
+}
+
+#[test]
+fn pending_signing_credentials_keep_distribution_unauthenticated() -> TestResult {
+    let candidate = Candidate::with_distribution(false)?;
+    let report = candidate.assess()?;
+    assert_eq!(
+        criterion(&report, "authenticated-distribution")?,
+        (false, Some("SIGNING_CREDENTIAL_PENDING"))
+    );
+    assert!(
+        report
+            .criteria
+            .iter()
+            .filter(|criterion| criterion.name != "authenticated-distribution")
+            .all(|criterion| criterion.passed)
+    );
+    assert!(!report.ready_for_v1);
+    Ok(())
+}
+
+#[test]
+fn pending_provenance_keeps_distribution_unauthenticated() -> TestResult {
+    let candidate = Candidate::new()?;
+    let path = candidate
+        .root()
+        .join(xtask::release::distribution::POLICY_PATH);
+    let mut policy = read_json(&path)?;
+    policy["provenance"]["status"] = json!("pending-attestation-support");
+    fs::remove_file(&path)?;
+    save(&path, &policy)?;
+    for target in TARGETS {
+        candidate
+            .fixture
+            .distribution(&archive_of(&candidate, target)?)?;
+    }
+    let report = candidate.assess()?;
+    assert_eq!(
+        criterion(&report, "authenticated-distribution")?,
+        (false, Some("PROVENANCE_PENDING"))
+    );
+    assert!(!report.ready_for_v1);
+    Ok(())
+}
+
+#[test]
+fn distribution_receipts_must_agree_with_the_archive_and_the_policy() -> TestResult {
+    let mac = "aarch64-apple-darwin";
+    let cases: [ReceiptCase; 5] = [
+        ("signature", "SIGNATURE_POLICY_UNMET", |value| {
+            value["executables"][0]["publisher"] = json!("ZZZZZ99999");
+        }),
+        ("signature", "SIGNATURE_POLICY_UNMET", |value| {
+            value["executables"][1]["notarized"] = json!(false);
+        }),
+        ("signature", "INVALID_SIGNATURE_RECEIPT", |value| {
+            value["executables"][0]["embedded"] = json!("ad-hoc");
+        }),
+        ("signature", "INVALID_SIGNATURE_RECEIPT", |value| {
+            value["executables"][0]["hardened_runtime"] = json!(false);
+        }),
+        ("provenance", "PROVENANCE_POLICY_UNMET", |value| {
+            value["attestations"] = json!([]);
+        }),
+    ];
+    for (kind, expected, edit) in cases {
+        let candidate = Candidate::new()?;
+        edit_receipt(&candidate, &format!("{kind}-{mac}.json"), edit)?;
+        let report = candidate.assess()?;
+        assert_eq!(
+            criterion(&report, "authenticated-distribution")?,
+            (false, Some(expected)),
+            "{kind} {expected}"
+        );
+    }
+    let candidate = Candidate::new()?;
+    fs::remove_file(candidate.evidence().join(format!("provenance-{mac}.json")))?;
+    assert!(!criterion(&candidate.assess()?, "authenticated-distribution")?.0);
     Ok(())
 }

@@ -16,9 +16,10 @@ pub const REVIEWS: [&str; 6] = [
     "beta-participation-and-triage",
 ];
 pub const THRESHOLD_STATUSES: [&str; 2] = ["engineering-proposal", "approved"];
-pub const CRITERIA: [&str; 7] = [
+pub const CRITERIA: [&str; 8] = [
     "workspace-validation",
     "five-native-packages",
+    "authenticated-distribution",
     "beta-observations",
     "broad-corpus",
     "manual-reviews",
@@ -135,6 +136,11 @@ pub fn assess(directory: &Path, revision: &str, root: &Path) -> Result<Report> {
     let _recorded = record(
         &mut criteria,
         CRITERIA[2],
+        evidence::distribution_evidence(directory, root, &packages, version),
+    );
+    let _recorded = record(
+        &mut criteria,
+        CRITERIA[3],
         campaigns::beta_evidence(
             directory,
             root,
@@ -146,24 +152,24 @@ pub fn assess(directory: &Path, revision: &str, root: &Path) -> Result<Report> {
     );
     let cases = record(
         &mut criteria,
-        CRITERIA[3],
+        CRITERIA[4],
         campaigns::corpus_evidence(directory, &packages, revision, version, &policy, root),
     )
     .unwrap_or_default();
     let _recorded = record(
         &mut criteria,
-        CRITERIA[4],
+        CRITERIA[5],
         reviews::review_evidence(directory, revision, version, root),
     );
     let _recorded = record(
         &mut criteria,
-        CRITERIA[5],
+        CRITERIA[6],
         reviews::regression_evidence(directory, &cases, root, revision),
     );
-    let _recorded = record(&mut criteria, CRITERIA[6], reviews::known_gaps(root));
+    let _recorded = record(&mut criteria, CRITERIA[7], reviews::known_gaps(root));
     let reviewed_policy = criteria
         .iter()
-        .any(|criterion| criterion.name == CRITERIA[4] && criterion.passed);
+        .any(|criterion| criterion.name == CRITERIA[5] && criterion.passed);
     let policy_thresholds = if policy.threshold_status == "approved" && reviewed_policy {
         "approved"
     } else {

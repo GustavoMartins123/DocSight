@@ -23,8 +23,6 @@ type ReceiptEdit = Box<dyn Fn(&mut SignatureReceipt)>;
 const MAC: &str = "aarch64-apple-darwin";
 const WINDOWS: &str = "x86_64-pc-windows-msvc";
 const LINUX: &str = "x86_64-unknown-linux-gnu";
-const TEAM: &str = "ABCDE12345";
-const SUBJECT: &str = "CN=Example Publisher, O=Example Publisher, L=Sao Paulo, C=BR";
 const RUNTIME: u32 = 0x1_0000;
 const ADHOC: u32 = 0x2;
 
@@ -54,28 +52,6 @@ fn developer_binary(flags: u32) -> Vec<u8> {
 
 fn authenticode_binary() -> Vec<u8> {
     signed_portable_executable(Some((64, 0x0200, 2)))
-}
-
-fn codesign_description(team: &str, timestamp: bool) -> Vec<u8> {
-    let mut lines = vec![
-        "Executable=/private/tmp/package/docsight".to_owned(),
-        "Identifier=docsight".to_owned(),
-        "Format=Mach-O thin (arm64)".to_owned(),
-        "CodeDirectory v=20500 size=77646 flags=0x10000(runtime) hashes=2415+2 location=embedded"
-            .to_owned(),
-        "Signature size=9059".to_owned(),
-        format!("Authority=Developer ID Application: Example Publisher ({team})"),
-        "Authority=Developer ID Certification Authority".to_owned(),
-        "Authority=Apple Root CA".to_owned(),
-    ];
-    if timestamp {
-        lines.push("Timestamp=Sep 18, 2026 at 10:00:00".to_owned());
-    } else {
-        lines.push("Signed Time=Sep 18, 2026 at 10:00:00".to_owned());
-    }
-    lines.push(format!("TeamIdentifier={team}"));
-    lines.push("Runtime Version=15.0.0".to_owned());
-    (lines.join("\n") + "\n").into_bytes()
 }
 
 #[derive(Clone)]

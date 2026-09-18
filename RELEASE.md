@@ -270,8 +270,9 @@ mutation, missing files or missing tools do not prove a reproduced engine bug.
 cargo xtask readiness --evidence target/candidate-evidence --revision "$REVISION" --out target/candidate-readiness.json
 ```
 
-The seven criteria cover workspace validation, five native packages, beta
-observations, broad corpus, manual reviews, regressions and known V1 gaps.
+The eight criteria cover workspace validation, five native packages,
+authenticated distribution, beta observations, broad corpus, manual reviews,
+regressions and known V1 gaps.
 Any failed criterion keeps `ready_for_v1: false` and yields exit 1. Structural
 consistency of these artifacts is not independent certification.
 

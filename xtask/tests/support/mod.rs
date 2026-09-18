@@ -10,6 +10,11 @@ use xtask::tooling::common::{self, json_bytes, sha256_file, workspace_version};
 use xtask::tooling::process::{ProcessLimits, ProcessResult, Runner};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+pub const TEAM: &str = "ABCDE12345";
+pub const SUBJECT: &str = "CN=Example Publisher, O=Example Publisher, L=Sao Paulo, C=BR";
+pub const REPOSITORY: &str = "GustavoMartins123/DocSight";
+pub const SIGNER: &str = "GustavoMartins123/DocSight/.github/workflows/release.yml";
+
 pub type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub const REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -620,6 +625,154 @@ impl FakeEngine {
                 "blocks_by_kind": {"paragraph": 5, "table": self.tables},
             }),
             &self.warnings,
+        )
+    }
+}
+
+pub fn codesign_description(team: &str, timestamp: bool) -> Vec<u8> {
+    let mut lines = vec![
+        "Executable=/private/tmp/package/docsight".to_owned(),
+        "Identifier=docsight".to_owned(),
+        "Format=Mach-O thin (arm64)".to_owned(),
+        "CodeDirectory v=20500 size=77646 flags=0x10000(runtime) hashes=2415+2 location=embedded"
+            .to_owned(),
+        "Signature size=9059".to_owned(),
+        format!("Authority=Developer ID Application: Example Publisher ({team})"),
+        "Authority=Developer ID Certification Authority".to_owned(),
+        "Authority=Apple Root CA".to_owned(),
+    ];
+    if timestamp {
+        lines.push("Timestamp=Sep 18, 2026 at 10:00:00".to_owned());
+    } else {
+        lines.push("Signed Time=Sep 18, 2026 at 10:00:00".to_owned());
+    }
+    lines.push(format!("TeamIdentifier={team}"));
+    lines.push("Runtime Version=15.0.0".to_owned());
+    (lines.join("\n") + "\n").into_bytes()
+}
+
+pub fn verification(archive_sha256: &str) -> Value {
+    json!([{
+        "attestation": {"bundle": {"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"}},
+        "verificationResult": {
+            "mediaType": "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
+            "signature": {"certificate": {
+                "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+                "subjectAlternativeName": format!("https://github.com/{SIGNER}@refs/heads/main"),
+                "issuer": "https://token.actions.githubusercontent.com",
+                "githubWorkflowRepository": REPOSITORY,
+                "githubWorkflowRef": "refs/heads/main",
+                "buildSignerURI": format!("https://github.com/{SIGNER}@refs/heads/main"),
+                "runnerEnvironment": "github-hosted",
+                "sourceRepositoryURI": format!("https://github.com/{REPOSITORY}"),
+                "sourceRepositoryDigest": REVISION,
+                "sourceRepositoryRef": "refs/heads/main",
+                "runInvocationURI": format!("https://github.com/{REPOSITORY}/actions/runs/1/attempts/1"),
+                "sourceRepositoryVisibilityAtSigning": "public"
+            }},
+            "verifiedTimestamps": [{"type": "Tlog", "uri": "https://rekor.sigstore.dev", "timestamp": "2026-09-18T10:00:00Z"}],
+            "verifiedIdentity": {},
+            "statement": {
+                "_type": "https://in-toto.io/Statement/v1",
+                "subject": [
+                    {"name": "SHA256SUMS", "digest": {"sha256": "0".repeat(64)}},
+                    {"name": "docsight.zip", "digest": {"sha256": archive_sha256}}
+                ],
+                "predicateType": xtask::release::provenance::SLSA_PROVENANCE,
+                "predicate": {}
+            }
+        }
+    }])
+}
+
+pub fn distributable_binary(target: &str) -> Vec<u8> {
+    if target.ends_with("-apple-darwin") {
+        signed_mach_o(target, &code_signature(0x1_0000, Some(512)))
+    } else if target.ends_with("-windows-msvc") {
+        signed_portable_executable(Some((64, 0x0200, 2)))
+    } else {
+        executable_header(target)
+    }
+}
+
+pub fn require_authenticated_distribution(root: &Path) -> TestResult {
+    let path = root.join(distribution::POLICY_PATH);
+    let mut policy: distribution::Policy = serde_json::from_slice(&fs::read(&path)?)?;
+    policy.provenance.status = distribution::ProvenanceStatus::Required;
+    for entry in &mut policy.signing {
+        if entry.mechanism == distribution::SigningMechanism::DeveloperIdNotarized {
+            entry.status = distribution::SigningStatus::Required;
+            entry.publisher = Some(TEAM.into());
+        } else if entry.mechanism == distribution::SigningMechanism::Authenticode {
+            entry.status = distribution::SigningStatus::Required;
+            entry.publisher = Some(SUBJECT.into());
+        }
+    }
+    fs::remove_file(&path)?;
+    save(&path, &policy)
+}
+
+pub fn trusted_platform(
+    arguments: &[OsString],
+    _: &Path,
+    _: &ProcessLimits,
+    _: Option<&BTreeMap<OsString, OsString>>,
+) -> common::Result<ProcessResult> {
+    let program = arguments[0].to_string_lossy().into_owned();
+    let encode = |value: &Value| {
+        serde_json::to_vec(value).map_err(|_| common::ToolError::new("TEST_JSON", "cannot encode"))
+    };
+    if program == "/usr/bin/codesign" && arguments[1] == "--verify" {
+        Ok(outcome(0, Vec::new(), Vec::new()))
+    } else if program == "/usr/bin/codesign" {
+        Ok(outcome(0, Vec::new(), codesign_description(TEAM, true)))
+    } else if program == "/usr/sbin/spctl" {
+        Ok(outcome(
+            0,
+            Vec::new(),
+            b"docsight: accepted\nsource=Notarized Developer ID\n".to_vec(),
+        ))
+    } else if program.ends_with("powershell.exe") {
+        Ok(outcome(
+            0,
+            encode(&json!({"status": "Valid", "subject": SUBJECT, "timestamped": true}))?,
+            Vec::new(),
+        ))
+    } else if program.ends_with("gh") {
+        let archive = sha256_file(Path::new(&arguments[3]))?;
+        Ok(outcome(0, encode(&verification(&archive))?, Vec::new()))
+    } else {
+        Err(common::ToolError::new(
+            "UNEXPECTED_PROCESS",
+            "unexpected tool",
+        ))
+    }
+}
+
+impl Fixture {
+    pub fn distribution(&self, path: &Path) -> TestResult {
+        let manifest = release::archive::verify_archive(path)?;
+        let signature = distribution::verify_signatures_with(
+            path,
+            &self.root,
+            &manifest.target,
+            &signing_tools(),
+            &mut Callback(trusted_platform),
+        )?;
+        let provenance = release::provenance::verify_provenance_with(
+            path,
+            &self.root,
+            Path::new("/usr/bin/gh"),
+            &mut Callback(trusted_platform),
+        )?;
+        let parent = path.parent().ok_or("archive parent")?;
+        save(
+            &parent.join(format!("signature-{}.json", manifest.target)),
+            &signature,
+        )?;
+        save(
+            &parent.join(format!("provenance-{}.json", manifest.target)),
+            &provenance,
         )
     }
 }
