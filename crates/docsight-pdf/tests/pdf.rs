@@ -1629,6 +1629,49 @@ fn reads_a_pdf_whose_header_follows_leading_whitespace() -> Result<(), Box<dyn s
     Ok(())
 }
 
+fn cff_program_objects(font: &str, extra_font_entries: &str) -> Vec<String> {
+    let content = "BT /F1 12 Tf 20 70 Td (Readable text) Tj ET";
+    let program = "OTTO\u{0}\u{1}\u{0}\u{0}padding bytes for a CFF flavoured OpenType program";
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        format!("<< /Type /Font /Subtype {font} /BaseFont /Embedded-Regular /FontDescriptor 6 0 R {extra_font_entries}>>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /FontDescriptor /FontName /Embedded-Regular /Flags 32 /FontFile2 7 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{program}\nendstream", program.len()),
+    ]
+}
+
+#[test]
+fn an_unsupported_embedded_font_program_only_approximates_painting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = cff_program_objects("/TrueType", "/Encoding /WinAnsiEncoding ");
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let text: String = document.blocks.iter().map(|block| block.text()).collect();
+    assert!(text.contains("Readable text"), "text missing: {text}");
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "APPROXIMATED_PDF_FONT")
+    );
+    Ok(())
+}
+
+#[test]
+fn text_that_depends_on_an_unsupported_font_program_still_fails_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = cff_program_objects("/TrueType", "");
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    assert!(matches!(
+        PdfDocument::open(&source)?.to_document(),
+        Err(DocsightError::UnsupportedFeature { .. })
+    ));
+    Ok(())
+}
+
 #[test]
 fn shading_operators_reduce_visual_fidelity_without_vetoing_text()
 -> Result<(), Box<dyn std::error::Error>> {

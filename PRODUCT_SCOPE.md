@@ -138,7 +138,7 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 | Negative font sizes extract text but do not reproduce the signed transform | `PDF_NEGATIVE_FONT_SIZE_VISUAL` |
 | Strokes under a non-uniform transform use an area-preserving mean width | `PDF_NON_UNIFORM_STROKE_VISUAL` |
 
-Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators and unsupported font programs fail closed with exit code `20` rather than guessing; features that only affect painting reduce visual fidelity and are reported, but never veto text or structure.
+Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators fail closed with exit code `20` rather than guessing. An embedded font program the engine cannot read fails closed only when decoding the text depends on it; when a `ToUnicode` map or an explicit encoding decodes the text, the text is extracted and its glyphs are painted with the fallback set, reported as `APPROXIMATED_PDF_FONT`; features that only affect painting reduce visual fidelity and are reported, but never veto text or structure.
 
 ### Operation-level diagnostics
 

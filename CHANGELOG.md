@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Read the text of PDFs whose embedded font program cannot be parsed, such as OpenType fonts with CFF outlines, when a `ToUnicode` map or an explicit encoding decodes it, painting those glyphs with the fallback set and reporting `APPROXIMATED_PDF_FONT`. Text that depends on the unreadable program still fails closed.
 - Report a malformed PDF document information dictionary as unknown metadata with `PDF_INFO_UNREADABLE` instead of rejecting a document whose text and structure are readable.
 - Merge warnings that repeat the same code, severity, message, effect and page into one record with an `occurrences` count in JSON, NDJSON and human output, so a condition that affects many objects no longer floods the output. A two-column paper went from 899 warning records to 110.
 - Pass the sandbox policy to the isolated worker so its CPU time and memory limits are the ones the caller configured rather than the defaults, enforce the 30-second CPU budget as CPU time on the worker process, and stop only a blocked worker at a separate 120-second wall-clock deadline, with a distinct message for each limit.

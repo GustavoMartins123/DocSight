@@ -2334,7 +2334,11 @@ pub(crate) fn fonts_from_resources(
                     _ => return Err(malformed("FontDescriptor must resolve to a dictionary")),
                 };
                 match descriptor.get("FontFile2") {
-                    Some(value) => Some(Arc::new(FontProgram::parse(decode_stream_value(value)?)?)),
+                    Some(value) => match FontProgram::parse(decode_stream_value(value)?) {
+                        Ok(program) => Some(Arc::new(program)),
+                        Err(DocsightError::UnsupportedFeature { .. }) => None,
+                        Err(error) => return Err(error),
+                    },
                     None => None,
                 }
             }
