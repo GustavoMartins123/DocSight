@@ -131,6 +131,7 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 | Text without an embedded outline uses the deterministic fallback glyph set | `APPROXIMATED_PDF_FONT` |
 | Codes the `ToUnicode` CMap does not map are extracted as the replacement character | `PDF_TEXT_CODE_UNMAPPED` |
 | Unsupported `ExtGState` entries are ignored for painting | `PDF_EXTGSTATE_IGNORED` |
+| The document information dictionary is malformed, so title, author, subject, producer and dates are reported as unknown while text and structure are still read | `PDF_INFO_UNREADABLE` |
 | The `%PDF-` header follows whitespace or NUL bytes within the first 1024 bytes, so byte offsets are read relative to the header; any other leading bytes reject the input as an unsupported format | `PDF_HEADER_OFFSET` |
 | Soft masks, unsupported blend modes, patterns and unsupported colour spaces are ignored for painting | `PDF_SOFT_MASK_IGNORED`, `PDF_BLEND_MODE_UNSUPPORTED`, `PDF_PATTERN_PAINT_UNSUPPORTED`, `PDF_COLOR_SPACE_UNSUPPORTED` |
 | Clipping text rendering modes extract text but do not clip | `PDF_CLIP_TEXT_VISUAL` |

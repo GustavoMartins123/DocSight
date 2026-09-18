@@ -1298,6 +1298,28 @@ fn reads_the_document_information_dictionary() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
+fn a_malformed_information_dictionary_leaves_the_document_readable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = page_objects(
+        "",
+        &["<< /Producer (Generator) /CreationDate (D:20210426121756)Z) >>".to_owned()],
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_trailer(&objects, "/Info 6 0 R"))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+
+    assert_eq!(document.metadata.producer, None);
+    assert!(!document.blocks.is_empty());
+    let unreadable: Vec<_> = document
+        .warnings
+        .iter()
+        .filter(|warning| warning.code == "PDF_INFO_UNREADABLE")
+        .collect();
+    assert_eq!(unreadable.len(), 1);
+    assert!(unreadable[0].message.contains("expected PDF name"));
+    Ok(())
+}
+
+#[test]
 fn reports_absent_document_information_as_unknown() -> Result<(), Box<dyn std::error::Error>> {
     let source = DocumentSource::from_bytes(sample_pdf())?;
     let document = PdfDocument::open(&source)?.to_document()?;
