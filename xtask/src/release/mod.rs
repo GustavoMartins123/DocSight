@@ -2,6 +2,7 @@ pub mod archive;
 pub mod binary;
 pub mod changelog;
 pub mod notices;
+pub mod signature;
 
 use crate::tooling::common::*;
 use serde::{Deserialize, Serialize};
