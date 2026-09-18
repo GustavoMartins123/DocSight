@@ -90,7 +90,14 @@ fn inventory_command_runs_without_the_document_engine_or_an_interpreter() -> Tes
     );
     let report = parse_json(&output.stdout)?;
     assert_eq!(report["executed"], false);
-    assert_eq!(report["cases"], 12);
+    assert_eq!(report["schema"], "docsight.corpus-inventory/v2");
+    assert_eq!(report["cases"], 17);
+    assert_eq!(report["classes"]["malformed-container"], 3);
+    assert!(
+        report["declared_classes"]
+            .as_array()
+            .is_some_and(|classes| classes.len() >= 10)
+    );
     Ok(())
 }
 #[test]

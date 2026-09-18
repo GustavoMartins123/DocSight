@@ -207,6 +207,91 @@
         "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
       },
       "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+    },
+    {
+      "class": "malformed-container",
+      "expected": {
+        "diagnostic_codes": [
+          "MALFORMED_DOCUMENT"
+        ],
+        "exit_code": 11,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/adversarial/broken_xref.pdf",
+      "format": "invalid",
+      "id": "adversarial-broken-xref-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "43d7924e9112a1128458bf2953d3bc5b1238435ee6c6661a1bd284c3396839ee"
+    },
+    {
+      "class": "malformed-container",
+      "expected": {
+        "diagnostic_codes": [
+          "UNSUPPORTED_FORMAT"
+        ],
+        "exit_code": 10,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/adversarial/missing_document_part.docx",
+      "format": "invalid",
+      "id": "adversarial-missing-document-part-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "1c71a28357e0c3845ffecbc441704323f585df8a5c6f037f78e2c1217f4b6552"
+    },
+    {
+      "class": "malformed-container",
+      "expected": {
+        "diagnostic_codes": [
+          "UNSUPPORTED_FORMAT"
+        ],
+        "exit_code": 10,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/adversarial/truncated_package.docx",
+      "format": "invalid",
+      "id": "adversarial-truncated-package-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "c0a452a42976c1df9a7f895607c27aec4a7992c9827b6a481284587b0bedc778"
+    },
+    {
+      "class": "malformed-syntax",
+      "expected": {
+        "diagnostic_codes": [
+          "MALFORMED_DOCUMENT"
+        ],
+        "exit_code": 11,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/adversarial/malformed_xml.docx",
+      "format": "invalid",
+      "id": "adversarial-malformed-xml-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "ce25c5b61d5ce5579bb7508bf9271ada941aa5fe7746353b415c18a97b2cd440"
+    },
+    {
+      "class": "resource-limit",
+      "expected": {
+        "diagnostic_codes": [
+          "RESOURCE_LIMIT"
+        ],
+        "exit_code": 13,
+        "pointer_equals": {},
+        "repeat": 2
+      },
+      "file": "fixtures/adversarial/deep_nesting.docx",
+      "format": "invalid",
+      "id": "adversarial-deep-nesting-inspect",
+      "operation": "inspect",
+      "origin": "synthetic",
+      "sha256": "0957129eec8f720aacc89f113be55bdb95b8e06ae1f01f60d6d74e15e77c7353"
     }
   ],
   "schema": "docsight.corpus/v2"
