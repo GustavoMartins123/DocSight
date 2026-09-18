@@ -48,6 +48,9 @@
     },
     {
       "$ref": "#/$defs/signature-report"
+    },
+    {
+      "$ref": "#/$defs/provenance-report"
     }
   ],
   "$defs": {
@@ -2008,6 +2011,117 @@
                     "type": "null"
                   }
                 ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "provenance-report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "version",
+        "target",
+        "revision",
+        "archive_sha256",
+        "policy_sha256",
+        "repository",
+        "signer_workflow",
+        "status",
+        "error_code",
+        "attestations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "docsight.release-provenance/v1"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "target": {
+          "enum": [
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "aarch64-apple-darwin"
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "archive_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policy_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$"
+        },
+        "signer_workflow": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}/\\.github/workflows/[A-Za-z0-9_-][A-Za-z0-9._-]*\\.yml$"
+        },
+        "status": {
+          "enum": [
+            "verified",
+            "pending-attestation-support",
+            "failed"
+          ]
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attestations": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "signer",
+              "source_digest",
+              "source_ref",
+              "runner_environment",
+              "run",
+              "transparency_entries"
+            ],
+            "properties": {
+              "signer": {
+                "type": "string",
+                "pattern": "^https://github\\.com/"
+              },
+              "source_digest": {
+                "$ref": "#/$defs/revision"
+              },
+              "source_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runner_environment": {
+                "const": "github-hosted"
+              },
+              "run": {
+                "type": "string",
+                "pattern": "^https://github\\.com/"
+              },
+              "transparency_entries": {
+                "type": "integer",
+                "minimum": 1
               }
             }
           }

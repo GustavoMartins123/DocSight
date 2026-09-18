@@ -112,6 +112,11 @@ enum ReleaseCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    Provenance {
+        archive: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -307,6 +312,16 @@ pub fn execute(cli: Cli) -> Result<bool> {
                     release::distribution::verify_signatures(&archive, &root, &mut NativeRunner)?;
                 emit(&receipt, Some(&out))?;
                 return Ok(receipt.status != release::distribution::SignatureStatus::Failed);
+            }
+            ReleaseCommand::Provenance { archive, out } => {
+                let receipt = release::provenance::verify_provenance_with(
+                    &archive,
+                    &root,
+                    Path::new("gh"),
+                    &mut NativeRunner,
+                )?;
+                emit(&receipt, Some(&out))?;
+                return Ok(receipt.status != release::provenance::ProvenanceResult::Failed);
             }
             ReleaseCommand::Collect { directory } => {
                 emit(&release::archive::collect(&directory, &root)?, None)?
