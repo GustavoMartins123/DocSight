@@ -101,6 +101,24 @@ fn inventory_command_runs_without_the_document_engine_or_an_interpreter() -> Tes
     Ok(())
 }
 #[test]
+fn ground_truth_inventory_reports_the_empty_repository_register() -> TestResult {
+    let output = Command::new(env!("CARGO_BIN_EXE_maint"))
+        .args(["quality", "validate"])
+        .arg("--root")
+        .arg(workspace_root())
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_json(&output.stdout)?;
+    assert_eq!(report["schema"], "docsight.ground-truth-inventory/v1");
+    assert_eq!(report["records"], 0);
+    assert_eq!(report["reviewed"], 0);
+    Ok(())
+}
+#[test]
 fn wrong_release_tags_fail_with_a_typed_error() -> TestResult {
     let output = Command::new(env!("CARGO_BIN_EXE_maint"))
         .args(["release", "version", "--tag", "v9.9.9"])

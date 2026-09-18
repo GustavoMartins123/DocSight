@@ -1,4 +1,5 @@
 use crate::tooling::common::*;
+use crate::tooling::process::NativeRunner;
 use crate::{architecture, beta, corpus, quality, readiness, release, smoke, validation};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -55,6 +56,10 @@ enum Command {
     Beta {
         #[command(subcommand)]
         command: BetaCommand,
+    },
+    Quality {
+        #[command(subcommand)]
+        command: QualityCommand,
     },
     Validate {
         #[arg(long)]
@@ -121,6 +126,50 @@ enum CorpusCommand {
         classes: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum QualityCommand {
+    Prepare {
+        #[arg(long)]
+        archive: PathBuf,
+        #[arg(long)]
+        document: PathBuf,
+        #[arg(long)]
+        reference: Vec<PathBuf>,
+        #[arg(long)]
+        class: String,
+        #[arg(long)]
+        classes: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    Validate {
+        #[arg(long)]
+        ground_truth: Option<PathBuf>,
+        #[arg(long)]
+        classes: Option<PathBuf>,
+    },
+    Measure {
+        #[arg(long)]
+        archive: PathBuf,
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long)]
+        ground_truth: Option<PathBuf>,
+        #[arg(long)]
+        classes: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    Compare {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -326,6 +375,7 @@ pub fn execute(cli: Cli) -> Result<bool> {
                 emit(&beta::aggregate(&directory, &root)?, out.as_deref())?
             }
         },
+        Command::Quality { command } => return quality_command(command, &root),
         Command::Validate { out } => {
             let report = validation::run(&out, &root)?;
             emit(&report, None)?;
@@ -344,6 +394,99 @@ pub fn execute(cli: Cli) -> Result<bool> {
             let report = architecture::audit(&root)?;
             emit(&report, None)?;
             return Ok(report.get("rust_only").and_then(serde_json::Value::as_bool) == Some(true));
+        }
+    }
+    Ok(true)
+}
+
+fn classes_digest(classes: Option<&Path>) -> Result<String> {
+    match classes {
+        Some(path) => sha256_file(path),
+        None => sha256_file(&workspace_root().join("release/document-classes.json")),
+    }
+}
+
+fn quality_command(command: QualityCommand, root: &Path) -> Result<bool> {
+    const MAX_REPORT_BYTES: u64 = 67_108_864;
+    match command {
+        QualityCommand::Prepare {
+            archive,
+            document,
+            reference,
+            class,
+            classes,
+            out,
+        } => {
+            let taxonomy = quality::read_taxonomy(classes.as_deref())?;
+            let references: Vec<&Path> = reference.iter().map(PathBuf::as_path).collect();
+            let record = quality::prepare_with(
+                &archive,
+                &document,
+                &references,
+                &class,
+                &taxonomy,
+                &mut NativeRunner,
+            )?;
+            emit(&record, Some(&out))?;
+        }
+        QualityCommand::Validate {
+            ground_truth,
+            classes,
+        } => {
+            let taxonomy = quality::read_taxonomy(classes.as_deref())?;
+            let register = ground_truth.unwrap_or_else(|| root.join("release/ground-truth"));
+            let records = quality::load_register(&register, &taxonomy)?;
+            let mut per_class: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
+            for record in records.values() {
+                *per_class
+                    .entry(record.class.as_str())
+                    .or_default()
+                    .entry(record.review.status.as_str())
+                    .or_default() += 1;
+            }
+            let reviewed = records.values().filter(|record| record.reviewed()).count();
+            emit(
+                &json!({"schema": "docsight.ground-truth-inventory/v1", "records": records.len(), "reviewed": reviewed, "unreviewed": records.len() - reviewed, "classes": per_class}),
+                None,
+            )?;
+        }
+        QualityCommand::Measure {
+            archive,
+            manifest,
+            ground_truth,
+            classes,
+            out,
+        } => {
+            let taxonomy = quality::read_taxonomy(classes.as_deref())?;
+            let register_path = ground_truth.unwrap_or_else(|| root.join("release/ground-truth"));
+            let register = quality::load_register(&register_path, &taxonomy)?;
+            let manifest = manifest.unwrap_or_else(|| root.join("release/corpus.json"));
+            let report = quality::measure_with(
+                &quality::MeasureInputs {
+                    archive: &archive,
+                    manifest: &manifest,
+                    root,
+                    taxonomy: &taxonomy,
+                    classes_sha256: classes_digest(classes.as_deref())?,
+                    register: &register,
+                },
+                &mut NativeRunner,
+            )?;
+            emit(&report, Some(&out))?;
+            return Ok(report.passed);
+        }
+        QualityCommand::Compare {
+            baseline,
+            candidate,
+            out,
+        } => {
+            let baseline: quality::QualityReport =
+                decode(read_json_limit(&baseline, MAX_REPORT_BYTES)?)?;
+            let candidate: quality::QualityReport =
+                decode(read_json_limit(&candidate, MAX_REPORT_BYTES)?)?;
+            let comparison = quality::compare(&baseline, &candidate)?;
+            emit(&comparison, out.as_deref())?;
+            return Ok(comparison.passed);
         }
     }
     Ok(true)

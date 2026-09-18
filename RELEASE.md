@@ -163,6 +163,70 @@ not automatically approved product criteria. Changes require a reviewed commit
 and rationale, not silent relaxation to make a candidate appear ready. Repeats
 and diff-only references do not inflate the distinct primary-input count.
 
+## Quality measurement by document class
+
+Passing corpus cases show that the engine behaved as a reviewed expectation says
+for those inputs. They do not show how well it handles other documents, so
+quality is measured per document class instead of being extrapolated from a few
+synthetic samples to every DOCX or PDF.
+
+`release/document-classes.json` declares the classes, such as `docx-tabular`,
+`pdf-structured` or `unsupported-format`, with a format, a complexity tier
+(`simple`, `moderate`, `complex` or `adversarial`) and the minimum properties an
+`inspect` result must show for a document of the class. Every corpus case names
+its class, and only an adversarial class may expect a rejection.
+
+```sh
+cargo xtask quality measure --archive ARCHIVE.zip --out quality.json
+cargo xtask quality compare --baseline previous-quality.json --candidate quality.json
+```
+
+`measure` runs the packaged engine in its sandbox twice per document and reports
+each metric with a status and the basis it was judged on:
+
+| Basis | Metrics | Meaning |
+| --- | --- | --- |
+| `engine-invariant` | `determinism`, `classification`, `render_geometry`, `diff_identity` | Properties the engine must hold for any document: repeated runs are byte-identical, the document shows its class signals, the page-one raster covers the page within one pixel, and a document compared with itself has no changes. |
+| `corpus-expectation` | `rejection` | An adversarial input fails with the exit code and diagnostic the reviewed manifest declares. |
+| `reviewed-ground-truth` | `structure`, `text`, `geometry`, `diagnostics`, `render`, `diff` | The output agrees with facts a person checked against the document. |
+| `unreviewed-proposal` | the same metrics | The output matches a record proposed from an earlier engine run. This detects drift but is not evidence of correctness. |
+
+A failure on the first three bases fails the measurement; drift from an
+unreviewed proposal is reported without failing it. Each class summary states
+its document count, how many documents are synthetic or consented real, how many
+have reviewed ground truth and which evidence the class rests on:
+`reviewed-ground-truth`, `partially-reviewed-ground-truth`,
+`engine-consistency-only`, `corpus-expectation` or `no-documents`. The report
+carries a fixed statement that it makes no claim about other documents.
+`compare` lists every metric that stopped passing, every document that stopped
+being measurable or disappeared, and exits 1 when there is any regression.
+
+### Ground truth and human review
+
+Ground truth records live in a register directory, `release/ground-truth` by
+default, one `<document-sha256>.json` per document. The register holds no
+records today, so every class currently rests on engine consistency or on
+corpus expectations only.
+
+```sh
+cargo xtask quality prepare --archive ARCHIVE.zip --document doc.docx --class docx-tabular --out release/ground-truth/<sha256>.json
+cargo xtask quality validate
+```
+
+`prepare` records the facts the engine reports (structure counts, a digest of
+the block text, page-one geometry, diagnostics, the page-one PNG digest at 72
+dpi and optional diff summaries against `--reference` documents) and always
+writes `review.status: unreviewed`. A reviewer then checks each value against
+the document itself, corrects any value the engine got wrong, writes a note
+describing the procedure, observations and limitations, and records
+`status: reviewed`, a stable `reviewer` identifier and the note's path and
+SHA-256 relative to the register. `validate` and `measure` reject a reviewed
+record whose note is missing, changed or shorter than 120 bytes, and an
+unreviewed record that carries reviewer data. Tooling never marks a record
+reviewed, and an unsigned note cannot establish the reviewer's identity. Keep
+records for private documents outside the repository and pass the register with
+`--ground-truth`.
+
 `reviews.json` must contain `schema: docsight.release-reviews/v1`, `version`, full
 `revision`, `policy_sha256`, and exactly six review categories in `reviews`:
 `policy`, `installation`, `behavior-and-json`, `render-and-diff`,

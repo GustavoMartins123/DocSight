@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:docsight:tooling:evidence:v2",
   "title": "DocSight native maintainer evidence contracts v2",
-  "description": "Rust maintainer artifact contracts. Validation v2 records native gates with explicit pass, fail, unavailable, blocked and not_run states. Other artifact identifiers retain v1 compatibility. Structural validity is not execution, authenticity or human review.",
+  "description": "Rust maintainer artifact contracts. Validation v2 records native gates with explicit pass, fail, unavailable, blocked and not_run states. Other artifact identifiers retain v1 compatibility. Quality reports measure only the listed documents within their declared classes; an unreviewed ground truth proposal is not reviewed ground truth. Structural validity is not execution, authenticity or human review.",
   "oneOf": [
     {
       "$ref": "#/$defs/beta-report"
@@ -30,6 +30,18 @@
     },
     {
       "$ref": "#/$defs/architecture-check"
+    },
+    {
+      "$ref": "#/$defs/document-classes"
+    },
+    {
+      "$ref": "#/$defs/ground-truth"
+    },
+    {
+      "$ref": "#/$defs/quality-report"
+    },
+    {
+      "$ref": "#/$defs/quality-comparison"
     }
   ],
   "$defs": {
@@ -876,6 +888,873 @@
     "version": {
       "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$",
       "type": "string"
+    },
+    "document-classes": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "docsight.document-classes/v1"
+        },
+        "note": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "classes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
+              "format": {
+                "enum": [
+                  "docx",
+                  "pdf",
+                  "invalid"
+                ]
+              },
+              "complexity": {
+                "enum": [
+                  "simple",
+                  "moderate",
+                  "complex",
+                  "adversarial"
+                ]
+              },
+              "expects_failure": {
+                "type": "boolean"
+              },
+              "description": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "signals": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "min": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "max": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "pages",
+                    "paragraphs",
+                    "headings",
+                    "tables",
+                    "figures",
+                    "comments"
+                  ]
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "format",
+              "complexity",
+              "expects_failure",
+              "description",
+              "signals"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "note",
+        "classes"
+      ],
+      "type": "object"
+    },
+    "quality-observation": {
+      "additionalProperties": false,
+      "properties": {
+        "structure": {
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "paragraphs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "headings": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tables": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "figures": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "blocks_by_kind": {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "pages",
+            "paragraphs",
+            "headings",
+            "tables",
+            "figures",
+            "blocks_by_kind"
+          ],
+          "type": "object"
+        },
+        "text": {
+          "additionalProperties": false,
+          "properties": {
+            "blocks": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "characters": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "blocks",
+            "characters",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "geometry": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "width_pt": {
+              "type": "number"
+            },
+            "height_pt": {
+              "type": "number"
+            },
+            "spans": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "page",
+            "width_pt",
+            "height_pt",
+            "spans"
+          ],
+          "type": "object"
+        },
+        "diagnostics": {
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{2,79}$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "render": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "dpi": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "width_px": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "height_px": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "png_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "page",
+            "dpi",
+            "width_px",
+            "height_px",
+            "png_sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "structure",
+        "text",
+        "geometry",
+        "diagnostics",
+        "render"
+      ],
+      "type": "object"
+    },
+    "quality-diff-summary": {
+      "additionalProperties": false,
+      "properties": {
+        "semantic_changes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "layout_changed_pages": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pages_before": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pages_after": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tables": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "images": {
+          "additionalProperties": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "semantic_changes",
+        "layout_changed_pages",
+        "pages_before",
+        "pages_after",
+        "tables",
+        "images"
+      ],
+      "type": "object"
+    },
+    "ground-truth": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "docsight.ground-truth/v1"
+        },
+        "document_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "docx",
+            "pdf"
+          ]
+        },
+        "class": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+          "type": "string"
+        },
+        "expected": {
+          "$ref": "#/$defs/quality-observation"
+        },
+        "diffs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "reference_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "summary": {
+                "$ref": "#/$defs/quality-diff-summary"
+              }
+            },
+            "required": [
+              "reference_sha256",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "proposed_by": {
+          "additionalProperties": false,
+          "properties": {
+            "engine_version": {
+              "minLength": 5,
+              "type": "string"
+            },
+            "revision": {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            "archive_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "engine_version",
+            "revision",
+            "archive_sha256"
+          ],
+          "type": "object"
+        },
+        "review": {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "unreviewed",
+                "reviewed"
+              ]
+            },
+            "reviewer": {
+              "anyOf": [
+                {
+                  "pattern": "^[A-Za-z0-9_-]{3,80}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "file": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "file",
+                    "sha256"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "reviewer",
+            "evidence"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema",
+        "document_sha256",
+        "format",
+        "class",
+        "expected",
+        "diffs",
+        "proposed_by",
+        "review"
+      ],
+      "type": "object"
+    },
+    "quality-report": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "docsight.quality-report/v1"
+        },
+        "version": {
+          "minLength": 5,
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "target": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "archive_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "classes_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "ground_truth_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reviewed_ground_truth_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "extrapolation": {
+          "const": "none: results describe only the listed documents within their declared classes and are not a claim about other documents of the same format"
+        },
+        "documents": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "document_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "class": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
+              "format": {
+                "enum": [
+                  "docx",
+                  "pdf",
+                  "invalid"
+                ]
+              },
+              "origin": {
+                "enum": [
+                  "synthetic",
+                  "consented-real"
+                ]
+              },
+              "cases": {
+                "items": {
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "ground_truth": {
+                "enum": [
+                  "reviewed",
+                  "unreviewed",
+                  "absent"
+                ]
+              },
+              "error_code": {
+                "anyOf": [
+                  {
+                    "pattern": "^[A-Z][A-Z0-9_]+$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metrics": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "passed",
+                        "failed",
+                        "not_measured",
+                        "not_applicable"
+                      ]
+                    },
+                    "basis": {
+                      "enum": [
+                        "engine-invariant",
+                        "corpus-expectation",
+                        "reviewed-ground-truth",
+                        "unreviewed-proposal",
+                        "none"
+                      ]
+                    },
+                    "detail": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "basis",
+                    "detail"
+                  ],
+                  "type": "object"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "determinism",
+                    "classification",
+                    "rejection",
+                    "render_geometry",
+                    "diff_identity",
+                    "structure",
+                    "text",
+                    "geometry",
+                    "diagnostics",
+                    "render",
+                    "diff"
+                  ]
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "document_sha256",
+              "class",
+              "format",
+              "origin",
+              "cases",
+              "ground_truth",
+              "error_code",
+              "metrics"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "classes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
+              "format": {
+                "enum": [
+                  "docx",
+                  "pdf",
+                  "invalid"
+                ]
+              },
+              "complexity": {
+                "enum": [
+                  "simple",
+                  "moderate",
+                  "complex",
+                  "adversarial"
+                ]
+              },
+              "documents": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "synthetic_documents": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "consented_real_documents": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reviewed_ground_truth": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unreviewed_proposals": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "failed_documents": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "evidence": {
+                "enum": [
+                  "no-documents",
+                  "corpus-expectation",
+                  "reviewed-ground-truth",
+                  "partially-reviewed-ground-truth",
+                  "engine-consistency-only"
+                ]
+              },
+              "metrics": {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "passed": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "failed": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "not_measured": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "not_applicable": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "passed",
+                      "failed",
+                      "not_measured",
+                      "not_applicable"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "object"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "determinism",
+                    "classification",
+                    "rejection",
+                    "render_geometry",
+                    "diff_identity",
+                    "structure",
+                    "text",
+                    "geometry",
+                    "diagnostics",
+                    "render",
+                    "diff"
+                  ]
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "class",
+              "format",
+              "complexity",
+              "documents",
+              "synthetic_documents",
+              "consented_real_documents",
+              "reviewed_ground_truth",
+              "unreviewed_proposals",
+              "failed_documents",
+              "evidence",
+              "metrics"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "version",
+        "revision",
+        "target",
+        "archive_sha256",
+        "manifest_sha256",
+        "classes_sha256",
+        "ground_truth_records",
+        "reviewed_ground_truth_records",
+        "extrapolation",
+        "documents",
+        "classes",
+        "passed"
+      ],
+      "type": "object"
+    },
+    "quality-comparison": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "docsight.quality-comparison/v1"
+        },
+        "baseline": {
+          "additionalProperties": false,
+          "properties": {
+            "revision": {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            "archive_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision",
+            "archive_sha256",
+            "manifest_sha256"
+          ],
+          "type": "object"
+        },
+        "candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "revision": {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            "archive_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision",
+            "archive_sha256",
+            "manifest_sha256"
+          ],
+          "type": "object"
+        },
+        "regressions": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "document_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "class": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
+              "metric": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "baseline": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "candidate": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_sha256",
+              "class",
+              "metric",
+              "baseline",
+              "candidate"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "improvements": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "document_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "class": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
+              "metric": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "baseline": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "candidate": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_sha256",
+              "class",
+              "metric",
+              "baseline",
+              "candidate"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "removed_documents": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "added_documents": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "baseline",
+        "candidate",
+        "regressions",
+        "improvements",
+        "removed_documents",
+        "added_documents",
+        "passed"
+      ],
+      "type": "object"
     }
   }
 }
