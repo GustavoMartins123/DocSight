@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pass the sandbox policy to the isolated worker so its CPU time and memory limits are the ones the caller configured rather than the defaults, enforce the 30-second CPU budget as CPU time on the worker process, and stop only a blocked worker at a separate 120-second wall-clock deadline, with a distinct message for each limit.
 - Rasterize PDF strokes by testing each segment, join and cap only over the pixels it can reach instead of every pixel of the whole stroke. Output is byte-identical; a page whose table borders are long polylines rendered in about 0.04 s instead of 17 s.
 - Accept a PDF whose `%PDF-` header follows only whitespace or NUL bytes within the first 1024 bytes, read its byte offsets relative to the header as PDF readers do, and report `PDF_HEADER_OFFSET`. Other leading bytes are still rejected.
 - Read DOCX spacing, indentation, page size and margin lengths written as decimals within 0.001 of a whole number of twentieths of a point, such as `240.00000000000003`, as that whole number and report them once with `DOCX_MEASURE_ROUNDED`, instead of rejecting the document. Other non-integer lengths are still rejected.

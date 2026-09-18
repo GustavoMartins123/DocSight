@@ -34,6 +34,9 @@ struct WorkerCli {
     #[arg(long, hide = true)]
     filesystem_write_probe_for_test: bool,
 
+    #[arg(long, hide = true)]
+    sleep_for_test: bool,
+
     #[command(subcommand)]
     command: WorkerCommand,
 }
@@ -105,6 +108,14 @@ fn main() -> ExitCode {
     }
     if cli.filesystem_write_probe_for_test {
         return filesystem_write_probe_exit_code();
+    }
+    if cli.sleep_for_test {
+        let milliseconds = std::env::var("DOCSIGHT_SLEEP_PROBE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(60_000);
+        std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+        return ExitCode::SUCCESS;
     }
     match execute_worker(&cli) {
         Ok(()) => ExitCode::SUCCESS,
