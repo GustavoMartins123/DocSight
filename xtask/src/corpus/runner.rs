@@ -1,6 +1,7 @@
 use super::manifest::{
     Case, Expectation, Manifest, checked_input, checked_pointer, validate_manifest,
 };
+use crate::quality::Taxonomy;
 use crate::release::{
     archive::{extract_verified, verify_archive},
     native_target,
@@ -25,6 +26,7 @@ pub struct CaseOutcome {
     pub id: String,
     pub origin: String,
     pub format: String,
+    pub class: String,
     pub document_sha256: String,
     #[serde(deserialize_with = "required_option")]
     pub reference_sha256: Option<String>,
@@ -156,6 +158,7 @@ fn run_case<R: Runner>(
         id: case.id.clone(),
         origin: case.origin.clone(),
         format: case.format.clone(),
+        class: case.class.clone(),
         document_sha256: case.sha256.clone(),
         reference_sha256: case.reference.as_ref().map(|input| input.sha256.clone()),
         operation: case.operation.clone(),
@@ -246,10 +249,12 @@ pub fn run_corpus_with<R: Runner>(
     archive: &Path,
     manifest_path: &Path,
     root: &Path,
+    taxonomy: &Taxonomy,
     runner: &mut R,
 ) -> Result<Report> {
     let manifest_bytes = read_bytes(manifest_path, MAX_JSON_BYTES)?;
-    let corpus: Manifest = validate_manifest(decode(parse_json(&manifest_bytes)?)?, Some(root))?;
+    let corpus: Manifest =
+        validate_manifest(decode(parse_json(&manifest_bytes)?)?, Some(root), taxonomy)?;
     let manifest_hash = digest(&manifest_bytes);
     let manifest = verify_archive(archive)?;
     require(
@@ -302,6 +307,11 @@ pub fn run_corpus_with<R: Runner>(
     })
 }
 
-pub fn run_corpus(archive: &Path, manifest_path: &Path, root: &Path) -> Result<Report> {
-    run_corpus_with(archive, manifest_path, root, &mut NativeRunner)
+pub fn run_corpus(
+    archive: &Path,
+    manifest_path: &Path,
+    root: &Path,
+    taxonomy: &Taxonomy,
+) -> Result<Report> {
+    run_corpus_with(archive, manifest_path, root, taxonomy, &mut NativeRunner)
 }

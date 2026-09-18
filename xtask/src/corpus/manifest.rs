@@ -1,3 +1,4 @@
+use crate::quality::Taxonomy;
 use crate::tooling::common::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,6 +27,7 @@ pub struct Case {
     pub sha256: String,
     pub origin: String,
     pub format: String,
+    pub class: String,
     pub operation: String,
     pub expected: Expectation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,9 +74,13 @@ pub fn checked_pointer(pointer: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_manifest(manifest: Manifest, root: Option<&Path>) -> Result<Manifest> {
+pub fn validate_manifest(
+    manifest: Manifest,
+    root: Option<&Path>,
+    taxonomy: &Taxonomy,
+) -> Result<Manifest> {
     require(
-        manifest.schema == "docsight.corpus/v1" && (1..=10_000).contains(&manifest.cases.len()),
+        manifest.schema == "docsight.corpus/v2" && (1..=10_000).contains(&manifest.cases.len()),
         "INVALID_CORPUS_MANIFEST",
         "A bounded versioned corpus manifest is required",
     )?;
@@ -141,10 +147,21 @@ pub fn validate_manifest(manifest: Manifest, root: Option<&Path>) -> Result<Mani
                 "Assertions must compare scalar JSON values",
             )?;
         }
+        let class = taxonomy.get(&case.class)?;
+        require(
+            class.format == case.format,
+            "CORPUS_CLASS_MISMATCH",
+            "Case format must match the format its document class describes",
+        )?;
+        require(
+            class.expects_failure == (expected.exit_code != 0),
+            "CORPUS_CLASS_MISMATCH",
+            "Only an adversarial class expects the engine to reject the document",
+        )?;
     }
     Ok(manifest)
 }
 
-pub fn load_manifest(path: &Path, root: Option<&Path>) -> Result<Manifest> {
-    validate_manifest(decode(read_json(path)?)?, root)
+pub fn load_manifest(path: &Path, root: Option<&Path>, taxonomy: &Taxonomy) -> Result<Manifest> {
+    validate_manifest(decode(read_json(path)?)?, root, taxonomy)
 }

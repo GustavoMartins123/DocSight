@@ -257,6 +257,10 @@
                   "invalid"
                 ]
               },
+              "class": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
               "id": {
                 "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
                 "type": "string"
@@ -304,6 +308,7 @@
               "sha256",
               "origin",
               "format",
+              "class",
               "operation",
               "expected"
             ],
@@ -314,7 +319,7 @@
           "type": "array"
         },
         "schema": {
-          "const": "docsight.corpus/v1"
+          "const": "docsight.corpus/v2"
         }
       },
       "required": [
@@ -376,6 +381,10 @@
                   "invalid"
                 ]
               },
+              "class": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,59}$",
+                "type": "string"
+              },
               "id": {
                 "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
                 "type": "string"
@@ -424,6 +433,7 @@
               "id",
               "origin",
               "format",
+              "class",
               "operation",
               "document_sha256",
               "passed",

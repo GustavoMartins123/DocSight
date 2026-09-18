@@ -1,8 +1,9 @@
 use crate::tooling::common::*;
-use crate::{architecture, beta, corpus, readiness, release, smoke, validation};
+use crate::{architecture, beta, corpus, quality, readiness, release, smoke, validation};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -108,12 +109,16 @@ enum CorpusCommand {
     Validate {
         #[arg(long)]
         manifest: Option<PathBuf>,
+        #[arg(long)]
+        classes: Option<PathBuf>,
     },
     Run {
         #[arg(long)]
         archive: PathBuf,
         #[arg(long)]
         manifest: Option<PathBuf>,
+        #[arg(long)]
+        classes: Option<PathBuf>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -276,21 +281,28 @@ pub fn execute(cli: Cli) -> Result<bool> {
             return Ok(receipt.passed);
         }
         Command::Corpus { command } => match command {
-            CorpusCommand::Validate { manifest } => {
+            CorpusCommand::Validate { manifest, classes } => {
                 let path = manifest.unwrap_or_else(|| root.join("release/corpus.json"));
-                let manifest = corpus::load_manifest(&path, Some(&root))?;
+                let taxonomy = quality::read_taxonomy(classes.as_deref())?;
+                let manifest = corpus::load_manifest(&path, Some(&root), &taxonomy)?;
+                let mut classes: BTreeMap<&str, u64> = BTreeMap::new();
+                for case in &manifest.cases {
+                    *classes.entry(case.class.as_str()).or_default() += 1;
+                }
                 emit(
-                    &json!({"schema": "docsight.corpus-inventory/v1", "manifest_sha256": sha256_file(&path)?, "cases": manifest.cases.len(), "executed": false}),
+                    &json!({"schema": "docsight.corpus-inventory/v2", "manifest_sha256": sha256_file(&path)?, "cases": manifest.cases.len(), "classes": classes, "declared_classes": taxonomy.ids(), "executed": false}),
                     None,
                 )?;
             }
             CorpusCommand::Run {
                 archive,
                 manifest,
+                classes,
                 out,
             } => {
                 let path = manifest.unwrap_or_else(|| root.join("release/corpus.json"));
-                let report = corpus::run_corpus(&archive, &path, &root)?;
+                let taxonomy = quality::read_taxonomy(classes.as_deref())?;
+                let report = corpus::run_corpus(&archive, &path, &root, &taxonomy)?;
                 emit(&report, Some(&out))?;
                 return Ok(report.passed);
             }

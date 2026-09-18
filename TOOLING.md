@@ -15,7 +15,8 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | `notices --metadata FILE --out FILE` | `xtask/src/release/notices.rs` | `tooling_notices.rs` |
 | `changelog --revision SHA --since SHA --out FILE` | `xtask/src/release/changelog.rs` | `tooling_changelog.rs` |
 | `smoke ARCHIVE --out FILE` | `xtask/src/smoke.rs` | `tooling_smoke.rs` |
-| `corpus validate` and `corpus run --archive ARCHIVE --out FILE` | `xtask/src/corpus/{manifest,runner}.rs` | `tooling_corpus.rs` |
+| `corpus validate` and `corpus run --archive ARCHIVE --out FILE`, with `--classes FILE` for the document class taxonomy | `xtask/src/corpus/{manifest,runner}.rs` | `tooling_corpus.rs` |
+| Document class taxonomy and per-class signals | `release/document-classes.json`, `xtask/src/quality/classes.rs` | `tooling_quality.rs` |
 | `beta collect --consent` and `beta aggregate DIRECTORY` | `xtask/src/beta.rs` | `tooling_beta.rs` |
 | `validate --out DIRECTORY` | `xtask/src/validation.rs` | `tooling_validation.rs` |
 | `readiness --revision SHA --evidence DIRECTORY` | `xtask/src/readiness/{mod,evidence,campaigns,reviews}.rs` | `tooling_readiness.rs` |

@@ -139,7 +139,7 @@ pub fn assess(directory: &Path, revision: &str, root: &Path) -> Result<Report> {
     let cases = record(
         &mut criteria,
         CRITERIA[3],
-        campaigns::corpus_evidence(directory, &packages, revision, version, &policy),
+        campaigns::corpus_evidence(directory, &packages, revision, version, &policy, root),
     )
     .unwrap_or_default();
     let _recorded = record(

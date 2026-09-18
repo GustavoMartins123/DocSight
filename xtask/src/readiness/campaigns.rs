@@ -40,9 +40,11 @@ pub fn corpus_evidence(
     revision: &str,
     version: &str,
     policy: &Policy,
+    root: &Path,
 ) -> Result<BTreeMap<String, Case>> {
     let path = directory.join("corpus-manifest.json");
-    let manifest = corpus::load_manifest(&path, None)?;
+    let taxonomy = crate::quality::load_taxonomy(root)?;
+    let manifest = corpus::load_manifest(&path, None, &taxonomy)?;
     let manifest_hash = sha256_file(&path)?;
     let cases: BTreeMap<_, _> = manifest
         .cases
@@ -107,6 +109,7 @@ pub fn corpus_evidence(
                     && outcome.operation == case.operation
                     && outcome.origin == case.origin
                     && outcome.format == case.format
+                    && outcome.class == case.class
                     && outcome
                         .output_sha256
                         .as_ref()
