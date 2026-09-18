@@ -1575,6 +1575,39 @@ fn a_form_that_invokes_itself_through_inherited_resources_is_a_cycle()
 }
 
 #[test]
+fn reads_a_pdf_whose_header_follows_leading_whitespace() -> Result<(), Box<dyn std::error::Error>> {
+    let objects = form_xobject_objects(
+        "BT /F1 12 Tf 10 10 Td (Inside form) Tj ET",
+        "BT /F1 12 Tf 20 70 Td (Offset header) Tj ET",
+    );
+    let plain = build_pdf_with_objects(&objects);
+    let mut prefixed = b"\n\0 ".to_vec();
+    prefixed.extend_from_slice(&plain);
+
+    let source = DocumentSource::from_bytes(prefixed)?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let text: String = document.blocks.iter().map(|block| block.text()).collect();
+    assert!(text.contains("Offset header"), "text missing: {text}");
+    let offsets: Vec<_> = document
+        .warnings
+        .iter()
+        .filter(|warning| warning.code == "PDF_HEADER_OFFSET")
+        .collect();
+    assert_eq!(offsets.len(), 1);
+    assert!(offsets[0].message.contains("3 leading"));
+
+    let unprefixed = DocumentSource::from_bytes(plain)?;
+    let document = PdfDocument::open(&unprefixed)?.to_document()?;
+    assert!(
+        document
+            .warnings
+            .iter()
+            .all(|warning| warning.code != "PDF_HEADER_OFFSET")
+    );
+    Ok(())
+}
+
+#[test]
 fn shading_operators_reduce_visual_fidelity_without_vetoing_text()
 -> Result<(), Box<dyn std::error::Error>> {
     let content = "BT /F1 12 Tf 20 70 Td (Readable) Tj ET q /Sh0 sh Q";

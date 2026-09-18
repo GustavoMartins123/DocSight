@@ -216,6 +216,7 @@ pub struct PdfDocument<'a> {
     source: &'a DocumentSource,
     store: ObjectStore<'a>,
     pages: Vec<PageRecord>,
+    header_offset: usize,
 }
 
 impl<'a> PdfDocument<'a> {
@@ -233,13 +234,16 @@ impl<'a> PdfDocument<'a> {
                 format: source.format(),
             });
         }
-        let xref = parse_xref(source.bytes())?;
+        let header_offset = docsight_core::pdf_header_offset(source.bytes())
+            .ok_or_else(|| malformed("missing PDF header"))?;
+        let bytes = &source.bytes()[header_offset..];
+        let xref = parse_xref(bytes)?;
         let root = match xref.trailer.get("Root") {
             Some(Value::Ref(reference)) => *reference,
             _ => return Err(malformed("trailer has no indirect Root reference")),
         };
         let mut store = ObjectStore {
-            bytes: source.bytes(),
+            bytes,
             xref,
             object_streams: RefCell::new(BTreeMap::new()),
             decryptor: None,
@@ -287,6 +291,7 @@ impl<'a> PdfDocument<'a> {
             source,
             store,
             pages,
+            header_offset,
         })
     }
 
@@ -621,6 +626,9 @@ impl<'a> PdfDocument<'a> {
         let mut pages = Vec::new();
         let mut links = Vec::new();
         let mut all_warnings = Vec::new();
+        if self.header_offset > 0 {
+            all_warnings.push(header_offset_warning(self.header_offset));
+        }
         let mut global_reading_order = 0_u32;
 
         for page_num in 1..=self.page_count() {
@@ -1430,6 +1438,14 @@ fn unmapped_text_warning(page: u32) -> Diagnostic {
         object: None,
         page: Some(page),
     }
+}
+
+fn header_offset_warning(offset: usize) -> Diagnostic {
+    Diagnostic::warning(
+        "PDF_HEADER_OFFSET",
+        format!("the PDF header follows {offset} leading whitespace or NUL bytes"),
+        "byte offsets inside the PDF are read relative to the header, as PDF readers do",
+    )
 }
 
 fn font_approximation_warning(page: u32) -> Diagnostic {
