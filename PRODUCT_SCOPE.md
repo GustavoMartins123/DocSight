@@ -116,6 +116,7 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | Embedded objects and active content preserved inert, digest only | `DOCX_EMBEDDED_OBJECT_INERT`, `DOCX_ACTIVE_CONTENT_INERT` |
 | A hyperlink target page cannot be resolved | `DOCX_LINK_PAGE_UNRESOLVED` |
 | Contextual spacing is declared but not applied, so spacing is added even between paragraphs of the same style | `DOCX_CONTEXTUAL_SPACING_IGNORED` |
+| A spacing, indentation, page size or margin length is written as a decimal within 0.001 of a whole number of twentieths of a point and is read as that whole number; a length further from a whole number still rejects the document | `DOCX_MEASURE_ROUNDED` |
 
 
 Tracked changes are counted, not reconstructed: `tracked_changes` reports insertion and deletion counts without per-revision authorship or content.
