@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Classify every corpus case by document class and complexity using the versioned taxonomy in `release/document-classes.json`, and require the case format and expected outcome to agree with its class.
+- Add `quality measure`, which measures each corpus document twice in the packaged engine and reports determinism, class signals, page-one raster coverage, empty self-diff and adversarial rejections, plus structure, text, geometry, diagnostics, render and diff agreement with ground truth, per document and per class, with the basis of every result and no extrapolation beyond the listed documents.
+- Add `quality prepare` and `quality validate` for a ground truth register whose records stay `unreviewed` until a named reviewer binds a review note, and `quality compare` to list regressions between two measurements.
+- Record the readiness thresholds as an engineering proposal and keep V1 readiness blocked until a reviewed policy approves them.
+- Add adversarial corpus cases for broken PDF cross-reference tables, incomplete and truncated DOCX packages, invalid OOXML markup and XML nesting beyond the published depth limit.
+
 - Add an opt-in content-addressed document IR cache with `--cache-dir`, `--cache-max-bytes` and `--cache-max-entries` for the eighteen commands that read the IR. Keys cover the document digest and format, the executable digest, engine and IR schema versions, layout profile and font fingerprint; output is byte-identical on a miss, a hit and without the cache.
 - Write cache entries atomically without overwriting, validate every entry in full before reuse, quarantine invalid entries with a reason and parse the document again, evict least-recently-used entries at the byte and entry limits and remove stale temporary files.
 - Keep the cache in the parent process under `--sandbox`: the worker receives only the key, a validated entry or a private result directory, and the parent validates the returned IR before storing it.

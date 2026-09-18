@@ -20,6 +20,16 @@ Classification:
 | --- | --- |
 | Per-invocation overrides for ingestion limits | The enforced values are centralized and published in `capabilities` under `ingestion_limits`, and each boundary is tested, but a caller cannot raise one for a document that legitimately exceeds it. Deferred until a real document forces the question, so the override surface is designed against an actual case rather than guessed. |
 
+### Evidence that requires people
+
+Tooling can prepare these, but only people can produce them. None exists yet.
+
+| Item | Current state |
+| --- | --- |
+| Reviewed ground truth for each document class | `release/ground-truth` holds no records, so every class rests on engine consistency or on corpus expectations only. `quality prepare` proposes records; a reviewer must check and sign them off as described in RELEASE.md. |
+| Consented real documents per class | The tracked corpus is synthetic. `docx-text`, `docx-multi-section`, `pdf-text` and `pdf-visual` have no documents at all. |
+| Approval of the readiness thresholds | `release/readiness-policy.json` records the 100-document and 25-real-per-format thresholds as `engineering-proposal`; approving them takes a reviewed commit and an approved `policy` review. |
+
 ---
 
 ## post-v1
@@ -46,6 +56,8 @@ Classification:
 - Richer `diff` lineage across versions, reducing `DIFF_LINEAGE_AMBIGUOUS`.
 - Caching beyond the document IR: raster output, crops, traces, proof bundles and diff results are recomputed on every invocation.
 - Encrypted cache entries, which would allow caching the IR of password-protected PDFs and protect cached content at rest.
+- Graded quality metrics: text similarity instead of digest equality, pixel-tolerance render comparison instead of PNG digest equality, and geometry and render measured beyond page one.
+- Quality measurement of real documents from private registers across all five native targets, with per-class comparisons between release candidates.
 - Distribution authentication: signing and macOS notarization, with maintainer credentials and clean-machine validation. Native package generation, checksums, installation instructions and a five-target validation workflow are implemented; their existence does not prove a release has been built or published.
 
 ---
