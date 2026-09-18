@@ -26,6 +26,7 @@ jobs:
     outputs:
       matrix: ${{ steps.configuration.outputs.matrix }}
       version: ${{ steps.configuration.outputs.version }}
+      provenance: ${{ steps.configuration.outputs.provenance }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -73,6 +74,26 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features --target "$TARGET" -- -D warnings
       - run: cargo test --locked --workspace --all-features --target "$TARGET"
       - run: cargo build --locked --release --workspace --all-features --target "$TARGET"
+      - name: Sign the macOS executables with the Developer ID certificate
+        if: runner.os == 'macOS' && matrix.signing == 'required'
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_IDENTITY }}
+        run: |
+          keychain="$RUNNER_TEMP/docsight-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          for executable in "$BINARY" "$WORKER"; do
+            codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$SIGNING_IDENTITY" "target/$TARGET/release/$executable"
+          done
       - name: Enforce DS9 budgets on the canonical host
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run --locked --release -p xtask --bin xtask -- benchmark --check --output target/ds9-performance.json
@@ -82,6 +103,16 @@ jobs:
           cargo xtask notices --metadata target/release-metadata.json --out target/THIRD_PARTY_NOTICES.md
       - name: Package the native CLI and worker
         run: cargo xtask release package --binary "target/$TARGET/release/$BINARY" --worker "target/$TARGET/release/$WORKER" --target "$TARGET" --revision "$GITHUB_SHA" --notices target/THIRD_PARTY_NOTICES.md --out dist
+      - name: Notarize the macOS archive
+        if: runner.os == 'macOS' && matrix.signing == 'required'
+        env:
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          printf '%s' "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool submit "dist/docsight-$VERSION-$TARGET.zip" --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
+          rm -f "$RUNNER_TEMP/notary.p8"
       - name: Exercise the extracted archive without Rust on PATH
         run: cargo xtask smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
       - name: Execute the reviewed synthetic corpus on the native package
@@ -133,3 +164,105 @@ jobs:
           name: docsight-release-candidate
           path: dist/
           if-no-files-found: error
+
+  provenance:
+    needs: [configuration, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.configuration.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: "1.96.0"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: docsight-release-candidate
+          path: dist
+      - name: Attest the build provenance of the candidate archives
+        if: needs.configuration.outputs.provenance == 'required'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/SHA256SUMS
+      - name: Verify the provenance of every archive against the distribution policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir provenance
+          for archive in dist/docsight-"$VERSION"-*.zip; do
+            target="${archive#dist/docsight-"$VERSION"-}"
+            target="${target%.zip}"
+            cargo xtask release provenance "$archive" --out "provenance/provenance-$target.json"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: docsight-provenance
+          path: provenance/
+          if-no-files-found: error
+
+  install:
+    needs: [configuration, provenance]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.configuration.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.configuration.outputs.version }}
+      PROVENANCE: ${{ needs.configuration.outputs.provenance }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: docsight-release-candidate
+          path: download
+      - name: Verify the publisher of the archive as documented in INSTALL.md
+        if: env.PROVENANCE == 'required'
+        working-directory: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify "docsight-$VERSION-$TARGET.zip" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+      - name: Verify, extract and run the archive on a clean Linux or macOS machine
+        if: runner.os != 'Windows'
+        working-directory: download
+        run: |
+          archive="docsight-$VERSION-$TARGET.zip"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            shasum -a 256 -c "$archive.sha256"
+          else
+            sha256sum -c "$archive.sha256"
+          fi
+          unzip -q "$archive" -d "$RUNNER_TEMP/install"
+          cd "$RUNNER_TEMP/install/docsight-$VERSION-$TARGET"
+          mkdir "$RUNNER_TEMP/home"
+          for arguments in "--version" "--agent capabilities" "--agent inspect examples/sample_headings.docx" "--agent inspect examples/sample_semantic.pdf"; do
+            env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP/home" ./docsight $arguments > /dev/null
+          done
+          test -z "$(ls -A "$RUNNER_TEMP/home")"
+      - name: Verify, extract and run the archive on a clean Windows machine
+        if: runner.os == 'Windows'
+        working-directory: download
+        shell: pwsh
+        run: |
+          $archive = "docsight-$env:VERSION-$env:TARGET.zip"
+          $expected = (Get-Content "$archive.sha256" -Raw).Split(' ')[0]
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Checksum mismatch; do not run this archive.' }
+          Expand-Archive $archive -DestinationPath "$env:RUNNER_TEMP\install"
+          Set-Location "$env:RUNNER_TEMP\install\docsight-$env:VERSION-$env:TARGET"
+          function Invoke-DocSight {
+            & .\docsight.exe @args | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "docsight $args failed with exit code $LASTEXITCODE" }
+          }
+          Invoke-DocSight --version
+          Invoke-DocSight --agent capabilities
+          Invoke-DocSight --agent inspect examples\sample_headings.docx
+          Invoke-DocSight --agent inspect examples\sample_semantic.pdf

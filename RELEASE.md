@@ -1,6 +1,6 @@
 # Building and reviewing a DocSight release candidate
 
-This guide implements the maintainer side of DS10-DS12. Source code, packaging
+This guide implements the maintainer side of DS10-DS12 and DS16. Source code, packaging
 unit tests and workflow definitions are not evidence of a published release,
 native behavior, a completed beta or visual fidelity. The current workspace
 remains 0.1.4. No command here promotes a version or publishes a release.
@@ -41,9 +41,13 @@ Each job executes the 12-case synthetic corpus and retains its manifest and
 receipts. Repeats and these small examples do not constitute broad real-document
 coverage. Only after all five native jobs succeed does assembly verify archives,
 sidecars and smoke receipts, collect `SHA256SUMS` and generate release notes.
-Failed jobs retain available receipts for diagnosis. The workflow uploads a
-candidate artifact only: no push, tag, merge, GitHub Release, signing or
-notarization is performed.
+Failed jobs retain available receipts for diagnosis. Each native job also
+records a signature receipt, a provenance job records one provenance receipt
+per archive, and an installation job repeats INSTALL.md on a fresh runner of
+every target (see Authenticated distribution). Signing, notarization and
+attestation run only for the targets the committed distribution policy marks as
+required. The workflow uploads candidate artifacts only: no push, tag, merge or
+GitHub Release is performed.
 
 ## Pinned CI actions
 
@@ -59,7 +63,108 @@ this table in the same commit.
 | `actions/checkout` | `v4.4.0` | `11d5960a326750d5838078e36cf38b85af677262` |
 | `actions/upload-artifact` | `v4.6.2` | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
 | `actions/download-artifact` | `v4.3.0` | `d3f86a106a0bac45b974a628896c90dbdf5c8093` |
+| `actions/attest-build-provenance` | `v4.2.2` | `4d101475d8b20a2381f78447822ac1eab6504dd8` |
 | `dtolnay/rust-toolchain` | `master` | `02cb101ec7c40f2c49e1d9714d64511d8e1b74de` |
+
+## Authenticated distribution
+
+Checksums detect corruption; they do not tell a user who published an archive.
+Authenticated distribution adds three independent proofs, each declared in
+`release/distribution-policy.json` and verified from the finished archive:
+
+| Proof | Targets | Mechanism | Verified by |
+| --- | --- | --- | --- |
+| Code signature | Windows x64 | Authenticode with a timestamp, signer subject pinned in the policy | `Get-AuthenticodeSignature` on a Windows host |
+| Code signature and notarization | macOS Intel and Apple Silicon | Developer ID Application with hardened runtime and a timestamp, Team ID pinned in the policy, notarized by Apple | `codesign --verify --strict`, `codesign --display` and `spctl --assess --type install` on a macOS host |
+| Build provenance | all five | GitHub artifact attestation (SLSA provenance v1, signed through Sigstore) bound to this repository, the release workflow and the source commit | `gh attestation verify` |
+
+Linux has no platform code signature; its authenticity rests on provenance.
+Each policy entry is `required`, `pending-credential` or, for Linux signing
+only, `not-applicable`; provenance is `required` or
+`pending-attestation-support`. A required entry names its publisher (the
+certificate subject or the Team ID) and a pending entry names none, so a
+publisher can only be introduced by a reviewed commit. The workflow reads the
+same file: `cargo xtask release configuration` adds each target's signing status
+to the matrix and exports the provenance status, and the signing, notarization
+and attestation steps run only where the policy says `required`. There is no
+path that signs because a secret happens to exist.
+
+```sh
+cargo xtask release signature "dist/docsight-$VERSION-$TARGET.zip" --out "dist/signature-$TARGET.json"
+cargo xtask release provenance "dist/docsight-$VERSION-$TARGET.zip" --out "dist/provenance-$TARGET.json"
+```
+
+`release signature` runs on the target's native host. It extracts the verified
+archive, classifies the signature embedded in both executables from their
+Mach-O or PE structures (`not-applicable`, `absent`, `ad-hoc` or `cms`, plus the
+hardened runtime flag) and, for a required target, asks the operating system to
+verify it. The receipt (`docsight.release-signature/v1`) records the status
+`verified`, `pending-credential`, `not-applicable` or `failed` with the first
+error code, such as `SIGNATURE_MISSING`, `SIGNATURE_INVALID`,
+`PUBLISHER_MISMATCH`, `SIGNATURE_NOT_TIMESTAMPED`, `HARDENED_RUNTIME_MISSING`,
+`NOTARIZATION_MISSING` or `UNEXPECTED_SIGNATURE` for a signature the policy does
+not declare. Apple Silicon linkers sign every executable ad hoc; an ad-hoc
+signature names no publisher and is not a Developer ID signature. The command
+exits 1 only for `failed`.
+
+`release provenance` runs `gh attestation verify` with the policy repository,
+signer workflow, the archive's source commit, the SLSA provenance predicate and
+`--deny-self-hosted-runners`, then checks the returned certificate fields again.
+It needs `GH_TOKEN`. Its receipt (`docsight.release-provenance/v1`) records the
+signer, source commit and ref, runner environment, workflow run and transparency
+log entries of each attestation.
+
+`release collect` rejects a candidate whose signature receipts do not describe
+its archives, differ from the executables actually packaged, or report a status
+other than the one the policy declares. The readiness criterion
+`authenticated-distribution` additionally requires every provenance receipt and
+fails with `SIGNING_CREDENTIAL_PENDING` or `PROVENANCE_PENDING` while any entry
+is pending, so an unsigned candidate cannot be declared ready.
+
+The `install` job downloads the candidate on a fresh runner of each target,
+verifies the attestation when provenance is required, checks the checksum with
+the operating system's own tool, extracts the archive and runs the INSTALL.md
+commands without Rust or a checkout. On Linux and macOS it runs them with an
+empty environment and an empty home directory, and fails if DocSight writes
+anything there.
+
+### Current status and required credentials
+
+Today every signing entry is `pending-credential` and provenance is
+`pending-attestation-support`. No certificate is present, the repository is
+private, and GitHub artifact attestations require a public repository or
+GitHub Enterprise Cloud. Candidates are therefore unsigned, and readiness
+reports it. To enable each proof:
+
+1. macOS: enrol in the Apple Developer Program, create a Developer ID
+   Application certificate and an App Store Connect API key for the notary
+   service, store the secrets below, then commit the policy entries for both
+   macOS targets as `required` with the Team ID as `publisher`.
+2. Windows: choose a code signing provider whose keys live in a hardware
+   security module (the CA/Browser Forum no longer permits exportable keys).
+   The workflow has no Windows signing step yet because the provider decides how
+   `signtool` reaches the key. Add that step before packaging, then commit the
+   Windows entry as `required` with the certificate subject exactly as
+   `Get-AuthenticodeSignature` reports it.
+3. Provenance: make the repository public or move it to GitHub Enterprise
+   Cloud, then commit `provenance.status` as `required`.
+
+| Secret | Used by | Content |
+| --- | --- | --- |
+| `APPLE_DEVELOPER_ID_CERTIFICATE_P12` | macOS signing | Base64 of the Developer ID Application certificate and private key exported as PKCS #12 |
+| `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD` | macOS signing | Password of that PKCS #12 file |
+| `APPLE_DEVELOPER_ID_IDENTITY` | macOS signing | Certificate name passed to `codesign --sign`, such as `Developer ID Application: NAME (TEAMID)` |
+| `APPLE_NOTARY_API_KEY_P8` | macOS notarization | Content of the App Store Connect API private key (`.p8`) |
+| `APPLE_NOTARY_API_KEY_ID` | macOS notarization | Key identifier of that API key |
+| `APPLE_NOTARY_API_ISSUER_ID` | macOS notarization | Issuer identifier of the App Store Connect team |
+
+Provenance needs no secret: the provenance job alone receives `id-token: write`
+and `attestations: write`, and GitHub issues its short-lived signing identity.
+The macOS secrets reach only the two steps that sign and notarize. A contract
+test fails if a workflow uses a secret this table does not document, if a
+signing or attestation step runs without its policy condition, or if another job
+receives elevated permissions. None of these credentials authorizes a
+publication: releases remain a separate, explicitly authorized action.
 
 ## Local native build example
 
@@ -85,6 +190,7 @@ cargo xtask release package --binary "target/$TARGET/release/docsight" --worker 
 cargo xtask release verify "dist/docsight-$VERSION-$TARGET.zip"
 cargo xtask smoke "dist/docsight-$VERSION-$TARGET.zip" --out "dist/smoke-$TARGET.json"
 cargo xtask corpus run --archive "dist/docsight-$VERSION-$TARGET.zip" --out "dist/corpus-$TARGET.json"
+cargo xtask release signature "dist/docsight-$VERSION-$TARGET.zip" --out "dist/signature-$TARGET.json"
 ```
 
 The packager rejects incorrect executable headers, missing workers or resources,
@@ -100,7 +206,7 @@ resolved for that platform. Unfiltered metadata also resolves packages for
 unrelated platforms, and a package without distributable license text fails
 with `MISSING_LICENSE_TEXT` instead of producing incomplete notices.
 
-Once all five archives, sidecars and smoke receipts are in `dist`:
+Once all five archives, sidecars, smoke and signature receipts are in `dist`:
 
 ```sh
 cargo xtask release collect dist
@@ -110,7 +216,8 @@ cargo xtask changelog --revision "$REVISION" --out dist/RELEASE_NOTES.md
 `--since FULL_ANCESTOR_SHA` restricts notes to a verified ancestor range. Both
 range endpoints are full commit identifiers, never arbitrary shell expressions.
 Checksums detect corruption, not publisher identity. Signing, notarization and
-final publication require separate credentials and explicit authorization.
+attestation follow the distribution policy above; final publication requires
+explicit authorization.
 Do not disable operating-system security controls to install an unsigned build.
 
 ## Full native validation
@@ -155,6 +262,8 @@ candidate-evidence/
   docsight-VERSION-TARGET.zip.sha256          (five targets)
   smoke-TARGET.json                          (five targets)
   corpus-TARGET.json                         (five targets)
+  signature-TARGET.json                      (five targets)
+  provenance-TARGET.json                     (five targets)
   corpus-manifest.json
   beta/observation-*.json
   reviews.json

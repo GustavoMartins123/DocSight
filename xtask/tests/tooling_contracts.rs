@@ -833,3 +833,110 @@ fn provenance_receipts_satisfy_their_contract() -> TestResult {
         &serde_json::to_value(&failed)?,
     )
 }
+
+fn workflow_jobs(content: &str) -> BTreeMap<String, String> {
+    let mut jobs = BTreeMap::new();
+    let mut current: Option<String> = None;
+    let mut inside = false;
+    for line in content.lines() {
+        if line == "jobs:" {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let header = line
+            .strip_prefix("  ")
+            .filter(|rest| !rest.starts_with(' ') && rest.ends_with(':'));
+        if let Some(name) = header {
+            current = Some(name.trim_end_matches(':').to_owned());
+            continue;
+        }
+        if let Some(name) = &current {
+            let body: &mut String = jobs.entry(name.clone()).or_default();
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    jobs
+}
+
+fn steps(job: &str) -> Vec<String> {
+    let mut steps: Vec<String> = Vec::new();
+    for line in job.lines() {
+        if line.starts_with("      - ") {
+            steps.push(String::new());
+        }
+        if let Some(step) = steps.last_mut() {
+            step.push_str(line);
+            step.push('\n');
+        }
+    }
+    steps
+}
+
+#[test]
+fn release_workflow_gates_signing_and_provenance_on_the_distribution_policy() -> TestResult {
+    let content = fs::read_to_string(workspace_root().join(".github/workflows/release.yml"))?;
+    let jobs = workflow_jobs(&content);
+    assert_eq!(
+        jobs.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "assemble",
+            "configuration",
+            "install",
+            "package",
+            "provenance"
+        ]
+    );
+    for (name, job) in &jobs {
+        for step in steps(job) {
+            if step.contains("secrets.APPLE_") {
+                assert!(
+                    step.contains("if: runner.os == 'macOS' && matrix.signing == 'required'"),
+                    "{name}: {step}"
+                );
+            }
+            if step.contains("attest-build-provenance") {
+                assert!(
+                    step.contains("if: needs.configuration.outputs.provenance == 'required'"),
+                    "{name}: {step}"
+                );
+            }
+        }
+        let elevated = job.contains("id-token: write") || job.contains("attestations: write");
+        assert_eq!(elevated, name == "provenance", "{name}");
+    }
+    let release = fs::read_to_string(workspace_root().join("RELEASE.md"))?;
+    let secret = Regex::new(r"secrets\.([A-Z0-9_]+)")?;
+    let mut secrets = BTreeSet::new();
+    for (_, workflow) in operational_files()?
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(".github/"))
+    {
+        for captures in secret.captures_iter(&workflow) {
+            secrets.insert(captures[1].to_owned());
+        }
+    }
+    assert_eq!(secrets.len(), 6);
+    for name in &secrets {
+        assert!(release.contains(&format!("| `{name}` |")), "{name} is undocumented");
+    }
+    assert!(jobs["package"].contains("cargo xtask release signature"));
+    assert!(jobs["provenance"].contains("cargo xtask release provenance"));
+    assert!(jobs["install"].contains("gh attestation verify"));
+    assert!(!jobs["install"].contains("cargo"));
+    assert!(!jobs["install"].contains("actions/checkout"));
+    let package = steps(&jobs["package"]);
+    let position = |needle: &str| package.iter().position(|step| step.contains(needle));
+    assert!(
+        position("codesign --force").ok_or("sign")?
+            < position("release package").ok_or("package")?
+    );
+    assert!(
+        position("notarytool submit").ok_or("notarize")?
+            < position("release signature").ok_or("verify")?
+    );
+    Ok(())
+}
