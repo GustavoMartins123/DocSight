@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod binary;
 pub mod changelog;
+pub mod distribution;
 pub mod notices;
 pub mod signature;
 
@@ -114,6 +115,47 @@ pub fn matrix(root: &Path) -> Result<Matrix> {
         "All five release targets are required",
     )?;
     Ok(matrix)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfiguredTarget {
+    pub target: String,
+    pub runner: String,
+    pub binary: String,
+    pub signing: distribution::SigningStatus,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfiguredMatrix {
+    pub include: Vec<ConfiguredTarget>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct Configuration {
+    pub matrix: ConfiguredMatrix,
+    pub version: String,
+    pub provenance: distribution::ProvenanceStatus,
+}
+
+pub fn configuration(root: &Path) -> Result<Configuration> {
+    let declared = matrix(root)?;
+    let loaded = distribution::load_policy(root)?;
+    let include = declared
+        .include
+        .into_iter()
+        .map(|entry| {
+            let signing = loaded.policy.target(&entry.target)?.status;
+            Ok(ConfiguredTarget {
+                target: entry.target,
+                runner: entry.runner,
+                binary: entry.binary,
+                signing,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Configuration {
+        matrix: ConfiguredMatrix { include },
+        version: workspace_version().into(),
+        provenance: loaded.policy.provenance.status,
+    })
 }
 
 pub fn native_target() -> Result<&'static str> {

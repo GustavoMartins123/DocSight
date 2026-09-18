@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use xtask::release::{self, DOCUMENTS, EXAMPLES, SMOKE_CHECKS, TARGETS};
+use xtask::release::{self, DOCUMENTS, EXAMPLES, SMOKE_CHECKS, TARGETS, distribution};
 use xtask::tooling::common::{self, json_bytes, sha256_file, workspace_version};
 use xtask::tooling::process::{ProcessLimits, ProcessResult, Runner};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
@@ -57,17 +57,28 @@ impl Fixture {
             .collect();
         let matrix = json!({ "include": entries });
         save(&root.join("release/targets.json"), &matrix)?;
+        fs::copy(
+            common::workspace_root().join(distribution::POLICY_PATH),
+            root.join(distribution::POLICY_PATH),
+        )?;
         Ok(Self {
             root,
             _directory: directory,
         })
     }
     pub fn package(&self, target: &str, destination: &str) -> TestResult<PathBuf> {
+        self.package_bytes(target, destination, &executable_header(target))
+    }
+    pub fn package_bytes(
+        &self,
+        target: &str,
+        destination: &str,
+        bytes: &[u8],
+    ) -> TestResult<PathBuf> {
         let bin = self.root.join(format!("test-binary-{target}"));
         let worker = self.root.join(format!("test-worker-{target}"));
-        let bytes = executable_header(target);
-        fs::write(&bin, &bytes)?;
-        fs::write(&worker, &bytes)?;
+        fs::write(&bin, bytes)?;
+        fs::write(&worker, bytes)?;
         Ok(release::archive::make_package(
             &self.root,
             &bin,
@@ -77,6 +88,22 @@ impl Fixture {
             &self.root.join("NOTICES"),
             &self.root.join(destination),
         )?)
+    }
+    pub fn signature(&self, path: &Path) -> TestResult<distribution::SignatureReceipt> {
+        let manifest = release::archive::verify_archive(path)?;
+        let receipt = distribution::verify_signatures_with(
+            path,
+            &self.root,
+            &manifest.target,
+            &signing_tools(),
+            &mut Callback(refuse_processes),
+        )?;
+        let parent = path.parent().ok_or("archive parent")?;
+        save(
+            &parent.join(format!("signature-{}.json", receipt.target)),
+            &receipt,
+        )?;
+        Ok(receipt)
     }
     pub fn receipt(&self, path: &Path) -> TestResult<release::SmokeReceipt> {
         let manifest = release::archive::verify_archive(path)?;
@@ -104,6 +131,28 @@ impl Fixture {
         )?;
         Ok(receipt)
     }
+}
+
+pub fn signing_tools() -> distribution::SigningTools {
+    distribution::SigningTools {
+        codesign: PathBuf::from("/usr/bin/codesign"),
+        spctl: PathBuf::from("/usr/sbin/spctl"),
+        powershell: Some(PathBuf::from(
+            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        )),
+    }
+}
+
+pub fn refuse_processes(
+    _: &[OsString],
+    _: &Path,
+    _: &ProcessLimits,
+    _: Option<&BTreeMap<OsString, OsString>>,
+) -> common::Result<ProcessResult> {
+    Err(common::ToolError::new(
+        "UNEXPECTED_PROCESS",
+        "This operation must not start a process",
+    ))
 }
 
 pub fn save(path: &Path, value: &impl serde::Serialize) -> TestResult {
@@ -145,6 +194,78 @@ pub fn executable_header(target: &str) -> Vec<u8> {
         bytes[132..134].copy_from_slice(&0x8664u16.to_le_bytes());
         bytes[150..152].copy_from_slice(&2u16.to_le_bytes());
         bytes[152..154].copy_from_slice(&0x20bu16.to_le_bytes());
+    }
+    bytes
+}
+
+pub const SIGNATURE_AT: usize = 256;
+
+pub fn put_le(bytes: &mut Vec<u8>, offset: usize, value: u32) {
+    if bytes.len() < offset + 4 {
+        bytes.resize(offset + 4, 0);
+    }
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+pub fn put_be(bytes: &mut Vec<u8>, offset: usize, value: u32) {
+    if bytes.len() < offset + 4 {
+        bytes.resize(offset + 4, 0);
+    }
+    bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+}
+
+pub fn code_signature(flags: u32, cms: Option<usize>) -> Vec<u8> {
+    let slots: u32 = if cms.is_some() { 2 } else { 1 };
+    let directory = 12 + 8 * slots as usize;
+    let directory_length = 88usize;
+    let mut blob = Vec::new();
+    put_be(&mut blob, 0, 0xfade_0cc0);
+    put_be(&mut blob, 8, slots);
+    put_be(&mut blob, 12, 0);
+    put_be(&mut blob, 16, directory as u32);
+    put_be(&mut blob, directory, 0xfade_0c02);
+    put_be(&mut blob, directory + 4, directory_length as u32);
+    put_be(&mut blob, directory + 8, 0x20400);
+    put_be(&mut blob, directory + 12, flags);
+    blob.resize(directory + directory_length, 0);
+    if let Some(length) = cms {
+        let wrapper = blob.len();
+        put_be(&mut blob, 20, 0x1_0000);
+        put_be(&mut blob, 24, wrapper as u32);
+        put_be(&mut blob, wrapper, 0xfade_0b01);
+        put_be(&mut blob, wrapper + 4, (8 + length) as u32);
+        blob.resize(wrapper + 8 + length, 0x30);
+    }
+    let total = blob.len() as u32;
+    put_be(&mut blob, 4, total);
+    blob
+}
+
+pub fn signed_mach_o(target: &str, signature: &[u8]) -> Vec<u8> {
+    let mut bytes = executable_header(target);
+    put_le(&mut bytes, 16, 1);
+    put_le(&mut bytes, 20, 16);
+    put_le(&mut bytes, 32, 0x1d);
+    put_le(&mut bytes, 36, 16);
+    put_le(&mut bytes, 40, SIGNATURE_AT as u32);
+    put_le(&mut bytes, 44, signature.len() as u32);
+    bytes.resize(SIGNATURE_AT, 0);
+    bytes.extend_from_slice(signature);
+    bytes
+}
+
+pub fn signed_portable_executable(certificate: Option<(u32, u16, u16)>) -> Vec<u8> {
+    let mut bytes = executable_header("x86_64-pc-windows-msvc");
+    bytes[148..150].copy_from_slice(&240u16.to_le_bytes());
+    put_le(&mut bytes, 260, 16);
+    if let Some((length, revision, kind)) = certificate {
+        put_le(&mut bytes, 296, 512);
+        put_le(&mut bytes, 300, 64);
+        bytes.resize(512, 0);
+        put_le(&mut bytes, 512, length);
+        bytes.extend_from_slice(&revision.to_le_bytes());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.resize(576, 0x30);
     }
     bytes
 }

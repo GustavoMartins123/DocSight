@@ -107,6 +107,11 @@ enum ReleaseCommand {
     Collect {
         directory: PathBuf,
     },
+    Signature {
+        archive: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -244,8 +249,7 @@ pub fn execute(cli: Cli) -> Result<bool> {
         Command::Release { command } => match command {
             ReleaseCommand::Matrix => emit(&release::matrix(&root)?, None)?,
             ReleaseCommand::Configuration { github_output } => {
-                let matrix = release::matrix(&root)?;
-                let version = workspace_version();
+                let configuration = release::configuration(&root)?;
                 if let Some(path) =
                     github_output.or_else(|| std::env::var_os("GITHUB_OUTPUT").map(PathBuf::from))
                 {
@@ -256,12 +260,18 @@ pub fn execute(cli: Cli) -> Result<bool> {
                         "INVALID_OUTPUT",
                         "GitHub output must be a regular file",
                     )?;
+                    let provenance = serde_json::to_value(configuration.provenance)?;
                     let mut output = OpenOptions::new().append(true).open(path)?;
-                    writeln!(output, "matrix={}", serde_json::to_string(&matrix)?)?;
-                    writeln!(output, "version={version}")?;
+                    writeln!(
+                        output,
+                        "matrix={}",
+                        serde_json::to_string(&configuration.matrix)?
+                    )?;
+                    writeln!(output, "version={}", configuration.version)?;
+                    writeln!(output, "provenance={}", string(&provenance)?)?;
                     output.sync_all()?;
                 }
-                emit(&json!({"matrix": matrix, "version": version}), None)?;
+                emit(&configuration, None)?;
             }
             ReleaseCommand::Version { tag } => {
                 if let Some(tag) = tag {
@@ -292,8 +302,14 @@ pub fn execute(cli: Cli) -> Result<bool> {
             ReleaseCommand::Verify { archive } => {
                 emit(&release::archive::verify_archive(&archive)?, None)?
             }
+            ReleaseCommand::Signature { archive, out } => {
+                let receipt =
+                    release::distribution::verify_signatures(&archive, &root, &mut NativeRunner)?;
+                emit(&receipt, Some(&out))?;
+                return Ok(receipt.status != release::distribution::SignatureStatus::Failed);
+            }
             ReleaseCommand::Collect { directory } => {
-                emit(&release::archive::collect(&directory)?, None)?
+                emit(&release::archive::collect(&directory, &root)?, None)?
             }
         },
         Command::Notices { metadata, out } => {

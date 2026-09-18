@@ -159,8 +159,22 @@ fn configuration_emits_valid_literal_matrix_without_inline_scripting() -> TestRe
             .len(),
         5
     );
+    for entry in report["matrix"]["include"].as_array().ok_or("matrix")? {
+        let expected = if entry["target"]
+            .as_str()
+            .ok_or("target")?
+            .ends_with("-linux-gnu")
+        {
+            "not-applicable"
+        } else {
+            "pending-credential"
+        };
+        assert_eq!(entry["signing"], expected);
+    }
     let text = std::fs::read_to_string(file)?;
-    assert_eq!(text.lines().count(), 2);
-    assert!(text.starts_with("matrix={"));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].starts_with("matrix={"));
+    assert_eq!(lines[2], "provenance=pending-attestation-support");
     Ok(())
 }

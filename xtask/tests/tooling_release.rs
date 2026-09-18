@@ -337,6 +337,7 @@ fn release_set(fixture: &Fixture, directory: &str) -> TestResult<Vec<PathBuf>> {
     for target in TARGETS {
         let archive = fixture.package(target, directory)?;
         fixture.receipt(&archive)?;
+        fixture.signature(&archive)?;
         archives.push(archive);
     }
     Ok(archives)
@@ -354,7 +355,7 @@ fn release_set_requires_five_verified_archives_and_receipts() -> TestResult {
     let fixture = Fixture::new()?;
     let archives = release_set(&fixture, "dist")?;
     let directory = fixture.root.join("dist");
-    let summary = collect(&directory)?;
+    let summary = collect(&directory, &fixture.root)?;
     assert_eq!(summary["revision"], REVISION);
     assert_eq!(summary["targets"].as_array().ok_or("targets")?.len(), 5);
     let sums = fs::read_to_string(directory.join("SHA256SUMS"))?;
@@ -362,7 +363,10 @@ fn release_set_requires_five_verified_archives_and_receipts() -> TestResult {
     for archive in &archives {
         assert!(sums.contains(&sha256_file(archive)?));
     }
-    assert_eq!(code(collect(&directory)), Some("OUTPUT_EXISTS"));
+    assert_eq!(
+        code(collect(&directory, &fixture.root)),
+        Some("OUTPUT_EXISTS")
+    );
     Ok(())
 }
 
@@ -372,14 +376,14 @@ fn release_set_rejects_missing_targets_and_unbound_receipts() -> TestResult {
     let archives = release_set(&fixture, "partial")?;
     fs::remove_file(&archives[0])?;
     assert_eq!(
-        code(collect(&fixture.root.join("partial"))),
+        code(collect(&fixture.root.join("partial"), &fixture.root)),
         Some("INCOMPLETE_RELEASE_SET")
     );
 
     let fixture = Fixture::new()?;
     let archives = release_set(&fixture, "missing-receipt")?;
     fs::remove_file(receipt_path(&archives[1], TARGETS[1])?)?;
-    assert!(collect(&fixture.root.join("missing-receipt")).is_err());
+    assert!(collect(&fixture.root.join("missing-receipt"), &fixture.root).is_err());
     assert!(!fixture.root.join("missing-receipt/SHA256SUMS").exists());
 
     let fixture = Fixture::new()?;
@@ -390,7 +394,7 @@ fn release_set_rejects_missing_targets_and_unbound_receipts() -> TestResult {
     fs::remove_file(&path)?;
     save(&path, &receipt)?;
     assert_eq!(
-        code(collect(&fixture.root.join("wrong-receipt"))),
+        code(collect(&fixture.root.join("wrong-receipt"), &fixture.root)),
         Some("INVALID_SMOKE_RECEIPT")
     );
     Ok(())
