@@ -452,8 +452,22 @@ pub fn write_all(path: &Path, bytes: &[u8]) -> Result<(), DocsightError> {
     })
 }
 
+/// Leading bytes a PDF header may follow. Readers accept a header within the first 1024 bytes;
+/// DocSight accepts it only after whitespace or NUL bytes.
+pub const MAX_PDF_HEADER_OFFSET: usize = 1024;
+
+/// Offset of the `%PDF-` header, which may follow only whitespace or NUL bytes within the first
+/// [`MAX_PDF_HEADER_OFFSET`] bytes. Offsets inside the PDF are relative to this header.
+pub fn pdf_header_offset(bytes: &[u8]) -> Option<usize> {
+    let offset = bytes
+        .iter()
+        .take(MAX_PDF_HEADER_OFFSET + 1)
+        .position(|byte| !matches!(byte, b'\0' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))?;
+    bytes[offset..].starts_with(b"%PDF-").then_some(offset)
+}
+
 fn sniff_format(bytes: &[u8]) -> Result<DocumentFormat, DocsightError> {
-    if bytes.starts_with(b"%PDF-") {
+    if pdf_header_offset(bytes).is_some() {
         return Ok(DocumentFormat::Pdf);
     }
     let is_zip = bytes.starts_with(b"PK\x03\x04")
@@ -620,7 +634,29 @@ mod tests {
     }
 
     #[test]
+    fn finds_a_pdf_header_only_after_whitespace_within_the_first_kilobyte() {
+        use super::{MAX_PDF_HEADER_OFFSET, pdf_header_offset};
+        assert_eq!(pdf_header_offset(b"%PDF-1.7\n"), Some(0));
+        assert_eq!(pdf_header_offset(b"\n\0 \t\r\x0c%PDF-1.7\n"), Some(6));
+        let mut padded = vec![b' '; MAX_PDF_HEADER_OFFSET];
+        padded.extend_from_slice(b"%PDF-1.7\n");
+        assert_eq!(pdf_header_offset(&padded), Some(MAX_PDF_HEADER_OFFSET));
+        padded.insert(0, b' ');
+        assert_eq!(pdf_header_offset(&padded), None);
+        assert_eq!(pdf_header_offset(b"x%PDF-1.7\n"), None);
+        assert_eq!(pdf_header_offset(b"<html>%PDF-1.7\n"), None);
+        assert_eq!(pdf_header_offset(b"   "), None);
+        assert_eq!(pdf_header_offset(b""), None);
+    }
+
+    #[test]
     fn identifies_pdf_by_magic_bytes() -> Result<(), DocsightError> {
+        let prefixed = DocumentSource::from_bytes(b"\r\n%PDF-1.7\n".to_vec())?;
+        assert_eq!(prefixed.format(), DocumentFormat::Pdf);
+        assert!(matches!(
+            DocumentSource::from_bytes(b"junk%PDF-1.7\n".to_vec()),
+            Err(DocsightError::UnsupportedFormat)
+        ));
         let source = DocumentSource::from_bytes(b"%PDF-1.7\n".to_vec())?;
         assert_eq!(source.format(), DocumentFormat::Pdf);
         Ok(())
