@@ -53,9 +53,44 @@ Expand-Archive $archive
 ```
 
 Choose the archive for your architecture. Checksums detect corruption; they do
-not authenticate the publisher. The candidate pipeline does not yet sign or notarize binaries. Do not disable system security checks to work around this limitation.
-Signing and macOS notarization require maintainer credentials and remain a
-release-readiness item.
+not authenticate the publisher.
+
+## Verify the publisher
+
+The release pipeline can attach three proofs of origin, each enabled only once
+the maintainer has the corresponding credentials. Today's candidates carry none
+of them (RELEASE.md lists what is pending), so these commands fail on them. Do
+not disable system security checks to run an archive whose publisher you cannot
+verify.
+
+Build provenance, on every platform, with the GitHub CLI signed in to an
+account that can read the repository:
+
+```sh
+gh attestation verify docsight-VERSION-TARGET.zip --repo GustavoMartins123/DocSight --signer-workflow GustavoMartins123/DocSight/.github/workflows/release.yml
+```
+
+A successful result shows that GitHub's release workflow for this repository
+built that exact archive on a GitHub-hosted runner.
+
+macOS signature and notarization, after extracting:
+
+```sh
+codesign --verify --strict --verbose=2 docsight
+spctl --assess --type install --verbose=2 docsight
+```
+
+The second command must report `source=Notarized Developer ID` and the
+maintainer's Team ID in its `origin` line.
+
+Windows Authenticode signature, after extracting:
+
+```powershell
+Get-AuthenticodeSignature .\docsight.exe | Format-List Status, SignerCertificate
+```
+
+`Status` must be `Valid` and the signer subject must name the maintainer.
+Linux has no platform code signature; use the build provenance check.
 
 ## Run offline
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Declare code signing and build provenance per target in `release/distribution-policy.json`: Authenticode for Windows, Developer ID with notarization for macOS and a GitHub artifact attestation for every archive. Each entry is required, pending a credential or not applicable, and a required entry pins its publisher.
+- Add `release signature`, which classifies the signature embedded in both packaged executables from their Mach-O or PE structures and, where the policy requires one, verifies publisher, timestamp, hardened runtime and notarization with `codesign`, `spctl` or `Get-AuthenticodeSignature` on the native host.
+- Add `release provenance`, which verifies an archive's attestation with `gh attestation verify` against the policy repository, release workflow, source commit and GitHub-hosted runners.
+- Require signature receipts that describe the packaged executables and satisfy the policy when assembling a release candidate, and add the `authenticated-distribution` readiness criterion, which fails while signing or provenance is pending.
+- Sign and notarize the macOS executables and attest candidate provenance in the release workflow only where the policy requires it, restrict elevated token permissions to the provenance job, and install every candidate on a fresh runner of each target following INSTALL.md without Rust.
+- Add `release lifecycle`, which installs a previous release and a candidate side by side, compares their capabilities, rolls back with byte-identical results, removes the candidate and fails on undeclared breaking changes or on state written outside the installation.
+- Pin every CI action to a full commit recorded in RELEASE.md and stop persisting the job token in checkouts.
+
+Signing and notarization need maintainer certificates, and attestations need a public repository or GitHub Enterprise Cloud. Until then every signing entry stays pending, candidates remain unsigned and readiness reports it.
+
 - Read the text of PDFs whose embedded font program cannot be parsed, such as OpenType fonts with CFF outlines, when a `ToUnicode` map or an explicit encoding decodes it, painting those glyphs with the fallback set and reporting `APPROXIMATED_PDF_FONT`. Text that depends on the unreadable program still fails closed.
 - Report a malformed PDF document information dictionary as unknown metadata with `PDF_INFO_UNREADABLE` instead of rejecting a document whose text and structure are readable.
 - Merge warnings that repeat the same code, severity, message, effect and page into one record with an `occurrences` count in JSON, NDJSON and human output, so a condition that affects many objects no longer floods the output. A two-column paper went from 899 warning records to 110.
