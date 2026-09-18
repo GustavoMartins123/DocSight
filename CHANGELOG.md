@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Pair identical headings, paragraphs and images that occur the same number of times in both documents in document order, so a document compared with itself reports no semantic changes and repeated content is no longer reported as removed and added. A change in the number of identical copies remains ambiguous.
+- Accept PDF form XObjects whose resources list the form itself or an ancestor, including forms that inherit their parent's resources, and reject a form XObject cycle only when content actually invokes it.
 - Classify every corpus case by document class and complexity using the versioned taxonomy in `release/document-classes.json`, and require the case format and expected outcome to agree with its class.
 - Add `quality measure`, which measures each corpus document twice in the packaged engine and reports determinism, class signals, page-one raster coverage, empty self-diff and adversarial rejections, plus structure, text, geometry, diagnostics, render and diff agreement with ground truth, per document and per class, with the basis of every result and no extrapolation beyond the listed documents.
 - Add `quality prepare` and `quality validate` for a ground truth register whose records stay `unreviewed` until a named reviewer binds a review note, and `quality compare` to list regressions between two measurements.

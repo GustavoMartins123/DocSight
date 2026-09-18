@@ -1500,6 +1500,80 @@ fn rejects_cycles_between_form_xobjects() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+fn inherited_form_objects(form_resources: &str, form_content: &str) -> Vec<String> {
+    let page_content = "BT /F1 12 Tf 20 70 Td (On page) Tj ET q /Fm0 Do Q";
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /XObject << /Fm0 6 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{page_content}\nendstream",
+            page_content.len()
+        ),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] {form_resources}/Length {} >>\nstream\n{form_content}\nendstream",
+            form_content.len()
+        ),
+    ]
+}
+
+#[test]
+fn a_form_that_inherits_resources_listing_itself_is_not_a_cycle()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = inherited_form_objects("", "BT /F1 12 Tf 10 10 Td (Inherited font) Tj ET");
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+    let text: String = document
+        .page(1)?
+        .spans
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect();
+    assert!(text.contains("On page"), "page text missing: {text}");
+    assert!(text.contains("Inherited font"), "form text missing: {text}");
+    assert!(document.to_document().is_ok());
+    Ok(())
+}
+
+#[test]
+fn a_form_that_lists_but_never_invokes_an_ancestor_is_not_a_cycle()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = inherited_form_objects(
+        "/Resources << /Font << /F1 4 0 R >> /XObject << /Fm0 6 0 R >> >> ",
+        "BT /F1 12 Tf 10 10 Td (Listed only) Tj ET",
+    );
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+    assert!(document.to_document().is_ok());
+    Ok(())
+}
+
+#[test]
+fn a_form_that_invokes_itself_through_inherited_resources_is_a_cycle()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = inherited_form_objects("", "q /Fm0 Do Q");
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+    let error = match document.to_document() {
+        Err(error) => error,
+        Ok(_) => return Err("a self-invoking form must be rejected".into()),
+    };
+    assert!(
+        matches!(
+            error,
+            DocsightError::MalformedDocument { .. } | DocsightError::MalformedDocumentAt { .. }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("cycle detected between PDF form XObjects")
+    );
+    Ok(())
+}
+
 #[test]
 fn shading_operators_reduce_visual_fidelity_without_vetoing_text()
 -> Result<(), Box<dyn std::error::Error>> {

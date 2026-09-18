@@ -529,7 +529,8 @@ impl<'a> PdfDocument<'a> {
             if let Some(reference) = reference
                 && !visited.insert(reference)
             {
-                return Err(malformed("cycle detected between PDF form XObjects"));
+                entries.insert(name, XObjectEntry::Recursive);
+                continue;
             }
             let content = decode_stream(&stream)?;
             let matrix = match stream.dict.get("Matrix") {
