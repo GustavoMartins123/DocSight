@@ -506,6 +506,131 @@ fn diff_reports_single_insertion_without_cascade() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+fn build_pdf(content: &str, resources: &str, extra_objects: &[&str]) -> Vec<u8> {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources {resources} /Contents 5 0 R >>"
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        ),
+    ];
+    objects.extend(extra_objects.iter().map(|object| (*object).to_owned()));
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
+fn self_diff_summary(path: &Path) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let document = path.to_str().ok_or("document path")?;
+    let output = docsight()
+        .args(["--agent", "diff", document, document])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    Ok(value["result"]["summary"].clone())
+}
+
+#[test]
+fn diff_of_a_document_with_repeated_content_against_itself_is_empty()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let repeated_text = temp_dir.path().join("repeated_text.pdf");
+    let lines: String = [360, 240, 120]
+        .iter()
+        .map(|y| format!("BT /F1 12 Tf 20 {y} Td (Repeated notice) Tj ET "))
+        .collect();
+    std::fs::write(
+        &repeated_text,
+        build_pdf(&lines, "<< /Font << /F1 4 0 R >> >>", &[]),
+    )?;
+    let repeated_image = temp_dir.path().join("repeated_image.pdf");
+    let draws: String = [20, 120, 220]
+        .iter()
+        .map(|x| format!("q 40 0 0 40 {x} 300 cm /Im1 Do Q "))
+        .collect();
+    std::fs::write(
+        &repeated_image,
+        build_pdf(
+            &format!("{draws}BT /F1 12 Tf 20 100 Td (Caption text) Tj ET"),
+            "<< /Font << /F1 4 0 R >> /XObject << /Im1 6 0 R >> >>",
+            &[
+                "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\u{10}\u{20}\u{30}\nendstream",
+            ],
+        ),
+    )?;
+    let repeated_docx = temp_dir.path().join("repeated.docx");
+    write_docx(
+        &repeated_docx,
+        &["Repeated heading", "Body", "Repeated heading", "Body"],
+    )?;
+
+    for path in [&repeated_text, &repeated_image, &repeated_docx] {
+        let summary = self_diff_summary(path)?;
+        assert_eq!(summary["semantic_changes"], 0, "{}", path.display());
+        assert_eq!(summary["lineage_ambiguous"], 0, "{}", path.display());
+    }
+    Ok(())
+}
+
+#[test]
+fn an_insertion_before_repeated_content_is_one_addition() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let before = temp_dir.path().join("before.docx");
+    let after = temp_dir.path().join("after.docx");
+    write_docx(&before, &["Repeated paragraph", "Repeated paragraph"])?;
+    write_docx(
+        &after,
+        &[
+            "Inserted leading paragraph",
+            "Repeated paragraph",
+            "Repeated paragraph",
+        ],
+    )?;
+    let output = docsight()
+        .args([
+            "--agent",
+            "diff",
+            before.to_str().ok_or("before path")?,
+            after.to_str().ok_or("after path")?,
+        ])
+        .output()?;
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let paragraphs = &value["result"]["semantic"]["paragraphs"];
+    assert_eq!(paragraphs["added"], 1);
+    assert_eq!(paragraphs["removed"], 0);
+    assert_eq!(value["result"]["semantic"]["lineage_ambiguous"], 0);
+    Ok(())
+}
+
 #[test]
 fn diff_reports_ambiguous_lineage_for_real_duplicate_docx_content()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -517,6 +642,7 @@ fn diff_reports_ambiguous_lineage_for_real_duplicate_docx_content()
         &after,
         &[
             "Inserted leading paragraph",
+            "Repeated paragraph",
             "Repeated paragraph",
             "Repeated paragraph",
         ],
