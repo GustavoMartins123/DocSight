@@ -85,6 +85,7 @@ The password is limited to 127 bytes, cleared from the CLI's memory when the ope
 | Comparison | `diff` | Compare package, semantic and visual changes with lineage. |
 | Caching | `cache` | Report, verify, prune or clear the opt-in document IR cache. |
 | Interactive setup | `completions` | Generate a completion script for Bash, Elvish, Fish, PowerShell or Zsh. |
+| Agent integration | `mcp` | Run Model Context Protocol (MCP) server on stdio. |
 
 Use `docsight <command> --help` for human-readable flags. Use the machine contract for integrations; command names, schemas, units, ordering and exit codes are public contracts.
 
