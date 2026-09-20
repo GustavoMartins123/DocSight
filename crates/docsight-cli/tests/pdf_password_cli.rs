@@ -193,3 +193,103 @@ fn password_file_is_rejected_for_docx_and_non_decrypting_commands()
     assert!(fingerprint.stdout.is_empty());
     Ok(())
 }
+
+#[test]
+fn password_direct_unlocks_agent_inspection_and_text_deterministically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let pdf = directory.path().join("protected.pdf");
+    std::fs::write(&pdf, encrypted_pdf::build(b"test-only-password"))?;
+
+    let inspect = docsight()
+        .args(["--agent", "--password", "test-only-password", "inspect"])
+        .arg(&pdf)
+        .output()?;
+    assert!(inspect.status.success());
+    assert!(inspect.stderr.is_empty());
+
+    let text = docsight()
+        .args(["--agent", "--password", "test-only-password", "text"])
+        .arg(&pdf)
+        .output()?;
+    assert!(text.status.success());
+    assert!(String::from_utf8(text.stdout)?.contains("Confidential"));
+    Ok(())
+}
+
+#[test]
+fn password_direct_and_password_file_conflict_fails_closed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let pdf = directory.path().join("protected.pdf");
+    let password = directory.path().join("password.txt");
+    std::fs::write(&pdf, encrypted_pdf::build(b"test-only-password"))?;
+    std::fs::write(&password, b"test-only-password")?;
+
+    let output = docsight()
+        .args([
+            "--agent",
+            "--password",
+            "test-only-password",
+            "--password-file",
+        ])
+        .arg(&password)
+        .arg("inspect")
+        .arg(&pdf)
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
+    assert_eq!(error["error"]["code"], "USAGE");
+    Ok(())
+}
+
+#[test]
+fn password_direct_is_available_inside_the_sandbox() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let pdf = directory.path().join("protected.pdf");
+    std::fs::write(&pdf, encrypted_pdf::build(b"test-only-password"))?;
+
+    let output = docsight()
+        .args([
+            "--agent",
+            "--sandbox",
+            "--password",
+            "test-only-password",
+            "text",
+        ])
+        .arg(&pdf)
+        .output()?;
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(String::from_utf8(output.stdout)?.contains("Confidential"));
+    Ok(())
+}
+
+#[test]
+fn password_direct_is_rejected_for_docx_and_cache() -> Result<(), Box<dyn std::error::Error>> {
+    let docx = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/validation/sample_headings.docx");
+
+    let inspect = docsight()
+        .args(["--agent", "--password", "test-only-password", "inspect"])
+        .arg(&docx)
+        .output()?;
+    assert_eq!(inspect.status.code(), Some(2));
+    assert!(inspect.stdout.is_empty());
+
+    let cache = docsight()
+        .args([
+            "--agent",
+            "--cache-dir",
+            "target/test-cache",
+            "--password",
+            "test-only-password",
+            "inspect",
+        ])
+        .arg(&docx)
+        .output()?;
+    assert_eq!(cache.status.code(), Some(2));
+    assert!(cache.stdout.is_empty());
+    Ok(())
+}
