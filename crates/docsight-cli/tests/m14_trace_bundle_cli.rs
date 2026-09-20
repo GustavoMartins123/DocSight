@@ -200,3 +200,43 @@ fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Er
     }
     Ok(())
 }
+
+#[test]
+fn bundle_defaults_to_page_one_and_accepts_page_only() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let document = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/validation/sample_headings.docx");
+    let default_bundle = directory.path().join("default.dse");
+    let page_bundle = directory.path().join("page1.dse");
+
+    let output = docsight()
+        .args(["--agent", "bundle"])
+        .arg(&document)
+        .args(["--out"])
+        .arg(&default_bundle)
+        .output()?;
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(json["result"]["target"]["selector"]["kind"], "page");
+    assert_eq!(json["result"]["target"]["page"], 1);
+
+    let verify_output = docsight()
+        .args(["--agent", "verify"])
+        .arg(&default_bundle)
+        .output()?;
+    assert!(verify_output.status.success());
+    let verify_json: serde_json::Value = serde_json::from_slice(&verify_output.stdout)?;
+    assert_eq!(verify_json["result"]["verification"]["valid"], true);
+
+    let output_page = docsight()
+        .args(["--agent", "bundle"])
+        .arg(&document)
+        .args(["--page", "1", "--out"])
+        .arg(&page_bundle)
+        .output()?;
+    assert!(output_page.status.success());
+    let page_json: serde_json::Value = serde_json::from_slice(&output_page.stdout)?;
+    assert_eq!(page_json["result"]["target"]["selector"]["kind"], "page");
+    assert_eq!(page_json["result"]["target"]["page"], 1);
+    Ok(())
+}
