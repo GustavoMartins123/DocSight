@@ -1,0 +1,34 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "workflow-compare-revisions",
+  "title": "Compare two DOCX revisions and keep visual evidence",
+  "documents": {
+    "primary": "sample_headings.docx",
+    "reference": "sample_tables.docx"
+  },
+  "budgets": {
+    "max_invocations": 3,
+    "max_stdout_bytes": 400000
+  },
+  "steps": [
+    {
+      "id": "diff-pair",
+      "args": ["diff", "{primary}", "{reference}"],
+      "expect_exit": 0,
+      "require": ["/result/summary/semantic_changes", "/result/before_document/sha256", "/result/after_document/sha256"]
+    },
+    {
+      "id": "diff-self",
+      "args": ["diff", "{primary}", "{primary}"],
+      "expect_exit": 0,
+      "require": ["/result/summary/semantic_changes"],
+      "values": {"/result/summary/semantic_changes": 0}
+    },
+    {
+      "id": "render",
+      "args": ["render", "{primary}", "--page", "1", "--dpi", "36", "--out", "{scratch}/compare.png"],
+      "expect_exit": 0,
+      "require": ["/result/output_sha256", "/result/output_bytes"]
+    }
+  ]
+}
