@@ -35,7 +35,6 @@ Recorded 2026-09-20. The DS18 operation matrix, budgets and cost structure in `b
 | Item | Current state |
 | --- | --- |
 | Linux x86_64 operation numbers and peak-memory budgets | `max_peak_memory_bytes` is null everywhere and wall ceilings carry a Windows reference. Measuring on the canonical Linux host, filling the memory budgets and confirming the Windows ceilings still hold is pending maintainer action. |
-| Line-ending guard for byte-asserted files | `schemas/v2/*.json` digests are asserted byte for byte by the m15 conformance suite, but a stale CRLF checkout on Windows silently changes those bytes. `.gitattributes` already mandates `eol=lf`; a `rust-only` gate that rejects CRLF in tracked text files is designed but not implemented. |
 
 ---
 
@@ -113,3 +112,8 @@ override the default 64MB inspection limit per invocation (e.g.
 `--max-document-bytes 128mb`), propagating through sandbox workers and cache
 handoffs while enforcing `RESOURCE_LIMIT` (exit code 13) when exceeded.
 Covered by `crates/docsight-cli/tests/m9_hardening_cli.rs`.
+
+The line-ending guard for byte-asserted and tracked text files is implemented
+in `xtask/src/architecture.rs`. The `cargo xtask rust-only` gate verifies that
+no tracked text or schema files contain CRLF line endings, enforcing strict
+LF endings across the repository.

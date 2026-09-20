@@ -41,6 +41,26 @@ pub fn audit(root: &Path) -> Result<Value> {
         let foreign_source = [".py", ".pyc", ".pyw", ".js", ".ts", ".go"]
             .iter()
             .any(|extension| lower_name.ends_with(extension));
+        let is_text_file = [
+            ".rs",
+            ".json",
+            ".toml",
+            ".md",
+            ".yml",
+            ".yaml",
+            ".lock",
+            ".gitignore",
+            ".gitattributes",
+        ]
+        .iter()
+        .any(|extension| lower_name.ends_with(extension))
+            || lower_name.starts_with("license");
+        if is_text_file {
+            let bytes = read_bytes(&contained_file(root, name)?, MAX_FILE_BYTES)?;
+            if bytes.contains(&b'\r') {
+                violations.push(format!("{name} (contains CRLF line endings)"));
+            }
+        }
         if foreign_source || lower_name.split('/').any(|part| part == "__pycache__") {
             violations.push(name.to_owned());
         } else if name.starts_with(".github/workflows/")
