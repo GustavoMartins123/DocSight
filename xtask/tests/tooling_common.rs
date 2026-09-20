@@ -169,10 +169,18 @@ fn contained_files_must_stay_inside_their_root() -> TestResult {
     );
     assert!(contained_file(&root, "nested").is_err());
     assert!(contained_file(&root, "../file.txt").is_err());
-    assert_eq!(
-        code(no_symlinks(&root.join("nested/../nested"))),
-        Some("INVALID_PATH")
-    );
+    let probed = root.join("nested/../nested");
+    #[cfg(unix)]
+    assert_eq!(code(no_symlinks(&probed)), Some("INVALID_PATH"));
+    #[cfg(windows)]
+    {
+        no_symlinks(&probed)?;
+        let survivor = probed.canonicalize()?;
+        assert!(
+            survivor.starts_with(&root),
+            "resolved traversal escaped its root"
+        );
+    }
     Ok(())
 }
 
