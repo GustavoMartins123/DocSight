@@ -1,0 +1,38 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "extract-docx-text",
+  "title": "Extract table content and bounded text from one DOCX",
+  "documents": {
+    "primary": "sample_tables.docx",
+    "reference": null
+  },
+  "budgets": {
+    "max_invocations": 3,
+    "max_stdout_bytes": 200000
+  },
+  "steps": [
+    {
+      "id": "resolve",
+      "args": ["resolve", "{primary}", "--text", "Col 1", "--kind", "table", "--budget", "4kb"],
+      "expect_exit": 0,
+      "require": ["/result/candidates/0/object/id", "/result/candidates/0/matched_range"],
+      "values": {
+        "/result/status": "resolved",
+        "/result/candidates/0/object/id": "tbl_6c22c8dd17adf7e32604b29241d9ab99"
+      }
+    },
+    {
+      "id": "table",
+      "args": ["table", "{primary}", "{resolve./result/candidates/0/object/id}", "--format", "csv", "--budget", "64kb"],
+      "expect_exit": 0,
+      "require": ["/result/cells/0/text"],
+      "values": {"/result/cells/0/text": "Col 1"}
+    },
+    {
+      "id": "text",
+      "args": ["text", "{primary}", "--max-items", "5", "--text-limit", "500"],
+      "expect_exit": 0,
+      "require": ["/result/blocks"]
+    }
+  ]
+}
