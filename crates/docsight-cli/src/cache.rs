@@ -81,6 +81,7 @@ pub(crate) struct DocumentLoader<'a> {
     password: &'a [u8],
     cache: Option<LoaderCache>,
     reporting: Reporting,
+    max_document_bytes: u64,
 }
 
 enum LoaderCache {
@@ -93,6 +94,7 @@ impl<'a> DocumentLoader<'a> {
         password: &'a [u8],
         settings: Option<&CacheSettings>,
         reporting: Reporting,
+        max_document_bytes: u64,
     ) -> Result<Self, DocsightError> {
         let handoff = std::env::var_os(CACHE_HANDOFF_ENV);
         let cache = match (handoff, settings) {
@@ -114,7 +116,15 @@ impl<'a> DocumentLoader<'a> {
             password,
             cache,
             reporting,
+            max_document_bytes,
         })
+    }
+
+    pub(crate) fn open_source(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<DocumentSource, DocsightError> {
+        DocumentSource::open_with_limit(path, self.max_document_bytes)
     }
 
     pub(crate) fn password(&self) -> &'a [u8] {
@@ -219,8 +229,9 @@ impl SandboxCacheHandoff {
         document: &Path,
         executable: &Path,
         reporting: Reporting,
+        max_document_bytes: u64,
     ) -> Result<Option<Self>, DocsightError> {
-        let Ok(source) = DocumentSource::open(document) else {
+        let Ok(source) = DocumentSource::open_with_limit(document, max_document_bytes) else {
             return Ok(None);
         };
         let cache = settings.open(executable)?;

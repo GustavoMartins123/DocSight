@@ -305,22 +305,26 @@ pub struct DocumentSource {
 
 impl DocumentSource {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DocsightError> {
+        Self::open_with_limit(path, MAX_INSPECT_BYTES)
+    }
+
+    pub fn open_with_limit(path: impl AsRef<Path>, limit: u64) -> Result<Self, DocsightError> {
         let path = path.as_ref();
         let file = File::open(path).map_err(|source| DocsightError::Io {
             path: path.to_path_buf(),
             source,
         })?;
         let mut bytes = Vec::new();
-        file.take(MAX_INSPECT_BYTES + 1)
+        file.take(limit.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|source| DocsightError::Io {
                 path: path.to_path_buf(),
                 source,
             })?;
-        if bytes.len() as u64 > MAX_INSPECT_BYTES {
+        if bytes.len() as u64 > limit {
             return Err(DocsightError::ResourceLimit {
                 resource: "document bytes".to_owned(),
-                limit: MAX_INSPECT_BYTES,
+                limit,
             });
         }
         Self::from_bytes(bytes)
