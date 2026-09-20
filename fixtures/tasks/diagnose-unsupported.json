@@ -1,0 +1,23 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "diagnose-unsupported",
+  "title": "Diagnose an unsupported document through typed errors",
+  "documents": {
+    "primary": "unsupported.bin",
+    "reference": null
+  },
+  "budgets": {
+    "max_invocations": 1,
+    "max_stdout_bytes": 4096
+  },
+  "steps": [
+    {
+      "id": "inspect",
+      "args": ["inspect", "{primary}"],
+      "expect_exit": 10,
+      "expect_stderr_code": "UNSUPPORTED_FORMAT",
+      "require": [],
+      "values": {}
+    }
+  ]
+}
