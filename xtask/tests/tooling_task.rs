@@ -66,6 +66,10 @@ fn fake_engine(
     }
     let body = match command.as_str() {
         "inspect" => json!({"format": "docx", "tables": 1}),
+        "outline" => json!({"headings": []}),
+        "fingerprint" => {
+            json!({"file_sha256": "a".repeat(64), "result_fingerprint": "b".repeat(64)})
+        }
         "coverage" => json!({"global": {"overall_fidelity": 0.5}, "pages": []}),
         "tables" => json!({"tables": [{"id": TABLE_ID}]}),
         "resolve" => {
@@ -79,7 +83,7 @@ fn fake_engine(
         "diff" => {
             json!({"summary": {"semantic_changes": 0}, "before_document": {"sha256": "a".repeat(64)}, "after_document": {"sha256": "a".repeat(64)}})
         }
-        "render" => {
+        "render" | "crop" => {
             let path = argument_after(arguments, "--out").ok_or_else(|| {
                 common::ToolError::new("TEST_ARGUMENT", "Synthetic render misses its output")
             })?;
@@ -88,6 +92,15 @@ fn fake_engine(
             fs::write(Path::new(&path), &png)?;
             json!({"output_sha256": digest(&png), "output_bytes": png.len()})
         }
+        "bundle" => {
+            let path = argument_after(arguments, "--out").ok_or_else(|| {
+                common::ToolError::new("TEST_ARGUMENT", "Synthetic bundle misses its output")
+            })?;
+            let package = b"synthetic proof bundle";
+            fs::write(Path::new(&path), package)?;
+            json!({"output_sha256": digest(package), "output_bytes": package.len()})
+        }
+        "verify" | "replay" => json!({"verification": {"valid": true}}),
         _ => {
             return Err(common::ToolError::new(
                 "TEST_ARGUMENT",
