@@ -512,3 +512,44 @@ fn sandbox_runs_every_subcommand_through_isolation() -> Result<(), Box<dyn std::
     }
     Ok(())
 }
+
+#[test]
+fn max_document_bytes_override_enforces_limit_and_allows_increase()
+-> Result<(), Box<dyn std::error::Error>> {
+    let doc_path = fixture("sample_headings.docx");
+    let doc_str = doc_path.to_str().ok_or("invalid path")?;
+
+    let too_small = docsight()
+        .args(["inspect", doc_str, "--max-document-bytes", "100", "--json"])
+        .output()?;
+    assert_eq!(too_small.status.code(), Some(13));
+    let stderr_small = String::from_utf8_lossy(&too_small.stderr);
+    assert!(stderr_small.contains("RESOURCE_LIMIT"));
+
+    let large_enough = docsight()
+        .args([
+            "inspect",
+            doc_str,
+            "--max-document-bytes",
+            "100kb",
+            "--json",
+        ])
+        .output()?;
+    assert!(
+        large_enough.status.success(),
+        "expected success: {}",
+        String::from_utf8_lossy(&large_enough.stderr)
+    );
+
+    let invalid_format = docsight()
+        .args(["inspect", doc_str, "--max-document-bytes", "invalid"])
+        .output()?;
+    assert_eq!(invalid_format.status.code(), Some(2));
+
+    let zero_budget = docsight()
+        .args(["inspect", doc_str, "--max-document-bytes", "0"])
+        .output()?;
+    assert_eq!(zero_budget.status.code(), Some(2));
+
+    Ok(())
+}
