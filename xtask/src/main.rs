@@ -10,6 +10,10 @@ use std::fmt::Write as FmtWrite;
 use std::io::{self, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zip::ZipWriter;
@@ -24,6 +28,9 @@ const DEFAULT_ITERATIONS: u32 = 3;
 #[derive(Clone, Copy)]
 enum FixtureKind {
     SampleDocx,
+    SampleTablesDocx,
+    SyntheticTablePdf,
+    UnsupportedBin,
     SpecificationDocx,
     GeneratedDocx { blocks: usize },
     GeneratedPdf { pages: usize },
@@ -205,7 +212,14 @@ fn main() -> ExitCode {
 fn run() -> TaskResult<()> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
-        Some("benchmark") => run_benchmark_command(arguments.collect()),
+        Some("benchmark") => {
+            let rest: Vec<String> = arguments.collect();
+            if rest.first().is_some_and(|command| command == "operations") {
+                run_operation_command(rest[1..].to_vec())
+            } else {
+                run_benchmark_command(rest)
+            }
+        }
         Some("__benchmark-worker") => {
             let path = arguments
                 .next()
@@ -371,6 +385,9 @@ fn prepare_fixtures() -> TaskResult<PreparedFixtures> {
     for scenario in SCENARIOS {
         let path = match scenario.fixture {
             FixtureKind::SampleDocx => root.join("fixtures/validation/sample_headings.docx"),
+            FixtureKind::SampleTablesDocx => root.join("fixtures/validation/sample_tables.docx"),
+            FixtureKind::SyntheticTablePdf => root.join("fixtures/validation/synthetic_table.pdf"),
+            FixtureKind::UnsupportedBin => root.join("fixtures/validation/unsupported.bin"),
             FixtureKind::SpecificationDocx => root.join("Projeto_DOCSIGHT_Especificacao.docx"),
             FixtureKind::GeneratedDocx { blocks } => {
                 let path = directory.path().join(format!("{blocks}-blocks.docx"));
@@ -739,6 +756,269 @@ fn check_minimum(
     }
 }
 
+const OP_REPORT_SCHEMA: &str = "docsight.operation-report/v1";
+const OP_BUDGET_SCHEMA: &str = "docsight.operation-budgets/v1";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpExpectation {
+    Success,
+    TypedError { exit: i64, code: &'static str },
+}
+
+#[derive(Clone, Copy)]
+struct OperationDefinition {
+    name: &'static str,
+    fixture: FixtureKind,
+    reference: Option<FixtureKind>,
+    cacheable: bool,
+    artifact: bool,
+    expectation: OpExpectation,
+    template: &'static [&'static str],
+}
+
+const OPERATIONS: &[OperationDefinition] = &[
+    OperationDefinition {
+        name: "inspect_tables",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["inspect", "{DOC}", "--budget", "16kb"],
+    },
+    OperationDefinition {
+        name: "text_tables",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["text", "{DOC}", "--max-items", "20", "--text-limit", "2000"],
+    },
+    OperationDefinition {
+        name: "tables_list",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["tables", "{DOC}", "--budget", "8kb"],
+    },
+    OperationDefinition {
+        name: "outline_headings",
+        fixture: FixtureKind::SampleDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["outline", "{DOC}"],
+    },
+    OperationDefinition {
+        name: "overview_headings",
+        fixture: FixtureKind::SampleDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["overview", "{DOC}", "--max-items", "20"],
+    },
+    OperationDefinition {
+        name: "coverage_tables",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["coverage", "{DOC}"],
+    },
+    OperationDefinition {
+        name: "resolve_table",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &[
+            "resolve", "{DOC}", "--text", "Col 1", "--kind", "table", "--budget", "4kb",
+        ],
+    },
+    OperationDefinition {
+        name: "context_table",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &[
+            "context",
+            "{DOC}",
+            "tbl_6c22c8dd17adf7e32604b29241d9ab99",
+            "--include",
+            "content",
+        ],
+    },
+    OperationDefinition {
+        name: "evidence_table",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["evidence", "{DOC}", "tbl_6c22c8dd17adf7e32604b29241d9ab99"],
+    },
+    OperationDefinition {
+        name: "peek_headings",
+        fixture: FixtureKind::SampleDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["peek", "{DOC}", "--page", "1"],
+    },
+    OperationDefinition {
+        name: "focus_headings",
+        fixture: FixtureKind::SampleDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["focus", "{DOC}", "--pages", "1..1", "--max-items", "20"],
+    },
+    OperationDefinition {
+        name: "page_tables",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["page", "{DOC}", "1"],
+    },
+    OperationDefinition {
+        name: "hit_headings",
+        fixture: FixtureKind::SampleDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["hit", "{DOC}", "--page", "1", "--point", "100,80"],
+    },
+    OperationDefinition {
+        name: "fingerprint_tables",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: false,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["fingerprint", "{DOC}"],
+    },
+    OperationDefinition {
+        name: "inspect_pdf",
+        fixture: FixtureKind::SyntheticTablePdf,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["inspect", "{DOC}", "--budget", "8kb"],
+    },
+    OperationDefinition {
+        name: "text_pdf",
+        fixture: FixtureKind::SyntheticTablePdf,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["text", "{DOC}", "--max-items", "10", "--text-limit", "1000"],
+    },
+    OperationDefinition {
+        name: "find_pdf",
+        fixture: FixtureKind::SyntheticTablePdf,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["find", "{DOC}", "EVENT"],
+    },
+    OperationDefinition {
+        name: "tables_pdf",
+        fixture: FixtureKind::SyntheticTablePdf,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["tables", "{DOC}", "--budget", "8kb"],
+    },
+    OperationDefinition {
+        name: "evidence_pdf",
+        fixture: FixtureKind::SyntheticTablePdf,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["evidence", "{DOC}", "cell_a1932a3e62fdc00c3e9528c5b008b5bc"],
+    },
+    OperationDefinition {
+        name: "inspect_medium",
+        fixture: FixtureKind::SpecificationDocx,
+        reference: None,
+        cacheable: true,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["inspect", "{DOC}", "--budget", "32kb"],
+    },
+    OperationDefinition {
+        name: "diff_pair",
+        fixture: FixtureKind::SampleDocx,
+        reference: Some(FixtureKind::SampleTablesDocx),
+        cacheable: false,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["diff", "{DOC}", "{REF}"],
+    },
+    OperationDefinition {
+        name: "diff_self",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: false,
+        artifact: false,
+        expectation: OpExpectation::Success,
+        template: &["diff", "{DOC}", "{DOC}"],
+    },
+    OperationDefinition {
+        name: "render_tables",
+        fixture: FixtureKind::SampleTablesDocx,
+        reference: None,
+        cacheable: false,
+        artifact: true,
+        expectation: OpExpectation::Success,
+        template: &[
+            "render", "{DOC}", "--page", "1", "--dpi", "36", "--out", "{OUT}",
+        ],
+    },
+    OperationDefinition {
+        name: "render_pdf",
+        fixture: FixtureKind::SyntheticTablePdf,
+        reference: None,
+        cacheable: false,
+        artifact: true,
+        expectation: OpExpectation::Success,
+        template: &[
+            "render", "{DOC}", "--page", "1", "--dpi", "36", "--out", "{OUT}",
+        ],
+    },
+    OperationDefinition {
+        name: "inspect_invalid",
+        fixture: FixtureKind::UnsupportedBin,
+        reference: None,
+        cacheable: false,
+        artifact: false,
+        expectation: OpExpectation::TypedError {
+            exit: 10,
+            code: "UNSUPPORTED_FORMAT",
+        },
+        template: &["inspect", "{DOC}"],
+    },
+];
+
 fn check_maximum(
     violations: &mut Vec<String>,
     scenario: &str,
@@ -751,6 +1031,631 @@ fn check_maximum(
             "{scenario}.{metric} was {actual:.3}, maximum is {maximum:.3}"
         ));
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperationBudgets {
+    schema: String,
+    reference: ReferenceEnvironment,
+    iterations: u32,
+    operations: Vec<OperationBudget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperationBudget {
+    name: String,
+    document: String,
+    mode: String,
+    max_wall_ms: Option<f64>,
+    max_stdout_bytes: Option<u64>,
+    max_peak_memory_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct OperationSample {
+    operation: String,
+    document: String,
+    document_bytes: u64,
+    mode: String,
+    wall_ms: f64,
+    stdout_bytes: u64,
+    stdout_sha256: String,
+    stderr_sha256: String,
+    exit_code: i64,
+    peak_memory_bytes: Option<u64>,
+    artifact_sha256: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OperationReport {
+    schema: &'static str,
+    engine: &'static str,
+    host: HostEnvironment,
+    iterations: u32,
+    operations: Vec<OperationSample>,
+}
+
+fn operation_fixture_path(root: &Path, kind: FixtureKind) -> TaskResult<PathBuf> {
+    let path = match kind {
+        FixtureKind::SampleDocx => root.join("fixtures/validation/sample_headings.docx"),
+        FixtureKind::SampleTablesDocx => root.join("fixtures/validation/sample_tables.docx"),
+        FixtureKind::SyntheticTablePdf => root.join("fixtures/validation/synthetic_table.pdf"),
+        FixtureKind::UnsupportedBin => root.join("fixtures/validation/unsupported.bin"),
+        FixtureKind::SpecificationDocx => root.join("Projeto_DOCSIGHT_Especificacao.docx"),
+        FixtureKind::GeneratedDocx { .. }
+        | FixtureKind::GeneratedPdf { .. }
+        | FixtureKind::LargeImagePdf { .. } => {
+            return Err(failure("operation matrix uses checked-in fixtures only"));
+        }
+    };
+    if !path.is_file() {
+        return Err(failure(format!(
+            "operation fixture does not exist: {}",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+fn docsight_binary() -> TaskResult<PathBuf> {
+    let directory = std::env::current_exe()?
+        .parent()
+        .ok_or_else(|| failure("benchmark runner has no binary directory"))?
+        .to_path_buf();
+    let name = if cfg!(windows) {
+        "docsight.exe"
+    } else {
+        "docsight"
+    };
+    let binary = directory.join(name);
+    if !binary.is_file() {
+        return Err(failure(format!(
+            "docsight binary is missing next to the benchmark runner: {}",
+            binary.display()
+        )));
+    }
+    Ok(binary)
+}
+
+fn resolve_operation_args(
+    definition: &OperationDefinition,
+    document: &Path,
+    reference: Option<&Path>,
+    output: Option<&Path>,
+    cache: Option<&Path>,
+) -> TaskResult<Vec<String>> {
+    let mut args = Vec::with_capacity(definition.template.len() + 2);
+    args.push("--agent".to_owned());
+    for token in definition.template {
+        let mut rendered = token.to_string();
+        if rendered.contains("{DOC}") {
+            rendered = rendered.replace(
+                "{DOC}",
+                document
+                    .to_str()
+                    .ok_or_else(|| failure("operation document path is not UTF-8"))?,
+            );
+        }
+        if rendered.contains("{REF}") {
+            let reference = reference
+                .and_then(|path| path.to_str())
+                .ok_or_else(|| failure("operation reference is unavailable"))?;
+            rendered = rendered.replace("{REF}", reference);
+        }
+        if rendered.contains("{OUT}") {
+            let output = output
+                .and_then(|path| path.to_str())
+                .ok_or_else(|| failure("operation output path is unavailable"))?;
+            rendered = rendered.replace("{OUT}", output);
+        }
+        if rendered.contains("{CACHE}") {
+            let cache = cache
+                .and_then(|path| path.to_str())
+                .ok_or_else(|| failure("operation cache directory is unavailable"))?;
+            rendered = rendered.replace("{CACHE}", cache);
+        }
+        if rendered.contains('{') {
+            return Err(failure(format!(
+                "operation {} has an unresolved placeholder",
+                definition.name
+            )));
+        }
+        args.push(rendered);
+    }
+    if cache.is_some() {
+        args.push("--cache-dir".to_owned());
+        args.push(
+            cache
+                .and_then(|path| path.to_str())
+                .ok_or_else(|| failure("operation cache directory is unavailable"))?
+                .to_owned(),
+        );
+    }
+    Ok(args)
+}
+
+struct ProcessSample {
+    wall_ns: u64,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_code: i64,
+    peak_memory_bytes: Option<u64>,
+}
+
+fn spawn_operation(binary: &Path, args: &[String], work: &Path) -> TaskResult<ProcessSample> {
+    let started = Instant::now();
+    let child = Command::new(binary)
+        .args(args)
+        .current_dir(work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let child_id = child.id();
+    let done = Arc::new(AtomicBool::new(false));
+    let sampler_done = Arc::clone(&done);
+    let sampler = std::thread::spawn(move || {
+        let mut peak_memory_bytes = 0;
+        while !sampler_done.load(Ordering::Relaxed) {
+            if let Ok(peak) = read_peak_memory(child_id) {
+                peak_memory_bytes = peak_memory_bytes.max(peak);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        peak_memory_bytes
+    });
+    let output = child.wait_with_output()?;
+    done.store(true, Ordering::Relaxed);
+    let peak_memory_bytes = sampler
+        .join()
+        .map_err(|_| failure("peak-memory sampler did not complete"))?;
+    let memory_measured = peak_memory_bytes > 0;
+    let wall_ns = duration_ns(started.elapsed())?;
+    let exit_code = output
+        .status
+        .code()
+        .ok_or_else(|| failure("operation process has no exit code"))? as i64;
+    Ok(ProcessSample {
+        wall_ns,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code,
+        peak_memory_bytes: memory_measured.then_some(peak_memory_bytes),
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+struct MeasureInputs<'a> {
+    binary: &'a Path,
+    definition: &'static OperationDefinition,
+    document: &'a Path,
+    reference: Option<&'a Path>,
+    work: &'a Path,
+    cache: Option<&'a Path>,
+    mode: &'static str,
+    iterations: u32,
+}
+
+fn measure_operation(inputs: &MeasureInputs<'_>) -> TaskResult<Vec<OperationSample>> {
+    let MeasureInputs {
+        binary,
+        definition,
+        document,
+        reference,
+        work,
+        cache,
+        mode,
+        iterations,
+    } = inputs;
+    let document_bytes = std::fs::metadata(document)?.len();
+    let mut samples = Vec::new();
+    for _iteration in 0..*iterations {
+        let output = if definition.artifact {
+            Some(work.join(format!("{}-{mode}.png", definition.name)))
+        } else {
+            None
+        };
+        let args =
+            resolve_operation_args(definition, document, *reference, output.as_deref(), *cache)?;
+        let sample = spawn_operation(binary, &args, work)?;
+        if let OpExpectation::TypedError { code, .. } = definition.expectation {
+            let envelope: serde_json::Value = serde_json::from_slice(&sample.stderr)?;
+            let actual = envelope
+                .pointer("/error/code")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| {
+                    failure(format!(
+                        "operation {} error envelope misses its code",
+                        definition.name
+                    ))
+                })?;
+            if actual != code {
+                return Err(failure(format!(
+                    "operation {} reported {actual} instead of {code}",
+                    definition.name
+                )));
+            }
+        }
+        let artifact_sha256 = output
+            .as_deref()
+            .map(std::fs::read)
+            .transpose()?
+            .as_deref()
+            .map(sha256_hex);
+        samples.push((sample, artifact_sha256));
+    }
+    let mut reports = Vec::with_capacity(samples.len());
+    for (sample, artifact_sha256) in &samples {
+        reports.push(OperationSample {
+            operation: definition.name.to_owned(),
+            document: document
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| failure("operation document has no file name"))?
+                .to_owned(),
+            document_bytes,
+            mode: (*mode).to_owned(),
+            wall_ms: milliseconds(sample.wall_ns),
+            stdout_bytes: u64::try_from(sample.stdout.len())?,
+            stdout_sha256: sha256_hex(&sample.stdout),
+            stderr_sha256: sha256_hex(&sample.stderr),
+            exit_code: sample.exit_code,
+            peak_memory_bytes: sample.peak_memory_bytes,
+            artifact_sha256: artifact_sha256.clone(),
+        });
+    }
+    Ok(reports)
+}
+
+fn check_operation_samples(
+    definition: &OperationDefinition,
+    mode: &str,
+    samples: &[OperationSample],
+) -> TaskResult<()> {
+    let expected_exit = match definition.expectation {
+        OpExpectation::Success => 0,
+        OpExpectation::TypedError { exit, .. } => exit,
+    };
+    let first = samples
+        .first()
+        .ok_or_else(|| failure(format!("operation {} produced no samples", definition.name)))?;
+    if first.exit_code != expected_exit {
+        return Err(failure(format!(
+            "operation {} in {mode} mode exited {}",
+            definition.name, first.exit_code
+        )));
+    }
+    for sample in &samples[1..] {
+        if sample.exit_code != expected_exit
+            || sample.stdout_sha256 != first.stdout_sha256
+            || sample.stderr_sha256 != first.stderr_sha256
+            || sample.artifact_sha256 != first.artifact_sha256
+        {
+            return Err(failure(format!(
+                "operation {} in {mode} mode is not deterministic",
+                definition.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_operation_budgets(budgets: &OperationBudgets) -> TaskResult<()> {
+    if budgets.schema != OP_BUDGET_SCHEMA {
+        return Err(failure(format!(
+            "unexpected operation budget schema: {}",
+            budgets.schema
+        )));
+    }
+    if budgets.iterations < 2 {
+        return Err(failure(
+            "operation budgets need at least two iterations for warm runs",
+        ));
+    }
+    let expected = OPERATIONS
+        .iter()
+        .flat_map(|operation| {
+            let mut modes = vec![format!("{}:cold", operation.name)];
+            if operation.cacheable {
+                modes.push(format!("{}:warm", operation.name));
+            }
+            modes
+        })
+        .collect::<BTreeSet<_>>();
+    let actual = budgets
+        .operations
+        .iter()
+        .map(|entry| format!("{}:{}", entry.name, entry.mode))
+        .collect::<BTreeSet<_>>();
+    if expected != actual || actual.len() != budgets.operations.len() {
+        return Err(failure(
+            "operation budgets must contain every operation mode exactly once",
+        ));
+    }
+    for entry in &budgets.operations {
+        if entry.mode != "cold" && entry.mode != "warm" {
+            return Err(failure(format!(
+                "operation budget mode must be cold or warm: {}",
+                entry.name
+            )));
+        }
+        if entry
+            .max_wall_ms
+            .is_some_and(|limit| !limit.is_finite() || limit <= 0.0)
+        {
+            return Err(failure(format!(
+                "operation wall budget must be positive: {}",
+                entry.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn operation_violations(
+    report: &OperationReport,
+    budgets: &OperationBudgets,
+) -> TaskResult<Vec<String>> {
+    let host_matches = report.host.os == budgets.reference.os
+        && report.host.architecture == budgets.reference.architecture;
+    let mut indexed: BTreeMap<(&str, &str), &OperationSample> = BTreeMap::new();
+    for sample in &report.operations {
+        if indexed
+            .insert((sample.operation.as_str(), sample.mode.as_str()), sample)
+            .is_some()
+        {
+            return Err(failure(format!(
+                "duplicate operation report: {}:{}",
+                sample.operation, sample.mode
+            )));
+        }
+    }
+    let mut violations = Vec::new();
+    for entry in &budgets.operations {
+        let sample = indexed
+            .get(&(entry.name.as_str(), entry.mode.as_str()))
+            .ok_or_else(|| failure(format!("missing operation report: {}", entry.name)))?;
+        if sample.document != entry.document {
+            return Err(failure(format!(
+                "operation {} ran on {} instead of {}",
+                entry.name, sample.document, entry.document
+            )));
+        }
+        if let Some(maximum) = entry.max_stdout_bytes {
+            check_maximum(
+                &mut violations,
+                &format!("{}:{}", entry.name, entry.mode),
+                "stdout_bytes",
+                sample.stdout_bytes as f64,
+                maximum as f64,
+            );
+        }
+        if host_matches {
+            if let Some(maximum) = entry.max_wall_ms {
+                check_maximum(
+                    &mut violations,
+                    &format!("{}:{}", entry.name, entry.mode),
+                    "wall_ms",
+                    sample.wall_ms,
+                    maximum,
+                );
+            }
+            if let (Some(actual), Some(maximum)) =
+                (sample.peak_memory_bytes, entry.max_peak_memory_bytes)
+            {
+                check_maximum(
+                    &mut violations,
+                    &format!("{}:{}", entry.name, entry.mode),
+                    "peak_memory_bytes",
+                    actual as f64,
+                    maximum as f64,
+                );
+            }
+        }
+    }
+    Ok(violations)
+}
+
+fn run_operation_command(arguments: Vec<String>) -> TaskResult<()> {
+    let mut check = false;
+    let mut budgets_path = PathBuf::from("benchmarks/ds18-operations.json");
+    let mut output_path = None;
+    let mut iterations_override = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--check" => check = true,
+            "--budgets" => {
+                index += 1;
+                budgets_path = PathBuf::from(
+                    arguments
+                        .get(index)
+                        .ok_or_else(|| failure("--budgets requires a path"))?,
+                );
+            }
+            "--output" => {
+                index += 1;
+                output_path = Some(PathBuf::from(
+                    arguments
+                        .get(index)
+                        .ok_or_else(|| failure("--output requires a path"))?,
+                ));
+            }
+            "--iterations" => {
+                index += 1;
+                iterations_override = Some(
+                    arguments
+                        .get(index)
+                        .ok_or_else(|| failure("--iterations requires a value"))?
+                        .parse::<u32>()
+                        .map_err(|_| failure("--iterations must be a positive integer"))?,
+                );
+            }
+            argument => {
+                return Err(failure(format!("unknown operations argument: {argument}")));
+            }
+        }
+        index += 1;
+    }
+    let budgets = read_operation_budgets(&budgets_path)?;
+    validate_operation_budgets(&budgets)?;
+    let iterations = iterations_override.unwrap_or(budgets.iterations);
+    if iterations < 2 {
+        return Err(failure(
+            "operation measurement needs at least two iterations",
+        ));
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| failure("xtask has no workspace parent"))?
+        .to_path_buf();
+    let binary = docsight_binary()?;
+    let work = tempfile::tempdir()?;
+    let cache_root = tempfile::tempdir()?;
+    let mut samples = Vec::new();
+    let total = OPERATIONS.len();
+    for (index, definition) in OPERATIONS.iter().enumerate() {
+        eprintln!(
+            "benchmark operations: {}/{} {}",
+            index + 1,
+            total,
+            definition.name
+        );
+        let document = operation_fixture_path(&root, definition.fixture)?;
+        let reference = definition
+            .reference
+            .map(|kind| operation_fixture_path(&root, kind))
+            .transpose()?;
+        let cold = measure_operation(&MeasureInputs {
+            binary: &binary,
+            definition,
+            document: &document,
+            reference: reference.as_deref(),
+            work: work.path(),
+            cache: None,
+            mode: "cold",
+            iterations,
+        })?;
+        check_operation_samples(definition, "cold", &cold)?;
+        samples.push(collapse_operation(&cold, false)?);
+        if definition.cacheable {
+            let cache = cache_root.path().join(definition.name);
+            std::fs::create_dir_all(&cache)?;
+            let warm = measure_operation(&MeasureInputs {
+                binary: &binary,
+                definition,
+                document: &document,
+                reference: reference.as_deref(),
+                work: work.path(),
+                cache: Some(&cache),
+                mode: "warm",
+                iterations,
+            })?;
+            check_operation_samples(definition, "warm", &warm)?;
+            let cold_sample = samples
+                .iter()
+                .find(|sample| sample.operation == definition.name && sample.mode == "cold")
+                .ok_or_else(|| failure(format!("missing cold report: {}", definition.name)))?;
+            for sample in &warm {
+                if sample.stdout_sha256 != cold_sample.stdout_sha256 {
+                    return Err(failure(format!(
+                        "operation {} warm output differs from cold output",
+                        definition.name
+                    )));
+                }
+            }
+            samples.push(collapse_operation(&warm, true)?);
+        }
+    }
+    let report = OperationReport {
+        schema: OP_REPORT_SCHEMA,
+        engine: env!("CARGO_PKG_VERSION"),
+        host: HostEnvironment {
+            os: std::env::consts::OS,
+            architecture: std::env::consts::ARCH,
+            profile: "release",
+        },
+        iterations,
+        operations: samples,
+    };
+    let encoded = serde_json::to_vec_pretty(&report)?;
+    if let Some(path) = output_path {
+        std::fs::write(path, &encoded)?;
+    }
+    io::stdout().lock().write_all(&encoded)?;
+    io::stdout().lock().write_all(b"\n")?;
+    if check {
+        let violations = operation_violations(&report, &budgets)?;
+        if !violations.is_empty() {
+            return Err(failure(format!(
+                "operation budget violations:\n{}",
+                violations.join("\n")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn collapse_operation(
+    samples: &[OperationSample],
+    skip_first: bool,
+) -> TaskResult<OperationSample> {
+    let window = if skip_first { &samples[1..] } else { samples };
+    let first = samples
+        .first()
+        .ok_or_else(|| failure("operation produced no samples"))?;
+    if skip_first && window.is_empty() {
+        return Err(failure(
+            "warm operation needs iterations beyond its cache miss",
+        ));
+    }
+    let mut walls: Vec<u64> = window
+        .iter()
+        .map(|sample| {
+            u64::try_from((sample.wall_ms * 1_000_000.0).round() as i64)
+                .map_err(|_| failure("operation wall time overflow"))
+        })
+        .collect::<TaskResult<_>>()?;
+    walls.sort_unstable();
+    let wall_ms = walls[walls.len() / 2] as f64 / 1_000_000.0;
+    let mut peak_memory_bytes = None;
+    for sample in window {
+        match (peak_memory_bytes, sample.peak_memory_bytes) {
+            (None, None) => {}
+            (None, Some(peak)) => peak_memory_bytes = Some(peak),
+            (Some(seen), Some(peak)) => peak_memory_bytes = Some(seen.max(peak)),
+            _ => {
+                return Err(failure("operation peak-memory measurement was not stable"));
+            }
+        }
+    }
+    Ok(OperationSample {
+        operation: first.operation.clone(),
+        document: first.document.clone(),
+        document_bytes: first.document_bytes,
+        mode: first.mode.clone(),
+        wall_ms,
+        stdout_bytes: first.stdout_bytes,
+        stdout_sha256: first.stdout_sha256.clone(),
+        stderr_sha256: first.stderr_sha256.clone(),
+        exit_code: first.exit_code,
+        peak_memory_bytes,
+        artifact_sha256: first.artifact_sha256.clone(),
+    })
+}
+
+fn read_operation_budgets(path: &Path) -> TaskResult<OperationBudgets> {
+    let bytes = std::fs::read(path)?;
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 fn build_docx(blocks: usize) -> TaskResult<Vec<u8>> {
@@ -911,8 +1816,9 @@ fn failure(message: impl Into<String>) -> Box<dyn Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUDGET_SCHEMA, PerformanceBudgets, SCENARIOS, build_docx, build_multipage_pdf,
-        validate_budgets,
+        BUDGET_SCHEMA, OP_BUDGET_SCHEMA, OPERATIONS, OperationBudgets, PerformanceBudgets,
+        SCENARIOS, build_docx, build_multipage_pdf, resolve_operation_args, validate_budgets,
+        validate_operation_budgets,
     };
     use docsight_core::DocumentSource;
     use docsight_ooxml::parse_docx;
@@ -936,6 +1842,113 @@ mod tests {
         let source = DocumentSource::from_bytes(build_docx(5_000)?)?;
         assert_eq!(parse_docx(&source)?.blocks.len(), 5_000);
 
+        Ok(())
+    }
+
+    fn operation_entry_count() -> usize {
+        OPERATIONS
+            .iter()
+            .map(|operation| usize::from(operation.cacheable) + 1)
+            .sum()
+    }
+
+    #[test]
+    fn operation_budgets_cover_every_entry() -> Result<(), Box<dyn std::error::Error>> {
+        let budgets: OperationBudgets =
+            serde_json::from_str(include_str!("../../benchmarks/ds18-operations.json"))?;
+        assert_eq!(budgets.schema, OP_BUDGET_SCHEMA);
+        validate_operation_budgets(&budgets)?;
+        assert_eq!(budgets.operations.len(), operation_entry_count());
+        Ok(())
+    }
+
+    #[test]
+    fn operation_budgets_reject_unknown_and_duplicate_entries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let template = serde_json::from_str::<OperationBudgets>(include_str!(
+            "../../benchmarks/ds18-operations.json"
+        ))?;
+        let mut unknown = template
+            .operations
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "name": entry.name,
+                    "document": entry.document,
+                    "mode": entry.mode,
+                    "max_wall_ms": entry.max_wall_ms,
+                    "max_stdout_bytes": entry.max_stdout_bytes,
+                    "max_peak_memory_bytes": entry.max_peak_memory_bytes,
+                })
+            })
+            .collect::<Vec<_>>();
+        unknown.push(serde_json::json!({
+            "name": "vaporize",
+            "document": "sample_tables.docx",
+            "mode": "cold",
+            "max_wall_ms": 1.0,
+            "max_stdout_bytes": 1,
+            "max_peak_memory_bytes": null,
+        }));
+        let unknown = serde_json::json!({
+            "schema": OP_BUDGET_SCHEMA,
+            "reference": {"os": "linux", "architecture": "x86_64", "profile": "release", "rust": "1.96.0"},
+            "iterations": 3,
+            "operations": unknown,
+        });
+        let unknown: OperationBudgets = serde_json::from_value(unknown)?;
+        assert!(validate_operation_budgets(&unknown).is_err());
+        let mut duplicate = template
+            .operations
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "name": entry.name,
+                    "document": entry.document,
+                    "mode": entry.mode,
+                    "max_wall_ms": entry.max_wall_ms,
+                    "max_stdout_bytes": entry.max_stdout_bytes,
+                    "max_peak_memory_bytes": entry.max_peak_memory_bytes,
+                })
+            })
+            .collect::<Vec<_>>();
+        duplicate.push(duplicate[0].clone());
+        let duplicate = serde_json::json!({
+            "schema": OP_BUDGET_SCHEMA,
+            "reference": {"os": "linux", "architecture": "x86_64", "profile": "release", "rust": "1.96.0"},
+            "iterations": 3,
+            "operations": duplicate,
+        });
+        let duplicate: OperationBudgets = serde_json::from_value(duplicate)?;
+        assert!(validate_operation_budgets(&duplicate).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn operation_templates_resolve_placeholders_deterministically()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::path::Path;
+        let diff = OPERATIONS
+            .iter()
+            .find(|operation| operation.name == "diff_pair")
+            .ok_or("diff_pair is missing")?;
+        let first = resolve_operation_args(
+            diff,
+            Path::new("a.docx"),
+            Some(Path::new("b.docx")),
+            None,
+            None,
+        )?;
+        let second = resolve_operation_args(
+            diff,
+            Path::new("a.docx"),
+            Some(Path::new("b.docx")),
+            None,
+            None,
+        )?;
+        assert_eq!(first, second);
+        assert_eq!(first[1], "diff");
+        assert!(resolve_operation_args(diff, Path::new("a.docx"), None, None, None).is_err());
         Ok(())
     }
 }
