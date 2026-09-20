@@ -1,6 +1,6 @@
 use crate::tooling::common::*;
 use crate::tooling::process::NativeRunner;
-use crate::{architecture, beta, corpus, quality, readiness, release, smoke, validation};
+use crate::{architecture, beta, corpus, quality, readiness, release, smoke, task, validation};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::json;
@@ -64,6 +64,10 @@ enum Command {
     Validate {
         #[arg(long)]
         out: PathBuf,
+    },
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
     },
     Readiness {
         #[arg(long)]
@@ -222,6 +226,20 @@ enum BetaCommand {
         directory: PathBuf,
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaskCommand {
+    Run {
+        #[arg(long)]
+        scenario: PathBuf,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        engine: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -429,6 +447,42 @@ pub fn execute(cli: Cli) -> Result<bool> {
             }
         },
         Command::Quality { command } => return quality_command(command, &root),
+        Command::Task { command } => match command {
+            TaskCommand::Run {
+                scenario,
+                root: documents,
+                engine,
+                out,
+            } => {
+                let canonical;
+                let root = if let Some(relative) = documents {
+                    let joined = std::env::current_dir()
+                        .map_err(|_| {
+                            crate::tooling::common::ToolError::new(
+                                "INVALID_ROOT",
+                                "Task document root is unavailable",
+                            )
+                        })?
+                        .join(&relative);
+                    canonical = fs::canonicalize(&joined).map_err(|_| {
+                        crate::tooling::common::ToolError::new(
+                            "INVALID_ROOT",
+                            "Task document root is unavailable",
+                        )
+                    })?;
+                    &canonical
+                } else {
+                    &root
+                };
+                let receipt = task::run(&task::RunOptions {
+                    scenario: &scenario,
+                    root,
+                    engine: &engine,
+                })?;
+                emit(&receipt, Some(&out))?;
+                return Ok(receipt.passed);
+            }
+        },
         Command::Validate { out } => {
             let report = validation::run(&out, &root)?;
             emit(&report, None)?;
