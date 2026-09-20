@@ -118,6 +118,14 @@ struct Cli {
     #[arg(
         long,
         global = true,
+        value_name = "PASSWORD",
+        help = "Supply the PDF password directly"
+    )]
+    password: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
         value_name = "PATH",
         help = "Reuse parsed document IR from an opt-in content-addressed cache directory"
     )]
@@ -1188,6 +1196,26 @@ fn read_pdf_password(path: &Path) -> Result<PdfPassword, DocsightError> {
     Ok(password)
 }
 
+fn parse_direct_password(secret: &str) -> Result<PdfPassword, DocsightError> {
+    if secret.is_empty() {
+        return Err(DocsightError::InvalidArgument {
+            message: "PDF password must not be empty".to_owned(),
+        });
+    }
+    if secret.contains('\n') || secret.contains('\r') {
+        return Err(DocsightError::InvalidArgument {
+            message: "PDF password must contain exactly one line".to_owned(),
+        });
+    }
+    if secret.len() > MAX_PDF_PASSWORD_BYTES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "PDF password bytes".to_owned(),
+            limit: MAX_PDF_PASSWORD_BYTES as u64,
+        });
+    }
+    Ok(PdfPassword(secret.as_bytes().to_vec()))
+}
+
 fn main() -> ExitCode {
     let agent_mode = std::env::args().any(|argument| argument == "--agent");
     let sandbox_json_errors =
@@ -1407,6 +1435,17 @@ fn validate_cache_arguments(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
+    if cli.password.is_some() {
+        return Err(DocsightError::InvalidArgument {
+            message: "--cache-dir cannot be combined with --password because decrypted document content is never persisted"
+                .to_owned(),
+        });
+    }
+    if cli.password.is_some() && cli.password_file.is_some() {
+        return Err(DocsightError::InvalidArgument {
+            message: "cannot combine --password and --password-file".to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -1434,6 +1473,11 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
+    if cli.password.is_some() && cli.password_file.is_some() {
+        return Err(DocsightError::InvalidArgument {
+            message: "cannot combine --password and --password-file".to_owned(),
+        });
+    }
     if cli.password_file.is_some()
         && matches!(
             cli.command,
@@ -1448,11 +1492,27 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
-    let password_storage = cli
-        .password_file
-        .as_deref()
-        .map(read_pdf_password)
-        .transpose()?;
+    if cli.password.is_some()
+        && matches!(
+            cli.command,
+            Command::Capabilities { .. }
+                | Command::Completions { .. }
+                | Command::Fingerprint { .. }
+                | Command::Cache { .. }
+        )
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: "--password applies only to operations that decrypt PDF content".to_owned(),
+        });
+    }
+    let password_storage = if let Some(secret) = &cli.password {
+        Some(parse_direct_password(secret)?)
+    } else {
+        cli.password_file
+            .as_deref()
+            .map(read_pdf_password)
+            .transpose()?
+    };
     let password = password_storage
         .as_ref()
         .map(PdfPassword::as_bytes)
@@ -3259,10 +3319,17 @@ struct BundleArgs<'a> {
 fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
     let target = match (args.page, args.bbox, args.object) {
         (Some(page), Some(bbox), None) => RenderTarget::Region { page, bbox },
+        (Some(page), None, None) => RenderTarget::Page { page },
         (None, None, Some(id)) => RenderTarget::Object { id: id.to_owned() },
+        (None, None, None) => RenderTarget::Page { page: 1 },
+        (None, Some(_), None) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "--bbox requires --page for bundle".to_owned(),
+            });
+        }
         _ => {
             return Err(DocsightError::InvalidArgument {
-                message: "bundle requires either --page with --bbox or only --object".to_owned(),
+                message: "cannot combine --object with --page or --bbox for bundle".to_owned(),
             });
         }
     };
