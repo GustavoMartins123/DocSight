@@ -1,4 +1,5 @@
 mod cache;
+pub(crate) mod mcp;
 
 use cache::{CacheAction, CacheSettings, DocumentLoader, Reporting};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -487,6 +488,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = SUMMARY_MCP)]
+    Mcp,
 }
 
 #[derive(Debug, Subcommand)]
@@ -713,24 +716,24 @@ impl InspectCapabilityDetails {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct InspectResult {
-    format: DocumentFormat,
-    size_bytes: u64,
-    capabilities: InspectCapabilities,
-    source_faithful: InspectCapabilities,
-    capability_details: InspectCapabilityDetails,
-    blocks_by_kind: BTreeMap<&'static str, usize>,
-    paragraphs: Option<usize>,
-    headings: Option<usize>,
-    tables: Option<usize>,
+pub(crate) struct InspectResult {
+    pub(crate) format: DocumentFormat,
+    pub(crate) size_bytes: u64,
+    pub(crate) capabilities: InspectCapabilities,
+    pub(crate) source_faithful: InspectCapabilities,
+    pub(crate) capability_details: InspectCapabilityDetails,
+    pub(crate) blocks_by_kind: BTreeMap<&'static str, usize>,
+    pub(crate) paragraphs: Option<usize>,
+    pub(crate) headings: Option<usize>,
+    pub(crate) tables: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    figures: Option<usize>,
+    pub(crate) figures: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    comments: Option<usize>,
+    pub(crate) comments: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tracked: Option<docsight_core::TrackedChanges>,
-    pages: Option<u32>,
-    engine: Option<&'static str>,
+    pub(crate) tracked: Option<docsight_core::TrackedChanges>,
+    pub(crate) pages: Option<u32>,
+    pub(crate) engine: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -780,34 +783,34 @@ struct TablesResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-struct PageSpanRecord {
-    id: ObjectId,
-    text: String,
-    bbox: Rect,
-    reading_order: u32,
-    confidence: f32,
-    source: String,
+pub(crate) struct PageSpanRecord {
+    pub(crate) id: ObjectId,
+    pub(crate) text: String,
+    pub(crate) bbox: Rect,
+    pub(crate) reading_order: u32,
+    pub(crate) confidence: f32,
+    pub(crate) source: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    continued: bool,
+    pub(crate) continued: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-struct PageOverlayRecord {
-    id: ObjectId,
-    kind: docsight_core::OverlayKind,
-    text: String,
-    bbox: Option<Rect>,
+pub(crate) struct PageOverlayRecord {
+    pub(crate) id: ObjectId,
+    pub(crate) kind: docsight_core::OverlayKind,
+    pub(crate) text: String,
+    pub(crate) bbox: Option<Rect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-struct PageResult {
-    number: u32,
-    width_pt: f32,
-    height_pt: f32,
-    spans: Vec<PageSpanRecord>,
+pub(crate) struct PageResult {
+    pub(crate) number: u32,
+    pub(crate) width_pt: f32,
+    pub(crate) height_pt: f32,
+    pub(crate) spans: Vec<PageSpanRecord>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    overlays: Vec<PageOverlayRecord>,
-    page_fidelity: PageFidelity,
+    pub(crate) overlays: Vec<PageOverlayRecord>,
+    pub(crate) page_fidelity: PageFidelity,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1396,7 +1399,8 @@ fn cached_document_path(command: &Command) -> Option<&Path> {
         | Command::Bundle { .. }
         | Command::Replay { .. }
         | Command::Verify { .. }
-        | Command::Cache { .. } => None,
+        | Command::Cache { .. }
+        | Command::Mcp => None,
     }
 }
 
@@ -1963,12 +1967,14 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
+        Command::Mcp => mcp::run_mcp_server(&loader),
     }
 }
 
 const ERROR_ENVELOPE_SCHEMA: &str = "https://docsight.dev/schemas/v2/error-envelope.json";
 
 const SUMMARY_CAPABILITIES: &str = "discover the machine contract and command surface";
+const SUMMARY_MCP: &str = "run Model Context Protocol (MCP) server on stdio";
 const SUMMARY_COMPLETIONS: &str = "generate a shell completion script for interactive use";
 const SUMMARY_INSPECT: &str = "summarize format, counts, capabilities and fidelity";
 const SUMMARY_OUTLINE: &str = "return headings in reading order";
@@ -2410,6 +2416,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 result_schema: Some("https://docsight.dev/schemas/v2/cache-result.json"),
                 result_root: None,
             },
+            CommandCapability {
+                name: "mcp",
+                summary: SUMMARY_MCP,
+                invocation: "mcp",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: false,
+                ndjson_events: &[],
+                bounded: false,
+                result_schema: None,
+                result_root: None,
+            },
         ],
     };
 
@@ -2566,7 +2583,7 @@ fn inspect(
     emit_warnings(&warnings, quiet, json_errors)
 }
 
-fn inspect_source(
+pub(crate) fn inspect_source(
     source: &DocumentSource,
     loader: &DocumentLoader<'_>,
 ) -> Result<(InspectResult, Vec<Diagnostic>), DocsightError> {
@@ -2740,42 +2757,41 @@ struct PageCommandArgs<'a> {
     json_errors: bool,
 }
 
-fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
-    let source = args.loader.open_source(args.path)?;
-    let document = args.loader.load(&source)?;
-    if args.number == 0 {
+pub(crate) fn page_spans_and_overlays(
+    document: &Document,
+    number: u32,
+) -> Result<(Vec<PageSpanRecord>, Vec<PageOverlayRecord>), DocsightError> {
+    if number == 0 {
         return Err(DocsightError::InvalidArgument {
             message: "page numbers are 1-based".to_owned(),
         });
     }
     let target_page = document
-        .page(args.number)
+        .page(number)
         .ok_or_else(|| DocsightError::ObjectNotFound {
-            object: format!("page {}", args.number),
+            object: format!("page {number}"),
         })?;
-    let page_fidelity = docsight_core::page_fidelity(&document);
-    let target_page_number = target_page.number;
-    let target_page_width = target_page.width_pt;
-    let target_page_height = target_page.height_pt;
     let spans: Vec<PageSpanRecord> = document
-        .blocks_on_page(args.number)
+        .blocks_on_page(number)
         .map(|block| {
-            let bbox = block.bbox_on_page(args.number).ok_or_else(|| {
-                DocsightError::MalformedDocument {
-                    message: format!(
-                        "block {} is indexed on page {} without fragment geometry",
-                        block.id, args.number
-                    ),
-                }
-            })?;
-            let text = block.text_on_page(args.number)?.ok_or_else(|| {
-                DocsightError::MalformedDocument {
-                    message: format!(
-                        "block {} is indexed on page {} without fragment text",
-                        block.id, args.number
-                    ),
-                }
-            })?;
+            let bbox =
+                block
+                    .bbox_on_page(number)
+                    .ok_or_else(|| DocsightError::MalformedDocument {
+                        message: format!(
+                            "block {} is indexed on page {} without fragment geometry",
+                            block.id, number
+                        ),
+                    })?;
+            let text =
+                block
+                    .text_on_page(number)?
+                    .ok_or_else(|| DocsightError::MalformedDocument {
+                        message: format!(
+                            "block {} is indexed on page {} without fragment text",
+                            block.id, number
+                        ),
+                    })?;
             Ok(PageSpanRecord {
                 id: block.id.clone(),
                 text,
@@ -2783,7 +2799,7 @@ fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
                 reading_order: block.reading_order,
                 confidence: block.confidence,
                 source: block.source.path.clone(),
-                continued: block.page != Some(args.number),
+                continued: block.page != Some(number),
             })
         })
         .collect::<Result<_, DocsightError>>()?;
@@ -2797,6 +2813,22 @@ fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
             bbox: o.bbox,
         })
         .collect();
+    Ok((spans, overlays))
+}
+
+fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
+    let source = args.loader.open_source(args.path)?;
+    let document = args.loader.load(&source)?;
+    let (spans, overlays) = page_spans_and_overlays(&document, args.number)?;
+    let target_page = document
+        .page(args.number)
+        .ok_or_else(|| DocsightError::ObjectNotFound {
+            object: format!("page {}", args.number),
+        })?;
+    let page_fidelity = docsight_core::page_fidelity(&document);
+    let target_page_number = target_page.number;
+    let target_page_width = target_page.width_pt;
+    let target_page_height = target_page.height_pt;
 
     if args.ndjson {
         let stdout = io::stdout();
@@ -3933,7 +3965,7 @@ fn parse_byte_budget(raw: &str) -> Result<usize, String> {
         .ok_or_else(|| "byte budget is out of range".to_owned())
 }
 
-fn parse_bbox(raw: &str) -> Result<Rect, String> {
+pub(crate) fn parse_bbox(raw: &str) -> Result<Rect, String> {
     let values = raw
         .split(',')
         .map(str::trim)
@@ -3952,7 +3984,7 @@ fn parse_bbox(raw: &str) -> Result<Rect, String> {
     Rect::new(values[0], values[1], values[2], values[3]).map_err(|error| error.to_string())
 }
 
-fn parse_page_range(raw: &str) -> Result<PageRange, String> {
+pub(crate) fn parse_page_range(raw: &str) -> Result<PageRange, String> {
     let (start, end) = match raw.split_once("..") {
         Some((start, end)) => (start, end),
         None => (raw, raw),
@@ -5527,7 +5559,7 @@ fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
     emit_warnings(&warnings, args.quiet, args.json_errors)
 }
 
-fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
+pub(crate) fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
     let mut text = String::new();
     for block in &doc.blocks {
         text.push_str(&block.text());
