@@ -36,6 +36,20 @@ The benchmark demonstrates representative behavior inside the supported limits. 
 
 Peak-memory regression enforcement is intentionally pinned to Linux x86_64 so results stay comparable. Product code and the functional test suite remain cross-platform. Other hosts can use the normal commands, but the benchmark command fails explicitly instead of publishing incomparable memory numbers.
 
+## Operation matrix (DS18)
+
+`benchmark operations` measures the agent operations clients actually invoke, process by process, instead of only engine internals:
+
+```bash
+cargo run --locked --release -p xtask --bin xtask -- benchmark operations --check
+```
+
+The matrix covers 25 operations over small DOCX/PDF fixtures, the specification document, a paired and self diff, page-one renders and a typed-error probe. Cacheable operations run both cold (no cache directory) and warm (reused `--cache-dir`); `diff`, `render`, `fingerprint` and the error probe run cold only because they re-ingest or never touch the IR cache. Every sample is repeated: cold iterations must be byte-identical, warm output must equal cold output, render artifacts must keep their digest, and the error probe must keep its exit code and envelope. The report has schema `docsight.operation-report/v1`.
+
+Ceilings live in [`benchmarks/ds18-operations.json`](benchmarks/ds18-operations.json) with reference `windows/x86_64/release`. Wall-clock budgets carry about 100% headroom over the first measured medians and are preliminary; stdout byte counts are exact because agent output is deterministic, except for render entries whose paths embed the scratch directory. Peak-memory budgets are null where the host cannot measure them and are enforced only when a sample carries a reading. On a host that differs from the reference, `--check` still enforces determinism, exit codes, error envelopes and stdout byte counts, and skips wall-clock ceilings explicitly instead of comparing incomparable timings.
+
+Measured baseline (Windows x64, release): every small-document operation completes in 30–110 ms with warm runs at or above cold runs, so process startup dominates and the cache pays off only once parsing or layout dominates. `diff_pair` is the heaviest entry at about 106 ms and 133 KB of JSON.
+
 ## Document IR cache
 
 `--cache-dir` trades parsing and layout for hashing and validation. A hit still reads and hashes the document, hashes the running executable, verifies the entry digest, deserializes the IR and checks its canonical form, then runs the command on that IR. The cache therefore pays off when parsing or DOCX layout dominates, such as large or dense PDFs and long DOCX files, and can be slower than a plain run for small documents. A miss adds the same hashing plus serializing and atomically publishing the entry.

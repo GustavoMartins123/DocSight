@@ -1,0 +1,364 @@
+{
+  "schema": "docsight.operation-budgets/v1",
+  "reference": {
+    "os": "windows",
+    "architecture": "x86_64",
+    "profile": "release",
+    "rust": "1.96.0"
+  },
+  "iterations": 3,
+  "operations": [
+    {
+      "name": "inspect_tables",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 74.0,
+      "max_stdout_bytes": 1862,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "inspect_tables",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 82.0,
+      "max_stdout_bytes": 1862,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "text_tables",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 67.0,
+      "max_stdout_bytes": 4005,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "text_tables",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 128.0,
+      "max_stdout_bytes": 4005,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "tables_list",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 70.0,
+      "max_stdout_bytes": 2427,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "tables_list",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 77.0,
+      "max_stdout_bytes": 2427,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "outline_headings",
+      "document": "sample_headings.docx",
+      "mode": "cold",
+      "max_wall_ms": 83.0,
+      "max_stdout_bytes": 2247,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "outline_headings",
+      "document": "sample_headings.docx",
+      "mode": "warm",
+      "max_wall_ms": 115.0,
+      "max_stdout_bytes": 2247,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "overview_headings",
+      "document": "sample_headings.docx",
+      "mode": "cold",
+      "max_wall_ms": 84.0,
+      "max_stdout_bytes": 4380,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "overview_headings",
+      "document": "sample_headings.docx",
+      "mode": "warm",
+      "max_wall_ms": 75.0,
+      "max_stdout_bytes": 4380,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "coverage_tables",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 112.0,
+      "max_stdout_bytes": 2810,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "coverage_tables",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 111.0,
+      "max_stdout_bytes": 2810,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "resolve_table",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 75.0,
+      "max_stdout_bytes": 2597,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "resolve_table",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 81.0,
+      "max_stdout_bytes": 2597,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "context_table",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 110.0,
+      "max_stdout_bytes": 22314,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "context_table",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 80.0,
+      "max_stdout_bytes": 22314,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "evidence_table",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 112.0,
+      "max_stdout_bytes": 2053,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "evidence_table",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 137.0,
+      "max_stdout_bytes": 2053,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "peek_headings",
+      "document": "sample_headings.docx",
+      "mode": "cold",
+      "max_wall_ms": 105.0,
+      "max_stdout_bytes": 8558,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "peek_headings",
+      "document": "sample_headings.docx",
+      "mode": "warm",
+      "max_wall_ms": 134.0,
+      "max_stdout_bytes": 8558,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "focus_headings",
+      "document": "sample_headings.docx",
+      "mode": "cold",
+      "max_wall_ms": 110.0,
+      "max_stdout_bytes": 8718,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "focus_headings",
+      "document": "sample_headings.docx",
+      "mode": "warm",
+      "max_wall_ms": 77.0,
+      "max_stdout_bytes": 8718,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "page_tables",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 71.0,
+      "max_stdout_bytes": 9093,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "page_tables",
+      "document": "sample_tables.docx",
+      "mode": "warm",
+      "max_wall_ms": 126.0,
+      "max_stdout_bytes": 9093,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "hit_headings",
+      "document": "sample_headings.docx",
+      "mode": "cold",
+      "max_wall_ms": 103.0,
+      "max_stdout_bytes": 966,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "hit_headings",
+      "document": "sample_headings.docx",
+      "mode": "warm",
+      "max_wall_ms": 80.0,
+      "max_stdout_bytes": 966,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "fingerprint_tables",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 62.0,
+      "max_stdout_bytes": 759,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "inspect_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "cold",
+      "max_wall_ms": 115.0,
+      "max_stdout_bytes": 1107,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "inspect_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "warm",
+      "max_wall_ms": 79.0,
+      "max_stdout_bytes": 1107,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "text_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "cold",
+      "max_wall_ms": 68.0,
+      "max_stdout_bytes": 1729,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "text_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "warm",
+      "max_wall_ms": 123.0,
+      "max_stdout_bytes": 1729,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "find_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "cold",
+      "max_wall_ms": 114.0,
+      "max_stdout_bytes": 2020,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "find_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "warm",
+      "max_wall_ms": 94.0,
+      "max_stdout_bytes": 2020,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "tables_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "cold",
+      "max_wall_ms": 77.0,
+      "max_stdout_bytes": 952,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "tables_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "warm",
+      "max_wall_ms": 138.0,
+      "max_stdout_bytes": 952,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "evidence_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "cold",
+      "max_wall_ms": 90.0,
+      "max_stdout_bytes": 1151,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "evidence_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "warm",
+      "max_wall_ms": 106.0,
+      "max_stdout_bytes": 1151,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "inspect_medium",
+      "document": "Projeto_DOCSIGHT_Especificacao.docx",
+      "mode": "cold",
+      "max_wall_ms": 125.0,
+      "max_stdout_bytes": 2588,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "inspect_medium",
+      "document": "Projeto_DOCSIGHT_Especificacao.docx",
+      "mode": "warm",
+      "max_wall_ms": 78.0,
+      "max_stdout_bytes": 2588,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "diff_pair",
+      "document": "sample_headings.docx",
+      "mode": "cold",
+      "max_wall_ms": 213.0,
+      "max_stdout_bytes": 133248,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "diff_self",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 120.0,
+      "max_stdout_bytes": 50987,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "render_tables",
+      "document": "sample_tables.docx",
+      "mode": "cold",
+      "max_wall_ms": 85.0,
+      "max_stdout_bytes": null,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "render_pdf",
+      "document": "synthetic_table.pdf",
+      "mode": "cold",
+      "max_wall_ms": 168.0,
+      "max_stdout_bytes": null,
+      "max_peak_memory_bytes": null
+    },
+    {
+      "name": "inspect_invalid",
+      "document": "unsupported.bin",
+      "mode": "cold",
+      "max_wall_ms": 95.0,
+      "max_stdout_bytes": 0,
+      "max_peak_memory_bytes": null
+    }
+  ]
+}
