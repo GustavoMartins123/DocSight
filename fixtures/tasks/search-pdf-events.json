@@ -1,0 +1,35 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "search-pdf-events",
+  "title": "Search a PDF table, expand context and verify evidence",
+  "documents": {
+    "primary": "synthetic_table.pdf",
+    "reference": null
+  },
+  "budgets": {
+    "max_invocations": 3,
+    "max_stdout_bytes": 200000
+  },
+  "steps": [
+    {
+      "id": "find",
+      "args": ["find", "{primary}", "EVENT"],
+      "expect_exit": 0,
+      "require": ["/result/matches/0/object_id", "/result/matches/0/matched/text"],
+      "values": {"/result/matches/0/matched/text": "EVENT"}
+    },
+    {
+      "id": "context",
+      "args": ["context", "{primary}", "{find./result/matches/0/object_id}", "--include", "content,geometry"],
+      "expect_exit": 0,
+      "require": ["/result/context", "/result/status"]
+    },
+    {
+      "id": "evidence",
+      "args": ["evidence", "{primary}", "{find./result/matches/0/object_id}"],
+      "expect_exit": 0,
+      "require": ["/result/object_id", "/result/fidelity"],
+      "values": {"/result/object_id": "cell_a1932a3e62fdc00c3e9528c5b008b5bc"}
+    }
+  ]
+}

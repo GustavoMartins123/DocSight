@@ -1,0 +1,28 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "compare-docx-pair",
+  "title": "Compare two DOCX revisions and confirm self-diff identity",
+  "documents": {
+    "primary": "sample_headings.docx",
+    "reference": "sample_tables.docx"
+  },
+  "budgets": {
+    "max_invocations": 2,
+    "max_stdout_bytes": 300000
+  },
+  "steps": [
+    {
+      "id": "diff-pair",
+      "args": ["diff", "{primary}", "{reference}"],
+      "expect_exit": 0,
+      "require": ["/result/summary/semantic_changes", "/result/before_document/sha256", "/result/after_document/sha256"]
+    },
+    {
+      "id": "diff-self",
+      "args": ["diff", "{primary}", "{primary}"],
+      "expect_exit": 0,
+      "require": ["/result/summary/semantic_changes"],
+      "values": {"/result/summary/semantic_changes": 0}
+    }
+  ]
+}

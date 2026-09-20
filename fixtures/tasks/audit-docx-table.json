@@ -1,0 +1,41 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "audit-docx-table",
+  "title": "Audit one DOCX table document end to end",
+  "documents": {
+    "primary": "sample_tables.docx",
+    "reference": null
+  },
+  "budgets": {
+    "max_invocations": 4,
+    "max_stdout_bytes": 200000
+  },
+  "steps": [
+    {
+      "id": "inspect",
+      "args": ["inspect", "{primary}", "--budget", "8kb"],
+      "expect_exit": 0,
+      "require": ["/result/format", "/result/tables"],
+      "values": {"/result/format": "docx"}
+    },
+    {
+      "id": "coverage",
+      "args": ["coverage", "{primary}", "--budget", "8kb"],
+      "expect_exit": 0,
+      "require": ["/result/global/overall_fidelity", "/result/pages"]
+    },
+    {
+      "id": "tables",
+      "args": ["tables", "{primary}", "--budget", "8kb"],
+      "expect_exit": 0,
+      "require": ["/result/tables/0/id"],
+      "values": {"/result/tables/0/id": "tbl_6c22c8dd17adf7e32604b29241d9ab99"}
+    },
+    {
+      "id": "render",
+      "args": ["render", "{primary}", "--page", "1", "--dpi", "36", "--out", "{scratch}/audit.png"],
+      "expect_exit": 0,
+      "require": ["/result/output_sha256", "/result/output_bytes"]
+    }
+  ]
+}
