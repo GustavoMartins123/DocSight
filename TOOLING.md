@@ -22,6 +22,7 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | Document class taxonomy and per-class signals | `release/document-classes.json`, `xtask/src/quality/classes.rs` | `tooling_quality.rs` |
 | `quality prepare --archive ARCHIVE --document FILE --class CLASS --out FILE`, `quality validate`, `quality measure --archive ARCHIVE --out FILE` and `quality compare --baseline FILE --candidate FILE` | `xtask/src/quality/{engine,ground_truth,measure,compare}.rs` | `tooling_quality.rs`, `tooling_contracts.rs` |
 | `beta collect --consent` and `beta aggregate DIRECTORY` | `xtask/src/beta.rs` | `tooling_beta.rs` |
+| `task run --scenario FILE --engine FILE --out FILE`, versioned agent task scenarios with budgets and receipts | `xtask/src/task/mod.rs`, `fixtures/tasks/` | `tooling_task.rs` |
 | `validate --out DIRECTORY` | `xtask/src/validation.rs` | `tooling_validation.rs` |
 | `readiness --revision SHA --evidence DIRECTORY` | `xtask/src/readiness/{mod,evidence,campaigns,reviews}.rs` | `tooling_readiness.rs` |
 | `rust-only` | `xtask/src/architecture.rs` | `tooling_architecture.rs` |

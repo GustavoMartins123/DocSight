@@ -10,7 +10,6 @@
     "max_invocations": 1,
     "max_stdout_bytes": 4096
   },
-  "sandbox": true,
   "steps": [
     {
       "id": "inspect",

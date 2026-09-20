@@ -70,8 +70,6 @@ struct Scenario {
     title: String,
     documents: Documents,
     budgets: Budgets,
-    #[serde(default)]
-    sandbox: bool,
     steps: Vec<Step>,
 }
 
@@ -268,10 +266,8 @@ fn run_step(
     }
     let mut command = docsight();
     command.arg("--agent");
+    command.arg("--sandbox");
     command.args(&args);
-    if scenario.sandbox {
-        command.arg("--sandbox");
-    }
     let output = command.output()?;
     execution.invocations = execution
         .invocations
@@ -519,7 +515,6 @@ fn task_manifests_reject_unknown_commands() {
             max_invocations: 1,
             max_stdout_bytes: 1024,
         },
-        sandbox: false,
         steps: vec![Step {
             id: "wipe".to_owned(),
             args: vec!["wipe".to_owned()],

@@ -6,5 +6,6 @@ pub mod quality;
 pub mod readiness;
 pub mod release;
 pub mod smoke;
+pub mod task;
 pub mod tooling;
 pub mod validation;

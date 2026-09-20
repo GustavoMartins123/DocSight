@@ -54,6 +54,12 @@
     },
     {
       "$ref": "#/$defs/lifecycle-report"
+    },
+    {
+      "$ref": "#/$defs/task-scenario"
+    },
+    {
+      "$ref": "#/$defs/task-receipt"
     }
   ],
   "$defs": {
@@ -2316,6 +2322,225 @@
           "type": "boolean"
         }
       }
+    },
+    "task-scenario": {
+      "additionalProperties": false,
+      "properties": {
+        "budgets": {
+          "additionalProperties": false,
+          "properties": {
+            "max_invocations": {
+              "maximum": 16,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "max_stdout_bytes": {
+              "maximum": 16777216,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max_invocations",
+            "max_stdout_bytes"
+          ],
+          "type": "object"
+        },
+        "documents": {
+          "additionalProperties": false,
+          "properties": {
+            "primary": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "reference": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "primary",
+            "reference"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "docsight.task-scenario/v1"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "args": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+              },
+              "expect_exit": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "expect_stderr_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+                "type": "string"
+              },
+              "require": {
+                "items": {
+                  "pattern": "^/",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "values": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "maxProperties": 64,
+                "propertyNames": {
+                  "pattern": "^/",
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "args",
+              "expect_exit"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "title",
+        "documents",
+        "budgets",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "task-receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "budgets": {
+          "additionalProperties": false,
+          "properties": {
+            "invocations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "stdout_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "invocations",
+            "stdout_bytes"
+          ],
+          "type": "object"
+        },
+        "engine_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "scenario_id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "type": "string"
+        },
+        "scenario_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "docsight.task-receipt/v1"
+        },
+        "steps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "elapsed_ms": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "exit_code": {
+                "type": "integer"
+              },
+              "id": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+                "type": "string"
+              },
+              "stderr_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stdout_sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "exit_code",
+              "stdout_sha256",
+              "stderr_code",
+              "elapsed_ms"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "scenario_id",
+        "scenario_sha256",
+        "engine_sha256",
+        "passed",
+        "steps",
+        "budgets"
+      ],
+      "type": "object"
     }
   }
 }
