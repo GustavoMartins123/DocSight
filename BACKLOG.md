@@ -16,9 +16,7 @@ Classification:
 
 ### Operability
 
-| Item | Why it blocks v1 |
-| --- | --- |
-| Per-invocation overrides for ingestion limits | The enforced values are centralized and published in `capabilities` under `ingestion_limits`, and each boundary is tested, but a caller cannot raise one for a document that legitimately exceeds it. Deferred until a real document forces the question, so the override surface is designed against an actual case rather than guessed. |
+No open blocking items.
 
 ### Evidence that requires people
 
@@ -108,3 +106,10 @@ DS10 candidate tooling is described in RELEASE.md and DS11 observation tooling
 in BETA.md. The machine-readable `release/known-gaps.json` retains the open V1
 engine gap above. A completed tooling implementation is not completion of the
 native validation, real beta or V1 acceptance criteria.
+
+Per-invocation overrides for ingestion limits (`--max-document-bytes`) are
+implemented in `crates/docsight-cli` and `crates/docsight-core`. Callers can
+override the default 64MB inspection limit per invocation (e.g.
+`--max-document-bytes 128mb`), propagating through sandbox workers and cache
+handoffs while enforcing `RESOURCE_LIMIT` (exit code 13) when exceeded.
+Covered by `crates/docsight-cli/tests/m9_hardening_cli.rs`.

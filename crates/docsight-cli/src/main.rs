@@ -70,6 +70,15 @@ struct Cli {
     #[arg(
         long,
         global = true,
+        value_name = "BYTES",
+        value_parser = parse_byte_budget,
+        help = "Override maximum document size in bytes, such as 128mb"
+    )]
+    max_document_bytes: Option<usize>,
+
+    #[arg(
+        long,
+        global = true,
         value_parser = parse_byte_budget,
         help = "Adaptive serialized-output byte budget, such as 4kb or 24kb"
     )]
@@ -153,6 +162,12 @@ struct Cli {
 }
 
 impl Cli {
+    fn max_document_bytes(&self) -> u64 {
+        self.max_document_bytes
+            .map(|b| b as u64)
+            .unwrap_or(docsight_core::MAX_INSPECT_BYTES)
+    }
+
     fn query_limits(&self) -> QueryLimits {
         QueryLimits {
             max_bytes: self.max_bytes,
@@ -1272,9 +1287,13 @@ fn main() -> ExitCode {
             }
         };
         let handoff = match (cli.cache_settings(), cached_document_path(&cli.command)) {
-            (Some(settings), Some(document)) => {
-                cache::SandboxCacheHandoff::prepare(&settings, document, &exe, cli.reporting())
-            }
+            (Some(settings), Some(document)) => cache::SandboxCacheHandoff::prepare(
+                &settings,
+                document,
+                &exe,
+                cli.reporting(),
+                cli.max_document_bytes(),
+            ),
             _ => Ok(None),
         };
         let environment = handoff.and_then(|handoff| {
@@ -1523,8 +1542,12 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
     let cache_settings = cli
         .cache_settings()
         .filter(|_| cached_document_path(&cli.command).is_some());
-    let loader =
-        DocumentLoader::for_invocation(password, cache_settings.as_ref(), cli.reporting())?;
+    let loader = DocumentLoader::for_invocation(
+        password,
+        cache_settings.as_ref(),
+        cli.reporting(),
+        cli.max_document_bytes(),
+    )?;
     match &cli.command {
         Command::Capabilities { json } => capabilities(cli.is_agent_json(*json), cli.ndjson),
         Command::Cache { action } => {
@@ -1623,6 +1646,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             limits: &limits,
             quiet,
             json_errors,
+            max_document_bytes: cli.max_document_bytes(),
         }),
         Command::Crop {
             path,
@@ -1658,6 +1682,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 limits: &limits,
                 quiet,
                 json_errors,
+                max_document_bytes: cli.max_document_bytes(),
             })
         }
         Command::Images { path, json } => images(
@@ -1704,6 +1729,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             limits: &limits,
             quiet,
             json_errors,
+            max_document_bytes: cli.max_document_bytes(),
         }),
         Command::Fingerprint { path, json } => fingerprint(
             path,
@@ -1712,6 +1738,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             &limits,
             quiet,
             json_errors,
+            cli.max_document_bytes(),
         ),
         Command::Evidence {
             path,
@@ -1752,6 +1779,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             limits: &limits,
             quiet,
             json_errors,
+            max_document_bytes: cli.max_document_bytes(),
         }),
         Command::Replay {
             trace,
@@ -2470,7 +2498,7 @@ fn inspect(
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = loader.open_source(path)?;
     let (result, warnings) = inspect_source(&source, loader)?;
 
     if ndjson {
@@ -2643,7 +2671,7 @@ fn outline(
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
     let headings: Vec<HeadingRecord> = document
         .headings()
@@ -2713,7 +2741,7 @@ struct PageCommandArgs<'a> {
 }
 
 fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     if args.number == 0 {
         return Err(DocsightError::InvalidArgument {
@@ -2940,7 +2968,7 @@ fn document_text(
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
     let blocks = text_records(&document);
 
@@ -2991,7 +3019,7 @@ fn tables(
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
     let page_fidelity = docsight_core::page_fidelity(&document);
     let tables: Vec<TableSummary> = document
@@ -3100,7 +3128,7 @@ struct TableCommandArgs<'a> {
 }
 
 fn table(args: TableCommandArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let target = document
         .tables()
@@ -3164,10 +3192,11 @@ struct RenderCommandArgs<'a> {
     limits: &'a QueryLimits,
     quiet: bool,
     json_errors: bool,
+    max_document_bytes: u64,
 }
 
 fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = DocumentSource::open_with_limit(args.path, args.max_document_bytes)?;
     let request = RenderRequest {
         target: args.target,
         dpi: args.dpi,
@@ -3314,6 +3343,7 @@ struct BundleArgs<'a> {
     limits: &'a QueryLimits,
     quiet: bool,
     json_errors: bool,
+    max_document_bytes: u64,
 }
 
 fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
@@ -3333,7 +3363,7 @@ fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
             });
         }
     };
-    let source = DocumentSource::open(args.path)?;
+    let source = DocumentSource::open_with_limit(args.path, args.max_document_bytes)?;
     let request = RenderRequest {
         target,
         dpi: args.dpi,
@@ -3555,7 +3585,7 @@ fn images(
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
     let images: Vec<ImageRecord> = document
         .figures()
@@ -3639,7 +3669,7 @@ fn links(
     quiet: bool,
     json_errors: bool,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
     let links: Vec<LinkRecord> = document
         .links
@@ -3968,7 +3998,7 @@ struct FindNdjsonSummary {
 }
 
 fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let request = FindRequest {
         pattern: args.pattern.to_owned(),
@@ -4111,7 +4141,7 @@ struct QueryArgs<'a> {
 }
 
 fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let execution = execute_spatial_query(&document, args.expression)?;
     let mut warnings = document.warnings;
@@ -4222,7 +4252,7 @@ struct OverviewArgs<'a> {
 }
 
 fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let result = document_overview(&document)?;
     let limits = bounded_machine_limits(args.limits, DEFAULT_VIEWPORT_ITEMS);
@@ -4324,7 +4354,7 @@ struct FocusArgs<'a> {
 }
 
 fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let (result, scope) = match (args.target, args.pages) {
         (Some(target), None) => (
@@ -4463,7 +4493,7 @@ struct PeekArgs<'a> {
 }
 
 fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let target_count = [
         args.page.is_some(),
@@ -4596,7 +4626,7 @@ struct ResolveArgs<'a> {
 }
 
 fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let result = resolve_descriptor(&document, args.text, args.kind, args.pages)?;
     let query_scope = serde_json::to_string(&result.query).map_err(output_serialization_error)?;
@@ -4697,7 +4727,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
             message: "context --include values must not be duplicated".to_owned(),
         });
     }
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let mut warnings = document.warnings.clone();
     let (status, selection, total_candidates, candidates, target) = match (args.object, args.find) {
@@ -5108,6 +5138,7 @@ struct DiffCommandArgs<'a> {
     limits: &'a QueryLimits,
     quiet: bool,
     json_errors: bool,
+    max_document_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -5154,8 +5185,8 @@ impl<'a> From<&'a VisualDiff> for DiffNdjsonVisualSummary<'a> {
 }
 
 fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
-    let source_before = DocumentSource::open(args.before)?;
-    let source_after = DocumentSource::open(args.after)?;
+    let source_before = DocumentSource::open_with_limit(args.before, args.max_document_bytes)?;
+    let source_after = DocumentSource::open_with_limit(args.after, args.max_document_bytes)?;
     let diff_result = diff_documents_with_passwords(
         &source_before,
         &source_after,
@@ -5301,8 +5332,9 @@ fn fingerprint(
     limits: &QueryLimits,
     quiet: bool,
     json_errors: bool,
+    max_document_bytes: u64,
 ) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(path)?;
+    let source = DocumentSource::open_with_limit(path, max_document_bytes)?;
     let file_sha256 = source.sha256().to_owned();
     let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
     let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
@@ -5385,7 +5417,7 @@ struct EvidenceArgs<'a> {
 }
 
 fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let doc = args.loader.load(&source)?;
     let obj_id = ObjectId::from_raw(args.object);
     let mut extra_warnings = Vec::new();
@@ -5519,7 +5551,7 @@ struct CoverageArgs<'a> {
 }
 
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let doc = args.loader.load(&source)?;
     let glyph_coverage = document_glyph_coverage(&doc, &source);
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
@@ -5681,7 +5713,7 @@ fn hit(args: HitArgs<'_>) -> Result<(), DocsightError> {
         }
     };
 
-    let source = DocumentSource::open(args.path)?;
+    let source = args.loader.open_source(args.path)?;
     let doc = args.loader.load(&source)?;
     let result = docsight_render::hit_test(&doc, args.page, &query)?;
 

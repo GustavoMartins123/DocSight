@@ -4,6 +4,6 @@
     {"id": "docx-multi-section-geometry", "blocking": true, "status": "resolved", "source": "BACKLOG.md"},
     {"id": "docx-line-level-pagination", "blocking": true, "status": "resolved", "source": "BACKLOG.md"},
     {"id": "content-addressed-cache", "blocking": true, "status": "resolved", "source": "BACKLOG.md"},
-    {"id": "ingestion-limit-overrides", "blocking": false, "status": "deferred-until-real-case", "source": "BACKLOG.md"}
+    {"id": "ingestion-limit-overrides", "blocking": false, "status": "resolved", "source": "BACKLOG.md"}
   ]
 }
