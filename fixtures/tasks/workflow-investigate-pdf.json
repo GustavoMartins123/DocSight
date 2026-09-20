@@ -1,0 +1,34 @@
+{
+  "schema": "docsight.task-scenario/v1",
+  "id": "workflow-investigate-pdf",
+  "title": "Investigate a PDF table from search to visual crop",
+  "documents": {
+    "primary": "synthetic_table.pdf",
+    "reference": null
+  },
+  "budgets": {
+    "max_invocations": 3,
+    "max_stdout_bytes": 200000
+  },
+  "steps": [
+    {
+      "id": "find",
+      "args": ["find", "{primary}", "EVENT"],
+      "expect_exit": 0,
+      "require": ["/result/matches/0/object_id", "/result/matches/0/matched/text"],
+      "values": {"/result/matches/0/matched/text": "EVENT"}
+    },
+    {
+      "id": "context",
+      "args": ["context", "{primary}", "{find./result/matches/0/object_id}", "--include", "content,geometry"],
+      "expect_exit": 0,
+      "require": ["/result/context", "/result/status"]
+    },
+    {
+      "id": "crop",
+      "args": ["crop", "{primary}", "--object", "{find./result/matches/0/object_id}", "--dpi", "36", "--out", "{scratch}/investigate.png"],
+      "expect_exit": 0,
+      "require": ["/result/output_sha256", "/result/output_bytes"]
+    }
+  ]
+}

@@ -33,6 +33,9 @@ const ALLOWLIST: &[&str] = &[
     "diff",
     "render",
     "crop",
+    "bundle",
+    "replay",
+    "verify",
     "fingerprint",
 ];
 
