@@ -30,6 +30,15 @@ Tooling can prepare these, but only people can produce them. None exists yet.
 | Consented real documents per class | The tracked corpus is synthetic. `docx-text`, `docx-multi-section`, `pdf-text` and `pdf-visual` have no documents at all. |
 | Approval of the readiness thresholds | `release/readiness-policy.json` records the 100-document and 25-real-per-format thresholds as `engineering-proposal`; approving them takes a reviewed commit and an approved `policy` review. |
 
+### Pending DS18 measurements and guards
+
+Recorded 2026-09-20. The DS18 operation matrix, budgets and cost structure in `benchmarks/ds18-operations.json` and `PERFORMANCE.md` were measured on Windows x64 release only.
+
+| Item | Current state |
+| --- | --- |
+| Linux x86_64 operation numbers and peak-memory budgets | `max_peak_memory_bytes` is null everywhere and wall ceilings carry a Windows reference. Measuring on the canonical Linux host, filling the memory budgets and confirming the Windows ceilings still hold is pending maintainer action. |
+| Line-ending guard for byte-asserted files | `schemas/v2/*.json` digests are asserted byte for byte by the m15 conformance suite, but a stale CRLF checkout on Windows silently changes those bytes. `.gitattributes` already mandates `eol=lf`; a `rust-only` gate that rejects CRLF in tracked text files is designed but not implemented. |
+
 ---
 
 ## post-v1
