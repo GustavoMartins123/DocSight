@@ -28,14 +28,6 @@ Tooling can prepare these, but only people can produce them. None exists yet.
 | Consented real documents per class | The tracked corpus is synthetic. `docx-text`, `docx-multi-section`, `pdf-text` and `pdf-visual` have no documents at all. |
 | Approval of the readiness thresholds | `release/readiness-policy.json` records the 100-document and 25-real-per-format thresholds as `engineering-proposal`; approving them takes a reviewed commit and an approved `policy` review. |
 
-### Pending DS18 measurements and guards
-
-Recorded 2026-09-20. The DS18 operation matrix, budgets and cost structure in `benchmarks/ds18-operations.json` and `PERFORMANCE.md` were measured on Windows x64 release only.
-
-| Item | Current state |
-| --- | --- |
-| Linux x86_64 operation numbers and peak-memory budgets | `max_peak_memory_bytes` is null everywhere and wall ceilings carry a Windows reference. Measuring on the canonical Linux host, filling the memory budgets and confirming the Windows ceilings still hold is pending maintainer action. |
-
 ---
 
 ## post-v1
@@ -117,3 +109,9 @@ The line-ending guard for byte-asserted and tracked text files is implemented
 in `xtask/src/architecture.rs`. The `cargo xtask rust-only` gate verifies that
 no tracked text or schema files contain CRLF line endings, enforcing strict
 LF endings across the repository.
+
+The DS18 operation matrix was validated on Linux x86_64 release on 2026-09-21.
+`benchmarks/ds18-operations.json` now uses the canonical Linux host, carries a
+positive peak-memory ceiling for every cold and warm entry and retains the
+existing wall ceilings after both complete Linux runs stayed below them. The
+release workflow enforces the matrix on the Linux target.

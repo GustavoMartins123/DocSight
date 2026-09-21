@@ -1356,6 +1356,15 @@ fn validate_operation_budgets(budgets: &OperationBudgets) -> TaskResult<()> {
             budgets.schema
         )));
     }
+    if budgets.reference.os != "linux"
+        || budgets.reference.architecture != "x86_64"
+        || budgets.reference.profile != "release"
+        || budgets.reference.rust != "1.96.0"
+    {
+        return Err(failure(
+            "operation budgets must target Linux x86_64, release, Rust 1.96.0",
+        ));
+    }
     if budgets.iterations < 2 {
         return Err(failure(
             "operation budgets need at least two iterations for warm runs",
@@ -1394,6 +1403,12 @@ fn validate_operation_budgets(budgets: &OperationBudgets) -> TaskResult<()> {
         {
             return Err(failure(format!(
                 "operation wall budget must be positive: {}",
+                entry.name
+            )));
+        }
+        if entry.max_peak_memory_bytes.is_none_or(|limit| limit == 0) {
+            return Err(failure(format!(
+                "operation peak-memory budget must be positive: {}",
                 entry.name
             )));
         }
@@ -1921,6 +1936,24 @@ mod tests {
         });
         let duplicate: OperationBudgets = serde_json::from_value(duplicate)?;
         assert!(validate_operation_budgets(&duplicate).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn operation_budgets_require_linux_memory_guards() -> Result<(), Box<dyn std::error::Error>> {
+        let mut wrong_host = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../benchmarks/ds18-operations.json"
+        ))?;
+        wrong_host["reference"]["os"] = serde_json::json!("windows");
+        let wrong_host: OperationBudgets = serde_json::from_value(wrong_host)?;
+        assert!(validate_operation_budgets(&wrong_host).is_err());
+
+        let mut missing_memory = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../benchmarks/ds18-operations.json"
+        ))?;
+        missing_memory["operations"][0]["max_peak_memory_bytes"] = serde_json::Value::Null;
+        let missing_memory: OperationBudgets = serde_json::from_value(missing_memory)?;
+        assert!(validate_operation_budgets(&missing_memory).is_err());
         Ok(())
     }
 

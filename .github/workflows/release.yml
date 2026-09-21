@@ -97,8 +97,8 @@ jobs:
       - name: Enforce DS9 budgets on the canonical host
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run --locked --release -p xtask --bin xtask -- benchmark --check --output target/ds9-performance.json
-      - name: Enforce operation budgets on the Windows host
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+      - name: Enforce operation budgets on the canonical host
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run --locked --release -p xtask --bin xtask -- benchmark operations --check --output target/ds18-operations.json
       - name: Collect dependency notices
         run: |
