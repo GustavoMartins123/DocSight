@@ -147,7 +147,7 @@ DocSight does not edit documents, perform OCR, answer natural-language questions
 checks and the V1 evidence gate. [Beta procedures](BETA.md) cover local opt-in
 observations, consent and reproducing a failure before fixing it. Neither a
 passing automation unit test nor an empty issue register is release acceptance.
-The engine remains at version 0.1.4; no v1-blocking engine gaps remain open in the release registry, while the other readiness criteria still require native validation evidence.
+The engine remains at version 0.1.4. The 2026-09-23 architecture and real-use audit reopened v1-blocking artifact safety, MCP boundary, continuation, contract-alignment and DOCX visual-fidelity work in `PLANO_CORRECOES_DOCSIGHT.md`; the engine is not release-ready while those registry entries remain open.
 
 ## License
 
