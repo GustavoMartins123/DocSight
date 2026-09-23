@@ -149,6 +149,7 @@ struct WorkerMetrics {
     png_size_bytes: u64,
     pages: u64,
     objects: u64,
+    peak_memory_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -227,7 +228,8 @@ fn run() -> TaskResult<()> {
             if arguments.next().is_some() {
                 return Err(failure("benchmark worker received unexpected arguments"));
             }
-            let metrics = measure_document(Path::new(&path))?;
+            let mut metrics = measure_document(Path::new(&path))?;
+            metrics.peak_memory_bytes = read_peak_memory(std::process::id())?;
             serde_json::to_writer(io::stdout().lock(), &metrics)?;
             Ok(())
         }
@@ -296,6 +298,9 @@ fn run_benchmark_command(arguments: Vec<String>) -> TaskResult<()> {
     };
     let encoded = serde_json::to_vec_pretty(&report)?;
     if let Some(path) = output_path {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(path, &encoded)?;
     }
     io::stdout().lock().write_all(&encoded)?;
@@ -515,13 +520,14 @@ fn run_worker(executable: &Path, path: &Path) -> TaskResult<WorkerSample> {
             String::from_utf8_lossy(&output.stderr)
         )));
     }
+    let metrics: WorkerMetrics = serde_json::from_slice(&output.stdout)?;
+    let peak_memory_bytes = peak_memory_bytes.max(metrics.peak_memory_bytes);
     if peak_memory_bytes == 0 {
         return Err(failure(format!(
             "peak memory could not be measured for {}",
             path.display()
         )));
     }
-    let metrics = serde_json::from_slice(&output.stdout)?;
     Ok(WorkerSample {
         metrics,
         wall_time_ns,
@@ -631,6 +637,7 @@ fn finish_measurement(
         png_size_bytes,
         pages: u64::try_from(document.pages.len())?,
         objects: u64::try_from(document.object_ids().len())?,
+        peak_memory_bytes: 0,
     })
 }
 
@@ -1589,6 +1596,9 @@ fn run_operation_command(arguments: Vec<String>) -> TaskResult<()> {
     };
     let encoded = serde_json::to_vec_pretty(&report)?;
     if let Some(path) = output_path {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(path, &encoded)?;
     }
     io::stdout().lock().write_all(&encoded)?;

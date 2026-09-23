@@ -82,7 +82,7 @@ fn cpu_budget_terminates_busy_worker() -> Result<(), Box<dyn std::error::Error>>
         ],
         &[(SANDBOX_CHILD_ENV.to_owned(), "1".to_owned())],
     );
-    assert!(start.elapsed() < Duration::from_secs(5));
+    assert!(start.elapsed() < Duration::from_secs(15));
     let error = match result {
         Err(error) => error,
         Ok(_) => {

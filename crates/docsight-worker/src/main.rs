@@ -96,8 +96,9 @@ fn main() -> ExitCode {
         }
     }
     if cli.cpu_hog_for_test {
+        let mut counter: u64 = 0;
         loop {
-            std::hint::spin_loop();
+            counter = std::hint::black_box(counter.wrapping_add(1));
         }
     }
     if cli.network_probe_for_test {

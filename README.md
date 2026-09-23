@@ -1,5 +1,7 @@
 # DocSight
 
+> **Status:** pre-release / active development — no stable binary release yet.
+
 DocSight is a local, headless evidence layer for inspecting DOCX and PDF files from a terminal. It gives agents synchronized structural, textual and visual views without Word, LibreOffice, COM automation, a remote service or network access.
 
 The same document bytes, engine version, backends, fonts and options produce deterministic JSON and artifacts. Unsupported or approximate behavior is exposed through typed diagnostics rather than hidden behind a fallback.
@@ -57,7 +59,7 @@ docsight --agent crop "$DOC" --object "$OBJECT" --out evidence.png
 
 Successful agent calls write only JSON or NDJSON to stdout. Errors are structured on stderr, leave stdout empty and use the documented exit code. Add `--sandbox` for hostile input after checking the platform policy returned by `capabilities`.
 
-For a password-protected PDF, store the known password in a private single-line file and pass only its path:
+For a password-protected PDF, `--password-file` is recommended so secrets do not leak into shell history or process listings. Pass only the path to a private single-line file:
 
 ```bash
 install -m 600 /dev/null pdf-password.txt
@@ -67,7 +69,9 @@ unset PDF_PASSWORD
 docsight --agent --password-file pdf-password.txt inspect "$DOC"
 ```
 
-The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes require the same `--password-file`. A wrong or absent password fails with exit code 12; DocSight never guesses it.
+DocSight also accepts `--password PASSWORD` directly when command-line arguments are safely isolated.
+
+The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes accept `--password-file` or `--password`. A wrong or absent password fails with exit code 12; DocSight never guesses it.
 
 ## Command surface
 
@@ -99,7 +103,7 @@ docsight --agent --cache-dir .docsight-cache find "$DOC" "termination"
 docsight --agent --cache-dir .docsight-cache cache stats
 ```
 
-The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
+The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` and `--password` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
 
 ## Bounded output
 
@@ -143,4 +147,4 @@ DocSight does not edit documents, perform OCR, answer natural-language questions
 checks and the V1 evidence gate. [Beta procedures](BETA.md) cover local opt-in
 observations, consent and reproducing a failure before fixing it. Neither a
 passing automation unit test nor an empty issue register is release acceptance.
-The engine remains at version 0.1.4; the current V1 gaps remain in the backlog.
+The engine remains at version 0.1.4; no v1-blocking engine gaps remain open in the release registry, while the other readiness criteria still require native validation evidence.
