@@ -137,7 +137,7 @@ docsight completions elvish > docsight.elv
 - [Agent protocol](AGENT_PROTOCOL.md) defines JSON, NDJSON, limits, continuation and error behavior.
 - [Backlog](BACKLOG.md) separates v1 work from post-v1 and experimental ideas.
 - [Fuzzing guide](FUZZING.md) documents parser fuzz targets.
-- [Performance and scale](PERFORMANCE.md) documents the versioned DS-9 workloads, metrics and CI budgets.
+- [Performance and scale](PERFORMANCE.md) documents the versioned benchmark workloads, metrics and CI budgets.
 
 DocSight does not edit documents, perform OCR, answer natural-language questions, fetch hyperlinks or run as a daemon. PDF structure is inferred with confidence and provenance; DOCX layout reports every approximation that can affect evidence.
 
@@ -148,3 +148,12 @@ checks and the V1 evidence gate. [Beta procedures](BETA.md) cover local opt-in
 observations, consent and reproducing a failure before fixing it. Neither a
 passing automation unit test nor an empty issue register is release acceptance.
 The engine remains at version 0.1.4; no v1-blocking engine gaps remain open in the release registry, while the other readiness criteria still require native validation evidence.
+
+## License
+
+DocSight is dual-licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

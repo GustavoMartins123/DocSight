@@ -28,9 +28,9 @@ Tooling can prepare these, but only people can produce them. None exists yet.
 | Consented real documents per class | The tracked corpus is synthetic. `docx-text`, `docx-multi-section`, `pdf-text` and `pdf-visual` have no documents at all. |
 | Approval of the readiness thresholds | `release/readiness-policy.json` records the 100-document and 25-real-per-format thresholds as `engineering-proposal`; approving them takes a reviewed commit and an approved `policy` review. |
 
-### Pending DS18 measurements and guards
+### Pending operation-benchmark measurements and guards
 
-Recorded 2026-09-20. The DS18 operation matrix, budgets and cost structure in `benchmarks/ds18-operations.json` and `PERFORMANCE.md` were measured on Windows x64 release only.
+Recorded 2026-09-20. The operation matrix, budgets and cost structure in `benchmarks/ds18-operations.json` and `PERFORMANCE.md` were measured on Windows x64 release only.
 
 | Item | Current state |
 | --- | --- |
@@ -90,7 +90,7 @@ implemented in `crates/docsight-pdf/src/syntax.rs`. The existing
 This corrects the stale backlog classification; it is not a new parser
 implementation or a claim that the native test was rerun in every environment.
 
-Multi-section DOCX geometry and line-level pagination (DS13) are implemented in
+Multi-section DOCX geometry and line-level pagination are implemented in
 `crates/docsight-layout` on Document IR schema 1.3. Each section applies its own
 page size, orientation, margins, start type, header and footer variants and page
 numbering; paragraphs split by line across pages with keep-with-next,
@@ -101,7 +101,7 @@ behaviour is covered by `crates/docsight-layout/tests/pagination.rs`,
 are recorded as resolved in `release/known-gaps.json`; the remaining layout
 limitations are listed under post-v1 above with their diagnostics.
 
-DS10 candidate tooling is described in RELEASE.md and DS11 observation tooling
+Release candidate tooling is described in RELEASE.md and beta observation tooling
 in BETA.md. The machine-readable `release/known-gaps.json` retains the open V1
 engine gap above. A completed tooling implementation is not completion of the
 native validation, real beta or V1 acceptance criteria.

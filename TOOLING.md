@@ -27,7 +27,7 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | `readiness --revision SHA --evidence DIRECTORY` | `xtask/src/readiness/{mod,evidence,campaigns,reviews}.rs` | `tooling_readiness.rs` |
 | `rust-only` | `xtask/src/architecture.rs` | `tooling_architecture.rs` |
 | Open V1 engine gaps keep readiness blocked | `release/known-gaps.json` | `tooling_readiness.rs` |
-| DS9 benchmark budgets and generated scale fixtures | `xtask/src/main.rs`, `benchmarks/` | unit tests in `xtask/src/main.rs` |
+| Benchmark budgets and generated scale fixtures | `xtask/src/main.rs`, `benchmarks/` | unit tests in `xtask/src/main.rs` |
 | Evidence schema conformance of generated artifacts, pinned workflow toolchain, locked Cargo commands, explicit `xtask` binary selection, target-filtered notices metadata | `schemas/tooling/v2/evidence.json`, `.github/workflows/`, shipped guides | `tooling_contracts.rs` |
 
 Use `cargo xtask --help` and each command's `--help` for complete options. The
@@ -69,7 +69,7 @@ creates tags, publishes releases or invents consent.
 Run `cargo test --locked -p xtask --all-targets` for maintenance coverage and
 `cargo test --locked --workspace --all-features` for the full workspace. The
 workspace contains two xtask binaries: `maint`, selected by the `cargo xtask`
-alias, and `xtask`, which owns the DS9 benchmark. Run the benchmark with
+alias, and `xtask`, which owns the release benchmark. Run the benchmark with
 `cargo run --locked --release -p xtask --bin xtask -- benchmark --check`.
 The contract tests reject documented or CI invocations that omit the binary. Tests
 include synthetic executable headers and injected process results to exercise
@@ -90,7 +90,7 @@ external validations. No source migration alone sets `ready_for_v1` to true.
 
 ## History
 
-The 26 DS9-DS12 development commits are preserved. Their nine interpreter-based
+The 26 interpreter-tooling development commits are preserved. Their nine interpreter-based
 modules and thirteen test files have been replaced by the modules above in new
 commits, not hidden by rewriting or force-pushing history. Their useful behavior
 is covered in Rust; there is no retained interpreter implementation or fallback.

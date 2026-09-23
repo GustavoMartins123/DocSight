@@ -55,7 +55,7 @@ Signing and notarization need maintainer certificates, and attestations need a p
 - Stop emitting `DOCX_SECTIONS_COLLAPSED`; emit `DOCX_PAGINATION_BLOCK_GRANULAR` only for a table that moves to the next page as a whole, and report the remaining section, header, footer and page-number limitations with dedicated diagnostics.
 - Preserve DrawingML lines as `Shape` blocks with `DOCX_SHAPE_VISUAL_OMITTED` instead of rejecting the document.
 
-- Replace all permanent DS9-DS12 interpreter tooling and auxiliary tests with native Rust modules and integration tests in xtask.
+- Replace all permanent interpreter tooling and auxiliary tests with native Rust modules and integration tests in xtask.
 - Route release, notices, changelog, smoke, corpus, beta, validation and readiness through cargo xtask and guard the Rust-only architecture in CI.
 - Require both docsight and docsight-worker in every native archive.
 - Version native validation receipts as v2 with explicit pass, fail, unavailable, blocked and not_run states and nullable unavailable exit codes.
@@ -75,12 +75,12 @@ validation campaign, real beta, signed release or V1 acceptance.
 - Preserve Windows static CRT build flags and ship all IR schemas and referenced offline guides.
 - Document installation, real beta consent, before-fix regressions and release review procedures.
 
-- Add a pinned DS9 benchmark runner and locked dependency enforcement.
+- Add a pinned release benchmark runner and locked dependency enforcement.
 - Add deterministic release packaging, target validation and SHA-256 verification.
 - Add installation instructions and the workspace-declared dual license texts.
 
 ## 0.1.4
 
-Existing source version at the start of DS9-DS12 continuation. This entry does not
+Existing source version at the start of the interpreter-to-native tooling continuation. This entry does not
 claim that a binary release or stable V1 has been published. The Git history is
 the detailed record of earlier engine and CLI changes.
