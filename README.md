@@ -139,7 +139,7 @@ docsight completions elvish > docsight.elv
 - [Fuzzing guide](FUZZING.md) documents parser fuzz targets.
 - [Performance and scale](PERFORMANCE.md) documents the versioned benchmark workloads, metrics and CI budgets.
 
-DocSight does not edit documents, perform OCR, answer natural-language questions, fetch hyperlinks or run as a daemon. PDF structure is inferred with confidence and provenance; DOCX layout reports every approximation that can affect evidence.
+DocSight does not edit documents, perform OCR, answer natural-language questions, fetch hyperlinks or run as a daemon. PDF structure is inferred with confidence and provenance; DOCX layout reports every approximation that can affect evidence. Raster images are supported for DOCX (PNG, JPEG) and PDF Image XObjects (DCTDecode/JPEG, 8-bit FlateDecode in DeviceRGB/DeviceGray), with unsupported formats emitting explicit typed diagnostics (`PDF_XOBJECT_PLACEHOLDER`, `DOCX_FIGURE_RASTER_PLACEHOLDER`) and failing closed rather than guessing. Scanned documents without a text layer continue to report `PDF_PAGE_HAS_NO_TEXT_LAYER`.
 
 ## Maintainer validation and beta
 

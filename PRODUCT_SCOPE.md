@@ -63,7 +63,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Text and tables: `text`, `tables`, `table` (JSON, Markdown, CSV, TSV, HTML).
 - Resources and links: `images`, `links`. Link targets are reported, never fetched.
 - Geometry: page-local points at 1/72 inch with the page origin at the top-left, used identically by geometry, render, crop, hit-testing and diff.
-- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box). Embedded PNG and JPEG images are decoded locally and drawn into their figure box; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
+- Raster output: `render` (page PNG) and `crop` (page region or object region derived from its bounding box). Embedded PNG and JPEG images from DOCX and supported PDF Image XObjects (DCTDecode/JPEG, 8-bit FlateDecode in DeviceRGB and DeviceGray) are decoded locally and drawn into their figure box; unsupported formats fail closed and render explicit placeholder boxes with typed diagnostics; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
 - Search: `find` returns every literal or regex occurrence at the finest object granularity the IR holds — a table is searched cell by cell — with the matched character range, surrounding context, page, bounding box, source, confidence and the diagnostics that affect that object. Results can be narrowed by object kind, page range and a page region, and are bounded with deterministic continuation. Regular expressions run in guaranteed linear time.
 - Spatial and structural selection: `query` (DQL with `above`, `below`, `inside`, `overlaps`, `nearest`, `distance-to`), `hit` (point or region to objects), `resolve` (ranked descriptor matching with explainable components).
 - Object addressing is closed: every object identifier any command emits — block, table cell, nested block, overlay or hyperlink — is accepted by `evidence`, `context` and `crop`. An object without geometry of its own fails with a typed error that names the anchoring block to use instead.
@@ -125,7 +125,7 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 
 | Limitation | Diagnostic |
 | --- | --- |
-| An image XObject is placed as a figure box; its pixels are not decoded | `PDF_XOBJECT_PLACEHOLDER` |
+| An unsupported or uninterpretable image XObject (e.g. JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit component depths, DeviceCMYK, or malformed stream) is placed as a figure box; its pixels are not decoded | `PDF_XOBJECT_PLACEHOLDER` |
 | A page paints only images and carries no text operators, so there is nothing to extract without OCR | `PDF_PAGE_HAS_NO_TEXT_LAYER` |
 | A shading resource (`sh`) is not painted | `PDF_SHADING_UNSUPPORTED` |
 | Text without an embedded outline uses the deterministic fallback glyph set | `APPROXIMATED_PDF_FONT` |
@@ -161,7 +161,11 @@ These are not format limitations. They are the cases where a command can answer,
 
 ### Images
 
-PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG is decoded strictly through a pinned pure-Rust adapter with platform-specific acceleration disabled, so malformed or non-conformant data is not accepted as visual evidence. GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as placeholders. Scaling to the figure box is nearest-neighbour, which is deterministic but does not filter; enlarging a small image shows its pixels rather than a smoothed version.
+For DOCX, embedded PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG is decoded strictly through a pinned pure-Rust adapter with platform-specific acceleration disabled, so malformed or non-conformant data is not accepted as visual evidence. GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as placeholders.
+
+For PDF, Image XObjects are decoded when encoded with DCTDecode (JPEG) or 8-bit FlateDecode in DeviceRGB or DeviceGray color spaces. Unsupported image formats (such as JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit depths, DeviceCMYK, or images with unsupported masks) fail closed and render an explicit placeholder box accompanied by `PDF_XOBJECT_PLACEHOLDER`. DocSight does not perform OCR: scanned pages containing raster images without an underlying text layer continue to report `PDF_PAGE_HAS_NO_TEXT_LAYER`.
+
+Scaling to the figure box is nearest-neighbour, which is deterministic but does not filter; enlarging a small image shows its pixels rather than a smoothed version.
 
 ### Cross-cutting
 

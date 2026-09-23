@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use syntax::{ObjectRef, Value, Xref, XrefEntry, malformed, parse_object, parse_xref};
+use syntax::{ObjectRef, StreamValue, Value, Xref, XrefEntry, malformed, parse_object, parse_xref};
 
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -520,7 +520,7 @@ impl<'a> PdfDocument<'a> {
             };
             let resolved = self.store.resolve(&entry)?;
             let Value::Stream(stream) = resolved else {
-                entries.insert(name, XObjectEntry::Image);
+                entries.insert(name, XObjectEntry::ImagePlaceholder);
                 continue;
             };
             let subtype = match stream.dict.get("Subtype") {
@@ -528,7 +528,8 @@ impl<'a> PdfDocument<'a> {
                 _ => "",
             };
             if subtype != "Form" {
-                entries.insert(name, XObjectEntry::Image);
+                let entry = self.decode_image_xobject(&stream);
+                entries.insert(name, entry);
                 continue;
             }
             if let Some(reference) = reference
@@ -594,6 +595,223 @@ impl<'a> PdfDocument<'a> {
         Ok(entries)
     }
 
+    fn decode_image_xobject(&self, stream: &StreamValue) -> XObjectEntry {
+        let subtype = match stream.dict.get("Subtype") {
+            Some(Value::Name(subtype)) => subtype.as_str(),
+            _ => "",
+        };
+        if subtype != "Image" && !subtype.is_empty() {
+            return XObjectEntry::ImagePlaceholder;
+        }
+        if stream
+            .dict
+            .get("SMask")
+            .is_some_and(|v| !matches!(v, Value::Null))
+        {
+            return XObjectEntry::ImagePlaceholder;
+        }
+        if stream
+            .dict
+            .get("Mask")
+            .is_some_and(|v| !matches!(v, Value::Null))
+        {
+            return XObjectEntry::ImagePlaceholder;
+        }
+        if stream
+            .dict
+            .get("ImageMask")
+            .and_then(|val| self.store.resolve(val).ok())
+            == Some(Value::Bool(true))
+        {
+            return XObjectEntry::ImagePlaceholder;
+        }
+        let width = match stream.dict.get("Width") {
+            Some(w_val) => match self.store.resolve(w_val) {
+                Ok(Value::Int(w)) if w > 0 && w <= 16384 => w as u32,
+                _ => return XObjectEntry::ImagePlaceholder,
+            },
+            None => return XObjectEntry::ImagePlaceholder,
+        };
+        let height = match stream.dict.get("Height") {
+            Some(h_val) => match self.store.resolve(h_val) {
+                Ok(Value::Int(h)) if h > 0 && h <= 16384 => h as u32,
+                _ => return XObjectEntry::ImagePlaceholder,
+            },
+            None => return XObjectEntry::ImagePlaceholder,
+        };
+        let Some(pixels) = (width as u64).checked_mul(height as u64) else {
+            return XObjectEntry::ImagePlaceholder;
+        };
+        if pixels > raster::MAX_RASTER_PIXELS {
+            return XObjectEntry::ImagePlaceholder;
+        }
+        let filter_val = match stream.dict.get("Filter") {
+            Some(val) => match self.store.resolve(val) {
+                Ok(v) => v,
+                Err(_) => return XObjectEntry::ImagePlaceholder,
+            },
+            None => Value::Null,
+        };
+        let filter_name = match &filter_val {
+            Value::Name(name) => name.as_str(),
+            Value::Null => "",
+            _ => return XObjectEntry::ImagePlaceholder,
+        };
+        match filter_name {
+            "DCTDecode" | "DCT" => {
+                if let Some(cs_val) = stream.dict.get("ColorSpace") {
+                    let Ok(resolved_cs) = self.store.resolve(cs_val) else {
+                        return XObjectEntry::ImagePlaceholder;
+                    };
+                    match resolved_cs {
+                        Value::Name(ref name)
+                            if matches!(
+                                name.as_str(),
+                                "DeviceRGB" | "RGB" | "DeviceGray" | "G"
+                            ) => {}
+                        Value::Array(ref items) if items.len() == 1 => match &items[0] {
+                            Value::Name(name)
+                                if matches!(
+                                    name.as_str(),
+                                    "DeviceRGB" | "RGB" | "DeviceGray" | "G"
+                                ) => {}
+                            _ => return XObjectEntry::ImagePlaceholder,
+                        },
+                        _ => return XObjectEntry::ImagePlaceholder,
+                    }
+                }
+                let Ok(decoded) = docsight_core::decode_jpeg(&stream.data) else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                if decoded.width != width || decoded.height != height {
+                    return XObjectEntry::ImagePlaceholder;
+                }
+                XObjectEntry::Image(std::sync::Arc::new(decoded))
+            }
+            "FlateDecode" | "Fl" | "" => {
+                let Some(cs_val) = stream.dict.get("ColorSpace") else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                let Ok(resolved_cs) = self.store.resolve(cs_val) else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                let is_rgb = match resolved_cs {
+                    Value::Name(ref name) if matches!(name.as_str(), "DeviceRGB" | "RGB") => true,
+                    Value::Name(ref name) if matches!(name.as_str(), "DeviceGray" | "G") => false,
+                    Value::Array(ref items) if items.len() == 1 => match &items[0] {
+                        Value::Name(name) if matches!(name.as_str(), "DeviceRGB" | "RGB") => true,
+                        Value::Name(name) if matches!(name.as_str(), "DeviceGray" | "G") => false,
+                        _ => return XObjectEntry::ImagePlaceholder,
+                    },
+                    _ => return XObjectEntry::ImagePlaceholder,
+                };
+                let Some(bpc_val) = stream.dict.get("BitsPerComponent") else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                let Ok(resolved_bpc) = self.store.resolve(bpc_val) else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                match resolved_bpc {
+                    Value::Int(8) => {}
+                    _ => return XObjectEntry::ImagePlaceholder,
+                }
+                let Ok(decompressed) = decode_stream(stream) else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                let mut invert = false;
+                if let Some(dec_val) = stream.dict.get("Decode") {
+                    let Ok(resolved_dec) = self.store.resolve(dec_val) else {
+                        return XObjectEntry::ImagePlaceholder;
+                    };
+                    match resolved_dec {
+                        Value::Array(items) => {
+                            if is_rgb {
+                                if items.len() == 6 {
+                                    let Ok(nums) =
+                                        items.iter().map(pdf_number).collect::<Result<Vec<_>, _>>()
+                                    else {
+                                        return XObjectEntry::ImagePlaceholder;
+                                    };
+                                    if nums == [0.0, 1.0, 0.0, 1.0, 0.0, 1.0] {
+                                    } else if nums == [1.0, 0.0, 1.0, 0.0, 1.0, 0.0] {
+                                        invert = true;
+                                    } else {
+                                        return XObjectEntry::ImagePlaceholder;
+                                    }
+                                } else {
+                                    return XObjectEntry::ImagePlaceholder;
+                                }
+                            } else if items.len() == 2 {
+                                let Ok(nums) =
+                                    items.iter().map(pdf_number).collect::<Result<Vec<_>, _>>()
+                                else {
+                                    return XObjectEntry::ImagePlaceholder;
+                                };
+                                if nums == [0.0, 1.0] {
+                                } else if nums == [1.0, 0.0] {
+                                    invert = true;
+                                } else {
+                                    return XObjectEntry::ImagePlaceholder;
+                                }
+                            } else {
+                                return XObjectEntry::ImagePlaceholder;
+                            }
+                        }
+                        _ => return XObjectEntry::ImagePlaceholder,
+                    }
+                }
+                let pixel_count = match (width as usize).checked_mul(height as usize) {
+                    Some(count) => count,
+                    None => return XObjectEntry::ImagePlaceholder,
+                };
+                if is_rgb {
+                    let expected_bytes = match pixel_count.checked_mul(3) {
+                        Some(b) => b,
+                        None => return XObjectEntry::ImagePlaceholder,
+                    };
+                    if decompressed.len() != expected_bytes {
+                        return XObjectEntry::ImagePlaceholder;
+                    }
+                    let expected_rgba = match pixel_count.checked_mul(4) {
+                        Some(b) => b,
+                        None => return XObjectEntry::ImagePlaceholder,
+                    };
+                    let mut rgba = Vec::with_capacity(expected_rgba);
+                    for chunk in decompressed.chunks_exact(3) {
+                        let r = if invert { 255 - chunk[0] } else { chunk[0] };
+                        let g = if invert { 255 - chunk[1] } else { chunk[1] };
+                        let b = if invert { 255 - chunk[2] } else { chunk[2] };
+                        rgba.extend_from_slice(&[r, g, b, 255]);
+                    }
+                    XObjectEntry::Image(std::sync::Arc::new(docsight_core::DecodedImage {
+                        width,
+                        height,
+                        rgba,
+                    }))
+                } else {
+                    if decompressed.len() != pixel_count {
+                        return XObjectEntry::ImagePlaceholder;
+                    }
+                    let expected_rgba = match pixel_count.checked_mul(4) {
+                        Some(b) => b,
+                        None => return XObjectEntry::ImagePlaceholder,
+                    };
+                    let mut rgba = Vec::with_capacity(expected_rgba);
+                    for &byte in &decompressed {
+                        let g = if invert { 255 - byte } else { byte };
+                        rgba.extend_from_slice(&[g, g, g, 255]);
+                    }
+                    XObjectEntry::Image(std::sync::Arc::new(docsight_core::DecodedImage {
+                        width,
+                        height,
+                        rgba,
+                    }))
+                }
+            }
+            _ => XObjectEntry::ImagePlaceholder,
+        }
+    }
+
     fn document_info(&self) -> Result<DocumentMetadata, DocsightError> {
         let Some(info) = self.store.xref.trailer.get("Info") else {
             return Ok(DocumentMetadata::default());
@@ -643,7 +861,13 @@ impl<'a> PdfDocument<'a> {
             if parsed.unmapped_text_codes {
                 all_warnings.push(unmapped_text_warning(page_num));
             }
-            if parsed.text_runs.is_empty() && parsed.omitted_xobjects {
+            let has_images = parsed.commands.iter().any(|c| {
+                matches!(
+                    c,
+                    DisplayCommand::Figure { .. } | DisplayCommand::Image { .. }
+                )
+            });
+            if parsed.text_runs.is_empty() && (has_images || parsed.omitted_xobjects) {
                 all_warnings.push(no_text_layer_warning(page_num));
             }
             let reconstructed = reconstruction::reconstruct_page_semantics(
@@ -1077,6 +1301,12 @@ fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation
             clips: trace_clips(clips),
         },
         DisplayCommand::Figure {
+            bbox,
+            resource_name,
+            clips,
+            ..
+        }
+        | DisplayCommand::Image {
             bbox,
             resource_name,
             clips,
@@ -1537,6 +1767,11 @@ fn command_visual_evidence(command: &DisplayCommand) -> (&[VisualIssue], Option<
     match command {
         DisplayCommand::Text(run) => (&run.visual_issues, Some(run.bbox)),
         DisplayCommand::Figure {
+            bbox,
+            visual_issues,
+            ..
+        }
+        | DisplayCommand::Image {
             bbox,
             visual_issues,
             ..

@@ -126,6 +126,16 @@ pub(crate) enum DisplayCommand {
         clips: Vec<ClipRegion>,
         visual_issues: Vec<VisualIssue>,
     },
+    Image {
+        image: std::sync::Arc<docsight_core::DecodedImage>,
+        bbox: Rect,
+        resource_name: String,
+        matrix: Matrix,
+        page_left: f32,
+        page_height: f32,
+        clips: Vec<ClipRegion>,
+        visual_issues: Vec<VisualIssue>,
+    },
     Fill {
         path: Vec<PathSegment>,
         paint: Paint,
@@ -181,7 +191,8 @@ struct ToUnicodeMap {
 
 #[derive(Clone, Debug)]
 pub(crate) enum XObjectEntry {
-    Image,
+    Image(std::sync::Arc<docsight_core::DecodedImage>),
+    ImagePlaceholder,
     Form(Box<FormXObject>),
     /// A form XObject that is already being expanded higher up the resource chain. It is only
     /// an error when content actually invokes it, which would recurse without end.
@@ -880,7 +891,7 @@ fn parse_content_inner(
                             XObjectEntry::Recursive => {
                                 return Err(malformed("cycle detected between PDF form XObjects"));
                             }
-                            XObjectEntry::Image => {
+                            XObjectEntry::ImagePlaceholder => {
                                 let bbox =
                                     transformed_unit_bbox(&state.ctm, page_left, page_height)?;
                                 commands.push(DisplayCommand::Figure {
@@ -890,6 +901,20 @@ fn parse_content_inner(
                                     visual_issues: state.visual_issues(PaintScope::Common),
                                 });
                                 omitted_xobjects = true;
+                            }
+                            XObjectEntry::Image(image) => {
+                                let bbox =
+                                    transformed_unit_bbox(&state.ctm, page_left, page_height)?;
+                                commands.push(DisplayCommand::Image {
+                                    image: std::sync::Arc::clone(image),
+                                    bbox,
+                                    resource_name,
+                                    matrix: state.ctm,
+                                    page_left,
+                                    page_height,
+                                    clips: state.clips.clone(),
+                                    visual_issues: state.visual_issues(PaintScope::Common),
+                                });
                             }
                             XObjectEntry::Form(form) => {
                                 if depth >= MAX_FORM_XOBJECT_DEPTH {
@@ -1698,14 +1723,14 @@ struct FontSelection {
     cid_to_gid: Option<Arc<Vec<u16>>>,
 }
 
-#[derive(Clone, Copy)]
-struct Matrix {
-    a: f32,
-    b: f32,
-    c: f32,
-    d: f32,
-    e: f32,
-    f: f32,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Matrix {
+    pub(crate) a: f32,
+    pub(crate) b: f32,
+    pub(crate) c: f32,
+    pub(crate) d: f32,
+    pub(crate) e: f32,
+    pub(crate) f: f32,
 }
 
 fn commit_pending_clip(state: &mut GraphicsState) -> Result<(), DocsightError> {

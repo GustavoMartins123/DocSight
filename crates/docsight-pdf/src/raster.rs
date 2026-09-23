@@ -1,6 +1,6 @@
 use crate::content::{
-    ClipRegion, Color, DisplayCommand, LineCap, LineJoin, Paint, PathSegment, Point, StrokeStyle,
-    TextRun,
+    ClipRegion, Color, DisplayCommand, LineCap, LineJoin, Matrix, Paint, PathSegment, Point,
+    StrokeStyle, TextRun,
 };
 use crate::font::GlyphOutline;
 use docsight_core::{DocsightError, Rect};
@@ -76,6 +76,17 @@ pub(crate) fn rasterize(
             DisplayCommand::Figure { bbox, clips, .. } => {
                 canvas.draw_figure_placeholder(*bbox, clips)?
             }
+            DisplayCommand::Image {
+                image,
+                bbox,
+                matrix,
+                page_left,
+                page_height,
+                clips,
+                ..
+            } => {
+                canvas.draw_image(image, *bbox, *matrix, *page_left, *page_height, clips)?;
+            }
             DisplayCommand::Fill {
                 path,
                 paint,
@@ -145,6 +156,66 @@ struct Canvas {
 }
 
 impl Canvas {
+    fn draw_image(
+        &mut self,
+        image: &docsight_core::DecodedImage,
+        bbox: Rect,
+        matrix: Matrix,
+        page_left: f32,
+        page_height: f32,
+        clips: &[ClipRegion],
+    ) -> Result<(), DocsightError> {
+        let det = matrix.a * matrix.d - matrix.b * matrix.c;
+        if det.abs() <= 1e-6 || !det.is_finite() {
+            return Ok(());
+        }
+        let px0 = self.pixel_floor_x(bbox.x0).max(0);
+        let py0 = self.pixel_floor_y(bbox.y0).max(0);
+        let px1 = self.pixel_ceil_x(bbox.x1).min(self.width as i32);
+        let py1 = self.pixel_ceil_y(bbox.y1).min(self.height as i32);
+        if px0 >= px1 || py0 >= py1 {
+            return Ok(());
+        }
+        for py in py0..py1 {
+            for px in px0..px1 {
+                let page_point = self.sample_point(px, py, 0.5, 0.5);
+                if !clips.is_empty() && !clips.iter().all(|clip| clip_contains(clip, page_point)) {
+                    continue;
+                }
+                let x_pdf = page_point.x + page_left;
+                let y_pdf = page_height - page_point.y;
+                let dx = x_pdf - matrix.e;
+                let dy = y_pdf - matrix.f;
+                let u = (matrix.d * dx - matrix.c * dy) / det;
+                let v = (-matrix.b * dx + matrix.a * dy) / det;
+                if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+                    continue;
+                }
+                let img_x =
+                    ((u * image.width as f32).floor() as u32).min(image.width.saturating_sub(1));
+                let img_y = (((1.0 - v) * image.height as f32).floor() as u32)
+                    .min(image.height.saturating_sub(1));
+                let Some(sample) = image.pixel(img_x, img_y) else {
+                    continue;
+                };
+                let alpha = u32::from(sample[3]);
+                if alpha == 0 {
+                    continue;
+                }
+                let index = (py as usize * self.width as usize + px as usize) * 3;
+                if let Some(slot) = self.pixels.get_mut(index..index + 3) {
+                    for channel in 0..3 {
+                        let source = u32::from(sample[channel]);
+                        let destination = u32::from(slot[channel]);
+                        slot[channel] =
+                            ((source * alpha + destination * (255 - alpha)) / 255) as u8;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn draw_figure_placeholder(
         &mut self,
         bbox: Rect,

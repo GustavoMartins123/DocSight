@@ -479,6 +479,7 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
                 .partial_cmp(&b.bbox.x0)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        line.spans = merge_contiguous_line_spans(&line.spans);
     }
 
     let multi_col_lines: Vec<&LineCluster> = lines.iter().filter(|l| l.spans.len() >= 2).collect();
@@ -680,6 +681,40 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
     }
 
     tables
+}
+
+fn merge_contiguous_line_spans(spans: &[TextSpanItem]) -> Vec<TextSpanItem> {
+    if spans.is_empty() {
+        return Vec::new();
+    }
+    let mut merged: Vec<TextSpanItem> = Vec::new();
+    for span in spans {
+        if let Some(last) = merged.last_mut() {
+            let gap = span.bbox.x0 - last.bbox.x1;
+            let font_size = last.font_size.max(span.font_size);
+            let intra_gap_limit = (font_size * 0.22).max(2.2);
+            let min_negative_gap = -font_size * 0.3;
+            let is_intra_word = gap <= intra_gap_limit
+                && gap >= min_negative_gap
+                && !last.text.ends_with(char::is_whitespace)
+                && !span.text.starts_with(char::is_whitespace);
+            if is_intra_word {
+                last.text.push_str(&span.text);
+                last.bbox = match Rect::new(
+                    last.bbox.x0.min(span.bbox.x0),
+                    last.bbox.y0.min(span.bbox.y0),
+                    last.bbox.x1.max(span.bbox.x1),
+                    last.bbox.y1.max(span.bbox.y1),
+                ) {
+                    Ok(r) => r,
+                    Err(_) => last.bbox,
+                };
+                continue;
+            }
+        }
+        merged.push(span.clone());
+    }
+    merged
 }
 
 pub use docsight_core::{
@@ -1030,6 +1065,230 @@ mod tests {
             "over-segmented table must not present as reliable: {}",
             tables[0].confidence
         );
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_does_not_fragment_habilidades() -> Result<(), Box<dyn std::error::Error>> {
+        let spans = vec![
+            TextSpanItem {
+                text: "HABILID".into(),
+                bbox: Rect::new(30.0, 50.0, 75.0, 62.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "ADES".into(),
+                bbox: Rect::new(75.5, 50.0, 105.0, 62.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert!(tables.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_does_not_fragment_educacao_with_accents() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let spans = vec![
+            TextSpanItem {
+                text: "ED".into(),
+                bbox: Rect::new(30.0, 50.0, 45.0, 62.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "UCAÇÃO".into(),
+                bbox: Rect::new(45.5, 50.0, 95.0, 62.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert!(tables.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_preserves_spaces_between_words() -> Result<(), Box<dyn std::error::Error>> {
+        let spans = vec![
+            TextSpanItem {
+                text: "PRIMEIRA".into(),
+                bbox: Rect::new(30.0, 50.0, 80.0, 62.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "SEGUNDA".into(),
+                bbox: Rect::new(85.0, 50.0, 135.0, 62.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let merged = merge_contiguous_line_spans(&spans);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].text, "PRIMEIRA");
+        assert_eq!(merged[1].text, "SEGUNDA");
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_preserves_distinct_columns() -> Result<(), Box<dyn std::error::Error>> {
+        let spans = vec![
+            TextSpanItem {
+                text: "Nome".into(),
+                bbox: Rect::new(30.0, 50.0, 60.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Cargo".into(),
+                bbox: Rect::new(120.0, 50.0, 150.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "Alice".into(),
+                bbox: Rect::new(30.0, 70.0, 60.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "Dev".into(),
+                bbox: Rect::new(120.0, 70.0, 140.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "Bob".into(),
+                bbox: Rect::new(30.0, 90.0, 50.0, 102.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "QA".into(),
+                bbox: Rect::new(120.0, 90.0, 135.0, 102.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].columns, 2);
+        assert_eq!(tables[0].rows, 3);
+        let block = tables[0].to_table_block("test_digest");
+        let csv = table_to_csv(&block)?;
+        assert!(csv.contains("Alice,Dev"));
+        assert!(csv.contains("Bob,QA"));
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_detects_unruled_table_with_slightly_irregular_spacing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let spans = vec![
+            TextSpanItem {
+                text: "ColA".into(),
+                bbox: Rect::new(30.0, 50.0, 60.0, 62.0)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "ColB".into(),
+                bbox: Rect::new(101.5, 49.8, 131.0, 61.8)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "ColC".into(),
+                bbox: Rect::new(170.2, 50.1, 200.0, 62.1)?,
+                font_size: 10.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "ValA1".into(),
+                bbox: Rect::new(30.5, 70.2, 62.0, 82.2)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "ValB1".into(),
+                bbox: Rect::new(100.0, 70.0, 130.0, 82.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "ValC1".into(),
+                bbox: Rect::new(169.5, 69.8, 199.0, 81.8)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "ValA2".into(),
+                bbox: Rect::new(29.8, 90.0, 61.5, 102.0)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "ValB2".into(),
+                bbox: Rect::new(100.8, 90.2, 130.5, 102.2)?,
+                font_size: 10.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "ValC2".into(),
+                bbox: Rect::new(170.0, 90.1, 200.0, 102.1)?,
+                font_size: 10.0,
+                bold: false,
+            },
+        ];
+        let tables = detect_tables(1, &spans, &[], 300.0, 400.0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].columns, 3);
+        assert_eq!(tables[0].rows, 3);
+        assert_eq!(tables[0].detector, TableDetectorKind::Alignment);
+        Ok(())
+    }
+
+    #[test]
+    fn alignment_handles_different_font_sizes() -> Result<(), Box<dyn std::error::Error>> {
+        let large_spans = vec![
+            TextSpanItem {
+                text: "TITU".into(),
+                bbox: Rect::new(30.0, 50.0, 80.0, 68.0)?,
+                font_size: 16.0,
+                bold: true,
+            },
+            TextSpanItem {
+                text: "LO".into(),
+                bbox: Rect::new(82.5, 50.0, 110.0, 68.0)?,
+                font_size: 16.0,
+                bold: true,
+            },
+        ];
+        let merged_large = merge_contiguous_line_spans(&large_spans);
+        assert_eq!(merged_large.len(), 1);
+        assert_eq!(merged_large[0].text, "TITULO");
+
+        let small_spans = vec![
+            TextSpanItem {
+                text: "SUB".into(),
+                bbox: Rect::new(30.0, 50.0, 50.0, 58.0)?,
+                font_size: 8.0,
+                bold: false,
+            },
+            TextSpanItem {
+                text: "TITULO".into(),
+                bbox: Rect::new(51.2, 50.0, 85.0, 58.0)?,
+                font_size: 8.0,
+                bold: false,
+            },
+        ];
+        let merged_small = merge_contiguous_line_spans(&small_spans);
+        assert_eq!(merged_small.len(), 1);
+        assert_eq!(merged_small[0].text, "SUBTITULO");
         Ok(())
     }
 }
