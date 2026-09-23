@@ -1,176 +1,176 @@
 # AGENTS.md
 
-## Escopo e fonte de verdade
+## Scope and Source of Truth
 
-- Leia `Projeto_DOCSIGHT_Especificacao.docx` antes de tomar decisões arquiteturais ou alterar contratos públicos.
-- Trate a especificação como fonte de verdade do produto. Em caso de conflito, siga nesta ordem: solicitação explícita atual do usuário, este `AGENTS.md`, especificação do projeto e convenções já presentes no código.
-- Preserve o objetivo central: o DOCSIGHT é uma camada de evidência local e headless para inspecionar DOCX e PDF por terminal, sem depender de Word, Excel, LibreOffice, automação COM ou serviços remotos.
-- Não amplie o escopo por iniciativa própria. DOCX editing, XLSX, PowerPoint, reflow de gráficos Office, perguntas em linguagem natural e modo daemon/rede estão fora da v1.
+- Read `Projeto_DOCSIGHT_Especificacao.docx` (the project specification) before making architectural decisions or modifying public contracts.
+- Treat the project specification as the product source of truth. In case of conflict, follow this precedence order: current explicit user request, this `AGENTS.md`, project specification, and existing conventions in the codebase.
+- Preserve the core objective: DOCSIGHT is a local, headless evidence layer for inspecting DOCX and PDF from a terminal without depending on Word, Excel, LibreOffice, COM automation, or remote services.
+- Do not expand scope unilaterally. DOCX editing, XLSX, PowerPoint, Office chart reflow, natural language questions, and daemon/network modes are strictly out of scope for v1.
 
-## Regras obrigatórias do usuário
+## Mandatory User Rules
 
-- Não adicione comentários ao código sem solicitação explícita do usuário. Isso inclui comentários de linha, de bloco, comentários explicativos, TODOs, FIXMEs e doc comments. Prefira nomes precisos, funções pequenas, tipos claros e documentação externa quando ela for solicitada.
-- Nunca execute `git commit`, `git push`, crie tags, publique releases, abra pull requests ou reescreva o histórico sem autorização explícita do usuário para a ação específica.
-- Não crie nem mantenha fallbacks funcionais. Não adicione aliases legados, rotas alternativas, compatibilidade retroativa silenciosa, valores substitutos, degradação automática ou caminhos secundários.
-- Se o caminho canônico falhar, retorne um erro explícito, preserve o diagnóstico e opere em modo fail-closed.
-- Remova fallbacks existentes quando estiverem dentro do escopo da tarefa. Rollback transacional para restaurar o estado anterior após falha continua permitido.
-- Não esconda recursos não suportados, aproximações, perda de evidência ou redução de fidelidade. Exponha diagnósticos tipados com consequência e objetos afetados.
-- Não altere arquivos alheios à tarefa. Preserve mudanças existentes do usuário e nunca descarte trabalho sem autorização.
+- Do not add comments to code without explicit user request. This includes line comments, block comments, explanatory comments, TODOs, FIXMEs, and doc comments. Prefer precise names, small functions, clear types, and external documentation when requested.
+- Never execute `git commit`, `git push`, create tags, publish releases, open pull requests, or rewrite history without explicit user authorization for that specific action.
+- Do not create or maintain functional fallbacks. Do not add legacy aliases, alternative routes, silent backwards compatibility, placeholder values, automatic degradation, or secondary execution paths.
+- If the canonical path fails, return an explicit error, preserve diagnostics, and operate in fail-closed mode.
+- Remove existing fallbacks when they are within the scope of the task. Transactional rollbacks to restore previous state after failure remain permitted.
+- Do not hide unsupported features, approximations, loss of evidence, or reduced fidelity. Expose typed diagnostics with consequence and affected objects.
+- Do not modify files unrelated to the task. Preserve existing user changes and never discard work without authorization.
 
-## Princípios do produto
+## Product Principles
 
-- Ofereça três visões sincronizadas do documento: estrutural, textual e visual.
-- Normalize DOCX e PDF em uma única `Document IR` imutável. Depois da ingestão, comandos e serviços não devem acessar estruturas específicas do formato diretamente.
-- Trate texto, layout, geometria, relações, recursos e evidência renderizada como dados de primeira classe.
-- Use pontos PDF, 1/72 de polegada, coordenadas locais da página e origem no canto superior esquerdo como sistema geométrico público.
-- Gere IDs determinísticos a partir do digest do documento, identidade da origem e caminho semântico normalizado. Nunca use UUID aleatório, endereço de memória, ordem de thread ou estado global instável.
-- Para os mesmos bytes, mesma versão do engine, mesmos backends, fontes e opções, produza JSON e artefatos determinísticos.
-- Mantenha execução local e offline como regra. Parsing, inspeção e renderização não podem exigir rede.
-- Não busque hyperlinks externos nem execute macros, OLE ou conteúdo incorporado.
-- Diferencie fatos estruturais de inferências. Todo resultado inferido deve carregar confiança e proveniência.
+- Provide three synchronized document views: structural, textual, and visual.
+- Normalize DOCX and PDF into a single immutable `Document IR`. After ingestion, commands and services must not access format-specific structures directly.
+- Treat text, layout, geometry, relationships, resources, and rendered evidence as first-class data.
+- Use PDF points (1/72 of an inch), page-local coordinates, and top-left origin as the public geometric coordinate system.
+- Generate deterministic IDs from document digest, origin identity, and normalized semantic path. Never use random UUIDs, memory addresses, thread scheduling order, or unstable global state.
+- For the same bytes, engine version, backends, fonts, and options, produce byte-identical JSON and artifacts.
+- Maintain local and offline execution as an absolute rule. Parsing, inspection, and rendering must never require network access.
+- Do not fetch external hyperlinks or execute macros, OLE, or embedded active content.
+- Distinguish structural facts from inferences. Every inferred result must expose confidence and provenance.
 
-## Arquitetura esperada
+## Expected Architecture
 
-Use um workspace Rust com responsabilidades separadas, sem dependências circulares:
+Use a Rust workspace with clean separation of concerns and no circular dependencies:
 
-- `docsight-cli`: interface `clap`, validação de argumentos e apresentação humana.
-- `docsight-agent`: schemas JSON/NDJSON, limites de saída e tokens de continuação.
-- `docsight-core`: IDs, geometria, `Document IR`, proveniência e diagnósticos.
-- `docsight-ingest`: fronteira única de ingestão; despacha formato para o parser e devolve `Document IR` normalizada.
-- `docsight-ooxml`: leitura OPC/ZIP e parsing OOXML limitado por recursos.
-- `docsight-layout`: paginação e layout determinístico de DOCX.
-- `docsight-pdf`: parser PDF próprio, page tree, recursos, content streams e normalização para a IR.
-- `docsight-render`: display lists, rasterização, crop e contact sheets.
-- `docsight-fonts`: descoberta, shaping e resolução determinística de fontes.
-- `docsight-tables`: modelo canônico, inferência de tabelas PDF e exportadores.
-- `docsight-search`: texto, regex e futuramente DQL.
-- `docsight-diff`: comparação de pacote, semântica e visual.
-- `docsight-cache`: cache endereçado por conteúdo e fingerprint de reprodução.
-- `docsight-worker`: isolamento de parsers e backends nativos.
-- `fixtures`: documentos mínimos, adversariais e goldens.
-- `schemas`: snapshots versionados dos contratos públicos.
-- `xtask`: automação de build, release e atualização explícita de goldens.
+- `docsight-cli`: `clap` CLI interface, argument validation, and human presentation.
+- `docsight-agent`: JSON/NDJSON schemas, output limits, and continuation tokens.
+- `docsight-core`: IDs, geometry, `Document IR`, provenance, and diagnostics.
+- `docsight-ingest`: Single ingestion boundary; sniffs format, dispatches to parser, returns normalized `Document IR`.
+- `docsight-ooxml`: OPC/ZIP reading and resource-bounded OOXML parsing.
+- `docsight-layout`: Deterministic pagination and layout for DOCX.
+- `docsight-pdf`: Custom PDF parser, page tree, resources, content streams, and normalization into the IR.
+- `docsight-render`: Display lists, rasterization, crop, and contact sheets.
+- `docsight-fonts`: Font discovery, shaping, and deterministic fallback resolution.
+- `docsight-tables`: Canonical table model, PDF table inference, and exporters.
+- `docsight-search`: Text search, regex, and future DQL.
+- `docsight-diff`: Package, semantic, and visual diff with lineage.
+- `docsight-cache`: Content-addressed cache and reproduction fingerprinting.
+- `docsight-worker`: Isolation worker for parsers and native backends.
+- `fixtures`: Minimal, adversarial, and golden test documents.
+- `schemas`: Versioned snapshots of public machine contracts.
+- `xtask`: Build automation, release tasks, and explicit golden updates.
 
-Não crie todos os crates vazios antecipadamente. Introduza cada crate quando houver responsabilidade concreta e teste correspondente. Tipos de bibliotecas externas não podem vazar para a IR ou para os schemas públicos; encapsule-os em adapters.
+Do not create empty crates prematurely. Introduce each crate only when there is a concrete responsibility and corresponding tests. External library types must never leak into the IR or public schemas; encapsulate them within adapters.
 
-## Ordem de implementação
+## Implementation Order
 
-- Siga os marcos M0 a M9 e os primeiros 15 issues descritos na especificação.
-- Comece por um recorte mínimo e verificável: sniffing por magic bytes, erros tipados, estruturas centrais, OPC limitado, semântica DOCX básica, PDF básico e só então layout progressivamente mais amplo.
-- Para o primeiro layout DOCX, suporte deliberadamente uma seção, uma fonte, parágrafos e tamanho de página explícito. Exija snapshot geométrico determinístico e PNG antes de ampliar a superfície OOXML.
-- Entregue incrementos verticais completos, com contrato, implementação, diagnóstico, teste e documentação solicitada. Evite scaffolding especulativo.
-- Não antecipe DQL, OCR, busca vetorial ou outros plugins antes de existir uma interface estável e uma necessidade do marco atual.
+- Follow milestones M0 through M9 and the first 15 issues described in the specification.
+- Begin with a minimal verifiable increment: magic byte sniffing, typed errors, core structures, bounded OPC, basic DOCX semantics, basic PDF, and only then progressively broader layout.
+- For the initial DOCX layout, deliberately support a single section, single font, paragraphs, and explicit page size. Require deterministic geometric snapshots and PNG rendering before expanding the OOXML surface.
+- Deliver complete vertical slices: contract, implementation, diagnostics, tests, and requested documentation. Avoid speculative scaffolding.
+- Do not anticipate DQL, OCR, vector search, or other plugins before a stable interface and milestone requirement exist.
 
-## Práticas de código Rust
+## Rust Coding Practices
 
-- Use Rust estável e mantenha a versão mínima suportada declarada no workspace quando o projeto for inicializado.
-- Formate com `cargo fmt` e trate `cargo clippy --all-targets --all-features` sem warnings antes de concluir uma mudança.
-- Prefira tipos de domínio, enums exaustivos, newtypes e invariantes validadas a strings soltas, mapas genéricos e booleanos ambíguos.
-- Mantenha funções pequenas, coesas e com uma única responsabilidade. Separe parsing, validação, normalização, layout, apresentação e I/O.
-- Evite duplicação, estado global mutável, efeitos implícitos e abstrações prematuras.
-- Propague erros com contexto tipado. Não use `unwrap`, `expect`, `panic!`, `todo!` ou `unimplemented!` em caminhos de produção.
-- Não ignore `Result`, warnings, elementos desconhecidos nem conversões potencialmente truncadas.
-- Use conversões verificadas para tamanhos, offsets, índices e aritmética de limites. Trate overflow como erro explícito.
-- Restrinja `unsafe` ao menor módulo possível, preferencialmente a wrappers FFI auditáveis. Exponha uma API Rust segura e teste entradas inválidas e falhas do backend.
-- Faça concorrência somente em unidades independentes. Ordene resultados e diagnósticos antes de expô-los para manter saída byte a byte estável.
-- Mantenha APIs públicas mínimas. Mudanças em schema, ID, coordenadas, exit codes ou ordenação exigem testes de contrato e decisão explícita.
+- Use stable Rust and keep the minimum supported version declared in the workspace.
+- Format with `cargo fmt` and ensure `cargo clippy --all-targets --all-features` produces zero warnings before completing a change.
+- Prefer domain types, exhaustive enums, newtypes, and validated invariants over loose strings, generic maps, and ambiguous booleans.
+- Keep functions small, cohesive, and single-purpose. Separate parsing, validation, normalization, layout, presentation, and I/O.
+- Avoid duplication, mutable global state, implicit side effects, and premature abstractions.
+- Propagate errors with typed context. Do not use `unwrap`, `expect`, `panic!`, `todo!`, or `unimplemented!` in production paths.
+- Do not ignore `Result`, compiler warnings, unknown elements, or potentially truncating conversions.
+- Use checked arithmetic and verified conversions for sizes, offsets, indices, and boundary bounds. Treat overflow as an explicit error.
+- Restrict `unsafe` to the smallest possible module, preferably auditable FFI wrappers. Expose a safe Rust API and test invalid inputs and backend failures.
+- Concurrency must operate only on independent units. Order results and diagnostics canonically before emitting them to maintain byte-stable outputs.
+- Keep public APIs minimal. Changes to schemas, IDs, coordinates, exit codes, or ordering require contract tests and explicit decisions.
 
-## Dependências e build
+## Dependencies and Build
 
-- Adicione dependências apenas quando houver necessidade concreta e verifique manutenção, licença, superfície de ataque e suporte multiplataforma.
-- Fixe backends nativos e componentes cujo comportamento afete renderização ou determinismo. Versione `Cargo.lock` para o binário.
-- Não introduza Word, LibreOffice, Excel, COM, `unoconv`, conversores remotos ou chamadas de rede como dependência de execução.
-- Não adicione MuPDF nem outro interpretador ou renderizador de documentos como dependência de runtime. O engine PDF e o renderer autoritativos são implementações próprias do DOCSIGHT.
-- MuPDF pode ser usado somente como oracle externo, opcional e explícito em testes de desenvolvimento, sem integrar o workspace, o binário ou o fluxo normal de testes.
-- Fontes substitutas devem ser determinísticas e declaradas em diagnóstico. Nunca selecione silenciosamente uma fonte arbitrária do sistema.
-- O build e os testes devem funcionar em Windows, Linux e macOS, respeitando diferenças de filesystem sem alterar contratos observáveis.
+- Add dependencies only when there is a concrete necessity, verifying maintenance, licensing, attack surface, and cross-platform support.
+- Pin native backends and components whose behavior affects rendering or determinism. Track `Cargo.lock` for the binary.
+- Do not introduce Word, LibreOffice, Excel, COM, `unoconv`, remote converters, or network calls as runtime dependencies.
+- Do not add MuPDF or another document interpreter/renderer as a runtime dependency. The PDF engine and authoritative renderer are DocSight's own implementations.
+- MuPDF may only be used as an optional, explicit external oracle in development tests, without integrating into the workspace, binary, or normal test runner.
+- Fallback fonts must be deterministic and declared in diagnostics. Never silently select an arbitrary system font.
+- Build and tests must succeed on Windows, Linux, and macOS, respecting filesystem differences without altering observable contracts.
 
-## Parsing e segurança
+## Parsing and Security
 
-Considere todo documento uma entrada hostil.
+Treat every document as hostile input.
 
-- Detecte formato por magic bytes; nunca confie apenas na extensão.
-- Limite quantidade de entradas, tamanho comprimido e descomprimido, taxa de compressão, profundidade XML, tamanho de tokens, páginas, imagens, memória, CPU e iterações de layout.
-- Desabilite entidades XML externas e qualquer resolução de recurso externo.
-- Normalize caminhos OPC e rejeite caminhos absolutos, traversal com `..`, relações inválidas e colisões ambíguas.
-- Valide dimensões e bytes decodificados antes de alocar imagens.
-- Preserve elementos OOXML desconhecidos como nós opacos ligados ao objeto mais próximo e emita diagnóstico. Não finja que o documento foi totalmente interpretado.
-- Isole o backend PDF e decoders nativos em worker quando o modo de segurança exigir. Converta falha do worker em erro tipado.
-- Nunca execute macros, objetos OLE, JavaScript PDF, anexos ou conteúdo ativo.
+- Detect format by magic bytes; never rely solely on file extensions.
+- Limit entry count, compressed and uncompressed size, compression ratio, XML depth, token sizes, pages, images, memory, CPU, and layout iterations.
+- Disable external XML entities (XXE) and external resource resolution.
+- Normalize OPC paths and reject absolute paths, traversal (`..`), invalid relationships, and ambiguous collisions.
+- Validate dimensions and decoded byte buffers before allocating image memory.
+- Preserve unknown OOXML elements as opaque nodes linked to the nearest object and emit diagnostics. Do not claim full interpretation.
+- Isolate the PDF backend and native decoders inside a worker process when security policy demands it. Convert worker failures into typed errors.
+- Never execute macros, OLE objects, PDF JavaScript, file attachments, or active content.
 
-## Contrato da Document IR
+## Document IR Contract
 
-- A IR é imutável após a fase correspondente ser congelada e preserva proveniência de cada objeto.
-- Blocos visíveis devem carregar, quando conhecível: ID, tipo, página, `bbox`, z-index, ordem de leitura, origem e confiança.
-- Modele explicitamente documento, metadados, estilos, seções, páginas, blocos, overlays e recursos.
-- Preserve parágrafos, headings, itens de lista, tabelas, figuras, shapes, hyperlinks, bookmarks, comentários, notas, alterações controladas e campos suportados.
-- Não descarte informação para simplificar exportação. Exporte uma forma reduzida apenas quando o usuário solicitar e a perda estiver explícita.
-- Tabelas DOCX são estruturais; preserve grid, spans, conteúdo aninhado, estilo, coordenadas e geometria. Tabelas PDF são inferidas e sempre expõem confiança e detector.
+- The IR is immutable once the corresponding phase is frozen and preserves provenance for every object.
+- Visible blocks must carry, when knowable: ID, type, page, `bbox`, z-index, reading order, origin, and confidence.
+- Explicitly model document, metadata, styles, sections, pages, blocks, overlays, and resources.
+- Preserve paragraphs, headings, list items, tables, figures, shapes, hyperlinks, bookmarks, comments, footnotes/endnotes, tracked changes, and supported fields.
+- Do not discard information to simplify export. Export a reduced form only when explicitly requested and with documented loss.
+- DOCX tables are structural: preserve grid, spans, nested content, styles, coordinates, and geometry. PDF tables are inferred and always expose confidence and detector identity.
 
-## Layout e renderização
+## Layout and Rendering
 
-- Implemente o layout como fases determinísticas: geometria de seção, fontes, shaping, linhas, parágrafos, listas, tabelas, objetos flutuantes, paginação, headers/footers e congelamento final.
-- Respeite page breaks, `keep-with-next`, `keep-lines`, viúvas/órfãs, colunas, spans e quebras de linha dentro da cobertura declarada.
-- Associe cada aproximação a um código diagnóstico, consequência provável, confiança reduzida e objetos afetados.
-- Use a mesma transformação de página para geometria, render, crop, hit-testing e diff.
-- Crop por objeto deve derivar coordenadas do `bbox` sem exigir que o consumidor estime pixels.
-- Não declare fidelidade a Word onde ela não existe. Meça e exponha a fidelidade alcançada.
+- Implement layout as deterministic phases: section geometry, fonts, shaping, lines, paragraphs, lists, tables, floating objects, pagination, headers/footers, and final freeze.
+- Respect page breaks, `keep-with-next`, `keep-lines`, widows/orphans, columns, spans, and line breaks within declared coverage.
+- Associate each approximation with a diagnostic code, probable consequence, reduced confidence, and affected objects.
+- Use identical page transformations for geometry, rendering, cropping, hit-testing, and diffing.
+- Object cropping must derive coordinates directly from the bounding box without requiring callers to estimate pixels.
+- Do not claim Word fidelity where it does not exist. Measure and expose achieved fidelity explicitly.
 
-## CLI e protocolo de agente
+## CLI and Agent Protocol
 
-- Trate `stdout` como API. Em modo agente, emita apenas JSON ou NDJSON válido, sem decoração, progresso ou ANSI.
-- Envie diagnósticos e progresso somente para `stderr`. `--quiet` deve removê-los quando aplicável.
-- Mantenha schemas explicitamente versionados e faça validação por JSON Schema.
-- Garanta ordenação canônica por página, ordem de leitura e ID.
-- Operações grandes devem oferecer NDJSON e limites rígidos como `--max-bytes`, `--max-items` e `--text-limit`, com truncamento explícito e token determinístico de continuação.
-- Não altere silenciosamente nomes de campos, semântica, unidades, IDs, exit codes ou formato de erros.
-- Use os exit codes definidos na especificação: `0`, `2`, `10`, `11`, `12`, `13`, `20`, `21`, `30` e `40` para suas categorias correspondentes.
-- Erros devem permitir decisão programática sem comparação de texto e incluir contexto suficiente para ação.
-- Modo humano é uma projeção dos mesmos registros tipados; não implemente lógica de produto separada na camada de apresentação.
+- Treat `stdout` as an API. In agent mode, emit only valid JSON or NDJSON, with zero decoration, progress bars, or ANSI escapes.
+- Send diagnostics and progress exclusively to `stderr`. `--quiet` must suppress them when applicable.
+- Maintain explicitly versioned schemas validated against JSON Schema.
+- Guarantee canonical ordering by page, reading order, and ID.
+- Large operations must provide NDJSON streaming and rigid limits such as `--max-bytes`, `--max-items`, and `--text-limit`, with explicit truncation and deterministic continuation tokens.
+- Never silently alter field names, semantics, units, IDs, exit codes, or error structures.
+- Use the exit codes defined in the specification: `0`, `2`, `10`, `11`, `12`, `13`, `20`, `21`, `30`, and `40` for their corresponding categories.
+- Errors must enable programmatic decision-making without string parsing and include sufficient context for remediation.
+- Human mode is a projection of the same typed records; never implement divergent product logic in the presentation layer.
 
-## Cache e reprodutibilidade
+## Cache and Reproducibility
 
-- Enderece cache pelo digest exato do arquivo, versão do engine, versões dos backends, fingerprint das fontes, perfil de layout e opções relevantes.
-- Nunca reutilize resultado com fingerprint incompatível.
-- Escritas de cache devem ser atômicas. Corrupção ou incompatibilidade deve gerar erro explícito ou invalidação explícita do item, nunca uso silencioso de dado possivelmente incorreto.
-- Não inclua timestamps, caminhos absolutos locais ou ordem de execução em saídas determinísticas, salvo quando o contrato exigir e o campo estiver claramente separado.
+- Key cache entries by exact file digest, engine version, backend versions, font fingerprint, layout profile, and relevant options.
+- Never reuse a cached result with an incompatible fingerprint.
+- Cache writes must be atomic. Corruption or incompatibility must produce an explicit error or explicit invalidation, never silent use of suspect data.
+- Never include timestamps, local absolute paths, or execution thread order in deterministic output, unless explicitly required by contract in a cleanly separated field.
 
-## Testes e critérios de conclusão
+## Testing and Completion Criteria
 
-Toda mudança deve ser testada no nível adequado.
+Every change must be tested at the appropriate layer.
 
-- Testes unitários para parsing, IDs, geometria, normalização, limites e erros.
-- Testes de propriedade para OPC, caminhos, relacionamentos, cascata de estilos e estruturas sujeitas a combinações adversariais.
-- Fixtures mínimas para cada comportamento e fixtures malformadas para cada defesa.
-- Snapshots determinísticos para IR, schemas, CLI e geometria.
-- Goldens visuais com tolerâncias explícitas para renderização; não atualize goldens apenas para fazer testes passarem sem investigar a diferença.
-- Testes de integração para separação stdout/stderr, exit codes, limites, continuação e execução offline.
-- Execuções paralelas repetidas devem produzir JSON byte a byte idêntico.
-- Fuzzing para container OPC, relacionamentos OOXML, estilos, numbering, grid de tabelas, layout de parágrafo, agrupamento de spans PDF e parser DQL quando existir.
-- Teste limites imediatamente acima e abaixo do valor permitido, não apenas o caso feliz.
-- Uma mudança só está concluída quando formatação, lint, testes relevantes e contratos afetados passam. Se algo não puder ser executado, informe exatamente o comando, o motivo e o que permaneceu sem validação.
+- Unit tests for parsing, IDs, geometry, normalization, limits, and errors.
+- Property tests for OPC, paths, relationships, style cascading, and structures exposed to adversarial combinations.
+- Minimal fixtures for every feature and malformed fixtures for every defense mechanism.
+- Deterministic snapshots for IR, schemas, CLI output, and geometry.
+- Visual goldens with explicit rendering tolerances; never update goldens merely to make tests pass without investigating the diff.
+- Integration tests for stdout/stderr separation, exit codes, limits, continuation, and offline execution.
+- Repeated parallel executions must produce byte-identical JSON.
+- Fuzzing for OPC container, OOXML relationships, styles, numbering, table grid, paragraph layout, PDF span clustering, and DQL parser when present.
+- Test limits immediately above and below allowed thresholds, not just the happy path.
+- A change is complete only when formatting, linting, relevant tests, and affected contracts pass. If a test cannot be executed, report the exact command, reason, and what remained unvalidated.
 
-## Fluxo de trabalho do agente
+## Agent Workflow
 
-1. Leia a solicitação, este arquivo, a parte relevante da especificação e os arquivos envolvidos antes de editar.
-2. Verifique o estado atual do diretório e preserve alterações do usuário.
-3. Delimite o menor incremento que resolve completamente a solicitação.
-4. Identifique contratos, riscos de segurança, determinismo, limites e testes afetados.
-5. Implemente usando o caminho canônico, sem fallback e sem comentários no código.
-6. Execute `cargo fmt`, `cargo clippy --all-targets --all-features`, testes direcionados e, quando proporcional ao risco, `cargo test --workspace --all-features`.
-7. Revise o diff final para detectar mudanças acidentais, vazamento de tipos externos, saídas não determinísticas, caminhos alternativos e arquivos gerados indevidos.
-8. Relate de forma objetiva o que mudou, quais verificações passaram e qualquer limitação real. Não faça commit.
+1. Read the user request, this file, relevant parts of the specification, and files involved before editing.
+2. Check the current working directory state and preserve user changes.
+3. Define the smallest increment that completely resolves the request.
+4. Identify contracts, security risks, determinism, limits, and affected tests.
+5. Implement using the canonical path, with no fallbacks and no code comments.
+6. Run `cargo fmt`, `cargo clippy --all-targets --all-features`, targeted tests, and when justified by risk, `cargo test --workspace --all-features`.
+7. Review final diff to detect accidental modifications, external type leakage, non-deterministic output, alternative paths, and stray generated files.
+8. Objectively report what changed, which verifications passed, and any real limitations. Do not commit.
 
-## Conduta ao modificar contratos
+## Conduct When Modifying Contracts
 
-- Não preserve contrato antigo por alias ou compatibilidade silenciosa. Se a mudança solicitada for incompatível, altere o caminho canônico e atualize todos os consumidores dentro do escopo.
-- Schemas públicos precisam de versão explícita. Uma nova versão não autoriza manter duas rotas implícitas; a seleção deve ser clara e deliberada.
-- Mudanças de ID, geometria, ordenação, serialização, diagnóstico, limites e cache exigem fixtures e snapshots específicos.
-- Se uma decisão contrariar a especificação, pare e peça autorização antes de implementar.
+- Do not preserve legacy contracts via aliases or silent compatibility. If a breaking change is requested, update the canonical path and all consumers within scope.
+- Public schemas require explicit versioning. A new version does not authorize two implicit routes; selection must be deliberate.
+- Changes to IDs, geometry, ordering, serialization, diagnostics, limits, and cache require dedicated fixtures and snapshots.
+- If a decision contradicts the specification, stop and request user authorization before implementing.
 
-## Documentação e comunicação
+## Documentation and Communication
 
-- Mantenha nomes, mensagens de erro, ajuda da CLI e schemas em inglês, coerentes com a especificação, salvo solicitação contrária.
-- Escreva documentação externa somente quando fizer parte da tarefa ou for necessária para um contrato público alterado.
-- Não use comentários no código como substituto para uma API clara.
-- Ao concluir trabalho substancial, mencione brevemente apenas melhorias realmente relevantes que ainda possam ser feitas em arquitetura, performance ou serviços Docker opcionais. Trate-as como recomendações e não as implemente sem solicitação.
+- Maintain names, error messages, CLI help, and schemas in English, consistent with the specification, unless instructed otherwise.
+- Write external documentation only when part of the task or required for an altered public contract.
+- Do not use code comments as a substitute for a clear API.
+- Upon completing substantial work, briefly mention only genuinely relevant improvements that could still be made in architecture, performance, or optional Docker services. Treat them as recommendations and do not implement without a request.
