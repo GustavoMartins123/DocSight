@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const MAX_INSPECT_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_RASTER_OUTPUT_BYTES: u64 = 75_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

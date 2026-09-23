@@ -450,7 +450,7 @@ fn tool_get_page(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: format!("page {page_num}"),
         })?;
-    let page_fidelity = docsight_core::page_fidelity(&document);
+    let page_fidelity = docsight_core::page_fidelity(&document, Some(page_num));
     let page_result = crate::PageResult {
         number: target_page.number,
         width_pt: target_page.width_pt,
@@ -637,9 +637,13 @@ fn tool_replay_bundle(
             message: "Missing required string argument 'bundle_path'".to_owned(),
         })?;
     let bundle_path = PathBuf::from(bundle_path_str);
-    let bundle = docsight_render::trace::read_proof_bundle(&bundle_path)?;
-    let verification =
-        docsight_render::trace::verify_proof_bundle_with_password(&bundle, loader.password())?;
+    let limits = docsight_render::trace::ArtifactLimits::default();
+    let bundle = docsight_render::trace::read_proof_bundle_with_limits(&bundle_path, limits)?;
+    let verification = docsight_render::trace::verify_proof_bundle_with_password(
+        &bundle,
+        loader.password(),
+        limits,
+    )?;
     serde_json::to_value(verification).map_err(serialization_error)
 }
 

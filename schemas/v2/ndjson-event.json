@@ -45,6 +45,8 @@
         "coverage.global",
         "coverage.page",
         "hit",
+        "find.summary",
+        "find.match",
         "query.summary",
         "query.match",
         "overview.summary",

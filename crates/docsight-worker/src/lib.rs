@@ -3,8 +3,11 @@ mod platform;
 use docsight_core::DocsightError;
 use platform::{ProcessExit, SpawnRequest, worker_failure};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -74,6 +77,13 @@ pub struct WorkerOutput {
     pub exit_code: u8,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamOutput {
+    pub exit_code: u8,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
 }
 
 pub fn find_worker_binary() -> Result<PathBuf, DocsightError> {
@@ -198,6 +208,275 @@ pub fn run_in_sandbox_with_env(
     }
 }
 
+pub fn run_in_sandbox_streaming(
+    worker_exe: Option<&Path>,
+    policy: &SandboxPolicy,
+    args: &[String],
+    stdout: impl Write + Send + 'static,
+    stderr: impl Write + Send + 'static,
+) -> Result<StreamOutput, DocsightError> {
+    run_in_sandbox_streaming_with_env(worker_exe, policy, args, &[], stdout, stderr)
+}
+
+pub fn run_in_sandbox_streaming_with_env(
+    worker_exe: Option<&Path>,
+    policy: &SandboxPolicy,
+    args: &[String],
+    extra_env: &[(String, String)],
+    stdout: impl Write + Send + 'static,
+    stderr: impl Write + Send + 'static,
+) -> Result<StreamOutput, DocsightError> {
+    let binary = match worker_exe {
+        Some(path) => path.to_path_buf(),
+        None => find_worker_binary()?,
+    };
+    let (read_paths, write_paths) = sandbox_paths(args, extra_env)?;
+    let mut environment = extra_env.to_vec();
+    environment.push((
+        SANDBOX_POLICY_ENV.to_owned(),
+        serde_json::to_string(policy).map_err(|error| {
+            platform::sandbox_failure(format!("failed to serialize the sandbox policy: {error}"))
+        })?,
+    ));
+    let temp_guard = if policy.isolated_temp_dir {
+        Some(tempfile::tempdir().map_err(|error| DocsightError::Io {
+            path: PathBuf::from("<sandbox-temp>"),
+            source: error,
+        })?)
+    } else {
+        None
+    };
+    let mut child = platform::spawn_isolated(
+        &SpawnRequest {
+            binary: &binary,
+            args,
+            environment: &environment,
+            read_paths: &read_paths,
+            write_paths: &write_paths,
+            temp_dir: temp_guard.as_ref().map(tempfile::TempDir::path),
+        },
+        policy,
+    )?;
+    let stdout_pipe = match child.take_stdout() {
+        Some(pipe) => pipe,
+        None => {
+            let _ = child.terminate();
+            return Err(worker_failure(
+                "isolated worker stdout pipe was not created",
+            ));
+        }
+    };
+    let stderr_pipe = match child.take_stderr() {
+        Some(pipe) => pipe,
+        None => {
+            let _ = child.terminate();
+            return Err(worker_failure(
+                "isolated worker stderr pipe was not created",
+            ));
+        }
+    };
+    let budget = Arc::new(AtomicU64::new(0));
+    let stdout_count = Arc::new(AtomicU64::new(0));
+    let stderr_count = Arc::new(AtomicU64::new(0));
+    let (event_sender, events) = sync_channel(4);
+    let stdout_reader = match spawn_relay_reader(
+        stdout_pipe,
+        stdout,
+        Arc::clone(&budget),
+        policy.max_output_bytes,
+        event_sender.clone(),
+        Arc::clone(&stdout_count),
+        "stdout",
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.terminate();
+            return Err(error);
+        }
+    };
+    let stderr_reader = match spawn_relay_reader(
+        stderr_pipe,
+        stderr,
+        Arc::clone(&budget),
+        policy.max_output_bytes,
+        event_sender.clone(),
+        Arc::clone(&stderr_count),
+        "stderr",
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.terminate();
+            let _ = stdout_reader.join();
+            return Err(error);
+        }
+    };
+    drop(event_sender);
+
+    let timeout = Duration::from_secs(policy.wall_timeout_secs);
+    let start = Instant::now();
+    let mut failure = None;
+    loop {
+        while let Ok(event) = events.try_recv() {
+            match event {
+                RelayEvent::Ended => {}
+                RelayEvent::LimitExceeded => failure = Some(StreamFailure::LimitExceeded),
+                RelayEvent::IoError(stream, error) => {
+                    failure = Some(StreamFailure::IoError(stream, error));
+                }
+            }
+        }
+        if let Some(failure) = failure {
+            terminate_and_join_relays(child, stdout_reader, stderr_reader)?;
+            return Err(stream_failure_to_error(failure, policy));
+        }
+        match child.try_wait() {
+            Ok(Some(exit)) => {
+                let stdout_result = stdout_reader.join();
+                let stderr_result = stderr_reader.join();
+                while let Ok(event) = events.try_recv()
+                    && failure.is_none()
+                {
+                    match event {
+                        RelayEvent::Ended => {}
+                        RelayEvent::LimitExceeded => failure = Some(StreamFailure::LimitExceeded),
+                        RelayEvent::IoError(stream, error) => {
+                            failure = Some(StreamFailure::IoError(stream, error))
+                        }
+                    }
+                }
+                if let Some(failure) = failure {
+                    return Err(stream_failure_to_error(failure, policy));
+                }
+                join_relay_result(stdout_result, "stdout")?;
+                join_relay_result(stderr_result, "stderr")?;
+                let exit_code = map_process_exit(exit, policy)?;
+                return Ok(StreamOutput {
+                    exit_code,
+                    stdout_bytes: stdout_count.load(Ordering::Acquire),
+                    stderr_bytes: stderr_count.load(Ordering::Acquire),
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    terminate_and_join_relays(child, stdout_reader, stderr_reader)?;
+                    return Err(worker_failure(format!(
+                        "isolated worker exceeded its wall-clock limit of {} seconds",
+                        policy.wall_timeout_secs
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                terminate_and_join_relays(child, stdout_reader, stderr_reader)?;
+                return Err(error);
+            }
+        }
+    }
+}
+
+enum RelayEvent {
+    Ended,
+    LimitExceeded,
+    IoError(&'static str, io::Error),
+}
+
+enum StreamFailure {
+    LimitExceeded,
+    IoError(&'static str, io::Error),
+}
+
+fn stream_failure_to_error(failure: StreamFailure, policy: &SandboxPolicy) -> DocsightError {
+    match failure {
+        StreamFailure::LimitExceeded => output_limit(policy.max_output_bytes),
+        StreamFailure::IoError(stream, error) => DocsightError::Io {
+            path: PathBuf::from(format!("<sandbox-{stream}>")),
+            source: error,
+        },
+    }
+}
+
+fn spawn_relay_reader<R, W>(
+    mut reader: R,
+    mut writer: W,
+    budget: Arc<AtomicU64>,
+    limit: u64,
+    events: SyncSender<RelayEvent>,
+    counter: Arc<AtomicU64>,
+    stream: &'static str,
+) -> Result<std::thread::JoinHandle<io::Result<()>>, DocsightError>
+where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(format!("docsight-{stream}-relay"))
+        .spawn(move || {
+            let mut buffer = [0_u8; 16 * 1024];
+            loop {
+                let read = match reader.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        let _ = events.send(RelayEvent::IoError(stream, error));
+                        return Ok(());
+                    }
+                };
+                if read == 0 {
+                    let _ = events.send(RelayEvent::Ended);
+                    return Ok(());
+                }
+                let read_u64 = u64::try_from(read)
+                    .map_err(|_| io::Error::other("isolated output chunk length is unsupported"))?;
+                let accepted = budget
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        current
+                            .checked_add(read_u64)
+                            .filter(|total| *total <= limit)
+                    })
+                    .is_ok();
+                if !accepted {
+                    let _ = events.send(RelayEvent::LimitExceeded);
+                    return Ok(());
+                }
+                if let Err(error) = writer
+                    .write_all(&buffer[..read])
+                    .and_then(|_| writer.flush())
+                {
+                    let _ = events.send(RelayEvent::IoError(stream, error));
+                    return Ok(());
+                }
+                counter.fetch_add(read_u64, Ordering::AcqRel);
+            }
+        })
+        .map_err(|error| DocsightError::BackendFailure {
+            backend: WORKER_BACKEND.to_owned(),
+            message: format!("failed to start isolated {stream} reader: {error}"),
+        })
+}
+
+fn terminate_and_join_relays(
+    mut child: platform::IsolatedChild,
+    stdout: std::thread::JoinHandle<io::Result<()>>,
+    stderr: std::thread::JoinHandle<io::Result<()>>,
+) -> Result<(), DocsightError> {
+    child.terminate()?;
+    join_relay_result(stdout.join(), "stdout")?;
+    join_relay_result(stderr.join(), "stderr")?;
+    Ok(())
+}
+
+fn join_relay_result(
+    result: std::thread::Result<io::Result<()>>,
+    stream: &'static str,
+) -> Result<(), DocsightError> {
+    result
+        .map_err(|_| worker_failure(format!("isolated {stream} reader panicked")))?
+        .map_err(|error| DocsightError::Io {
+            path: PathBuf::from(format!("<sandbox-{stream}>")),
+            source: error,
+        })
+}
+
 fn collect_output(
     exit: ProcessExit,
     stdout: BoundedPipeOutput,
@@ -218,32 +497,32 @@ fn collect_output(
         return Err(output_limit(policy.max_output_bytes));
     }
 
-    let exit_code = match exit {
-        #[cfg(unix)]
-        ProcessExit::Signal(signal) if signal == libc::SIGXCPU || signal == libc::SIGKILL => {
-            return Err(cpu_limit(policy));
-        }
-        #[cfg(unix)]
-        ProcessExit::Signal(signal) => {
-            return Err(worker_failure(format!(
-                "isolated worker killed by signal {signal}"
-            )));
-        }
-        #[cfg(target_os = "windows")]
-        ProcessExit::Code(WINDOWS_JOB_QUOTA_EXIT_CODE) => return Err(cpu_limit(policy)),
-        ProcessExit::Code(code) if (0..=255).contains(&code) => code as u8,
-        ProcessExit::Code(_) => {
-            return Err(worker_failure(
-                "isolated worker terminated abnormally with non-standard code",
-            ));
-        }
-    };
+    let exit_code = map_process_exit(exit, policy)?;
 
     Ok(WorkerOutput {
         exit_code,
         stdout: stdout.bytes,
         stderr: stderr.bytes,
     })
+}
+
+fn map_process_exit(exit: ProcessExit, policy: &SandboxPolicy) -> Result<u8, DocsightError> {
+    match exit {
+        #[cfg(unix)]
+        ProcessExit::Signal(signal) if signal == libc::SIGXCPU || signal == libc::SIGKILL => {
+            Err(cpu_limit(policy))
+        }
+        #[cfg(unix)]
+        ProcessExit::Signal(signal) => Err(worker_failure(format!(
+            "isolated worker killed by signal {signal}"
+        ))),
+        #[cfg(target_os = "windows")]
+        ProcessExit::Code(WINDOWS_JOB_QUOTA_EXIT_CODE) => Err(cpu_limit(policy)),
+        ProcessExit::Code(code) if (0..=255).contains(&code) => Ok(code as u8),
+        ProcessExit::Code(_) => Err(worker_failure(
+            "isolated worker terminated abnormally with non-standard code",
+        )),
+    }
 }
 
 /// Exit status Windows assigns to a job process that exceeds its CPU time limit.
@@ -409,6 +688,177 @@ fn terminate_and_drain(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct BufferSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for BufferSink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("sink lock poisoned"))?
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct GatedReader {
+        first: bool,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl Read for GatedReader {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            if self.first {
+                self.first = false;
+                bytes[0] = b'x';
+                return Ok(1);
+            }
+            self.release
+                .recv()
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "reader gate closed"))?;
+            Ok(0)
+        }
+    }
+
+    struct NotifySink {
+        state: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl Write for NotifySink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let (lock, condition) = &*self.state;
+            let mut written = lock
+                .lock()
+                .map_err(|_| io::Error::other("sink lock poisoned"))?;
+            *written = true;
+            condition.notify_all();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingSink;
+
+    impl Write for FailingSink {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "sink closed"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn streaming_relay_forwards_and_flushes_before_eof() -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = BufferSink(Arc::clone(&bytes));
+        let budget = Arc::new(AtomicU64::new(0));
+        let count = Arc::new(AtomicU64::new(0));
+        let (sender, receiver) = sync_channel(2);
+        let reader = spawn_relay_reader(
+            io::Cursor::new(b"abc".to_vec()),
+            sink,
+            budget,
+            10,
+            sender,
+            count,
+            "stdout",
+        )?;
+        reader.join().map_err(|_| "reader panicked")??;
+        assert!(matches!(receiver.recv()?, RelayEvent::Ended));
+        assert_eq!(&*bytes.lock().map_err(|_| "sink lock poisoned")?, b"abc");
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_relay_does_not_wait_for_reader_eof() -> Result<(), Box<dyn std::error::Error>> {
+        let state = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let (release_sender, release) = std::sync::mpsc::channel();
+        let (sender, receiver) = sync_channel(2);
+        let reader = spawn_relay_reader(
+            GatedReader {
+                first: true,
+                release,
+            },
+            NotifySink {
+                state: Arc::clone(&state),
+            },
+            Arc::new(AtomicU64::new(0)),
+            10,
+            sender,
+            Arc::new(AtomicU64::new(0)),
+            "stdout",
+        )?;
+        let (lock, condition) = &*state;
+        let written = lock.lock().map_err(|_| "sink lock poisoned")?;
+        let (written, timeout) = condition
+            .wait_timeout_while(written, std::time::Duration::from_secs(1), |written| {
+                !*written
+            })
+            .map_err(|_| "sink lock poisoned")?;
+        assert!(*written);
+        assert!(!timeout.timed_out());
+        drop(written);
+        release_sender.send(())?;
+        reader.join().map_err(|_| "reader panicked")??;
+        assert!(matches!(receiver.recv()?, RelayEvent::Ended));
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_relay_enforces_one_shared_budget() -> Result<(), Box<dyn std::error::Error>> {
+        let budget = Arc::new(AtomicU64::new(0));
+        let (sender, receiver) = sync_channel(4);
+        let first = spawn_relay_reader(
+            io::Cursor::new(b"ab".to_vec()),
+            BufferSink(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            Arc::clone(&budget),
+            3,
+            sender.clone(),
+            Arc::new(AtomicU64::new(0)),
+            "stdout",
+        )?;
+        first.join().map_err(|_| "reader panicked")??;
+        let second = spawn_relay_reader(
+            io::Cursor::new(b"cd".to_vec()),
+            BufferSink(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            Arc::clone(&budget),
+            3,
+            sender,
+            Arc::new(AtomicU64::new(0)),
+            "stderr",
+        )?;
+        second.join().map_err(|_| "reader panicked")??;
+        assert!(matches!(receiver.recv()?, RelayEvent::Ended));
+        assert!(matches!(receiver.recv()?, RelayEvent::LimitExceeded));
+        Ok(())
+    }
+
+    #[test]
+    fn streaming_relay_reports_sink_failure() -> Result<(), Box<dyn std::error::Error>> {
+        let (sender, receiver) = sync_channel(2);
+        let reader = spawn_relay_reader(
+            io::Cursor::new(b"abc".to_vec()),
+            FailingSink,
+            Arc::new(AtomicU64::new(0)),
+            10,
+            sender,
+            Arc::new(AtomicU64::new(0)),
+            "stdout",
+        )?;
+        reader.join().map_err(|_| "reader panicked")??;
+        assert!(matches!(receiver.recv()?, RelayEvent::IoError(_, _)));
+        Ok(())
+    }
 
     #[test]
     fn infers_all_explicit_artifact_write_paths() -> Result<(), DocsightError> {

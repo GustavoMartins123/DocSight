@@ -551,5 +551,95 @@ fn max_document_bytes_override_enforces_limit_and_allows_increase()
         .output()?;
     assert_eq!(zero_budget.status.code(), Some(2));
 
+    let directory = tempfile::tempdir()?;
+    let document_bytes = std::fs::metadata(&doc_path)?.len().to_string();
+    let rejected_limit = document_bytes.parse::<u64>()?.saturating_sub(1).to_string();
+    let png = directory.path().join("page.png");
+    let trace = directory.path().join("page.dstrace");
+    let rejected_render = docsight()
+        .args([
+            "--agent",
+            "--max-document-bytes",
+            &rejected_limit,
+            "render",
+            doc_str,
+            "--page",
+            "1",
+            "--out",
+            png.to_str().ok_or("PNG path")?,
+            "--trace",
+            trace.to_str().ok_or("trace path")?,
+        ])
+        .output()?;
+    assert_eq!(rejected_render.status.code(), Some(13));
+    assert!(!png.exists());
+    assert!(!trace.exists());
+
+    let accepted_render = docsight()
+        .args([
+            "--agent",
+            "--max-document-bytes",
+            &document_bytes,
+            "render",
+            doc_str,
+            "--page",
+            "1",
+            "--out",
+            png.to_str().ok_or("PNG path")?,
+            "--trace",
+            trace.to_str().ok_or("trace path")?,
+        ])
+        .output()?;
+    assert!(accepted_render.status.success());
+
+    let rejected_replay = docsight()
+        .args([
+            "--agent",
+            "--max-document-bytes",
+            &rejected_limit,
+            "replay",
+            trace.to_str().ok_or("trace path")?,
+            "--verify",
+        ])
+        .output()?;
+    assert_eq!(rejected_replay.status.code(), Some(13));
+    let accepted_replay = docsight()
+        .args([
+            "--agent",
+            "--max-document-bytes",
+            &document_bytes,
+            "replay",
+            trace.to_str().ok_or("trace path")?,
+            "--verify",
+        ])
+        .output()?;
+    assert!(accepted_replay.status.success());
+
+    let bundle = directory.path().join("page.dse");
+    let accepted_bundle = docsight()
+        .args([
+            "--agent",
+            "--max-document-bytes",
+            &document_bytes,
+            "bundle",
+            doc_str,
+            "--page",
+            "1",
+            "--out",
+            bundle.to_str().ok_or("bundle path")?,
+        ])
+        .output()?;
+    assert!(accepted_bundle.status.success());
+    let rejected_verify = docsight()
+        .args([
+            "--agent",
+            "--max-document-bytes",
+            &rejected_limit,
+            "verify",
+            bundle.to_str().ok_or("bundle path")?,
+        ])
+        .output()?;
+    assert_eq!(rejected_verify.status.code(), Some(13));
+
     Ok(())
 }

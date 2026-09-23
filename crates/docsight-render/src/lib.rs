@@ -234,7 +234,7 @@ pub fn render_pdf_with_password(
             }
         }
     };
-    Ok(from_raster(raster))
+    from_raster(raster)
 }
 
 fn object_crop_target(document: &Document, id: &str) -> Result<(u32, Rect), DocsightError> {
@@ -316,8 +316,18 @@ fn clipped_crop_warning(object: &str, page: u32) -> Diagnostic {
     }
 }
 
-fn from_raster(raster: RasterizedPage) -> RenderedImage {
-    RenderedImage {
+fn from_raster(raster: RasterizedPage) -> Result<RenderedImage, DocsightError> {
+    let png_bytes = u64::try_from(raster.png.len()).map_err(|_| DocsightError::ResourceLimit {
+        resource: "raster PNG bytes".to_owned(),
+        limit: docsight_core::MAX_RASTER_OUTPUT_BYTES,
+    })?;
+    if png_bytes > docsight_core::MAX_RASTER_OUTPUT_BYTES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "raster PNG bytes".to_owned(),
+            limit: docsight_core::MAX_RASTER_OUTPUT_BYTES,
+        });
+    }
+    Ok(RenderedImage {
         metadata: RenderMetadata {
             page: raster.page,
             dpi: raster.dpi,
@@ -329,7 +339,7 @@ fn from_raster(raster: RasterizedPage) -> RenderedImage {
         warnings: raster.warnings,
         png: raster.png,
         pixels: raster.pixels,
-    }
+    })
 }
 
 #[cfg(test)]

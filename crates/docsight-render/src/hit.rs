@@ -1,7 +1,7 @@
 use docsight_core::{
     BlockContent, BlockKind, DocsightError, Document, DocumentSource, ObjectId, OverlayKind, Rect,
 };
-use docsight_ingest::ingest;
+use docsight_ingest::ingest_with_password;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,8 +95,9 @@ pub fn hit_test_document(
     source: &DocumentSource,
     page_number: u32,
     query: &HitQuery,
+    password: &[u8],
 ) -> Result<HitResult, DocsightError> {
-    let document = ingest(source)?;
+    let document = ingest_with_password(source, password)?;
 
     hit_test(&document, page_number, query)
 }
@@ -106,6 +107,11 @@ pub fn hit_test(
     page_number: u32,
     query: &HitQuery,
 ) -> Result<HitResult, DocsightError> {
+    if page_number == 0 {
+        return Err(DocsightError::InvalidArgument {
+            message: "page numbers are 1-based".to_owned(),
+        });
+    }
     validate_query(query)?;
     let page = document.pages.iter().find(|p| p.number == page_number);
     let Some(page) = page else {

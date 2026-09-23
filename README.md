@@ -119,7 +119,7 @@ Agent calls support hard output controls:
 - `--continue` resumes a truncated collection with a deterministic token.
 - `--ndjson` streams records while preserving typed metadata and completion records.
 
-Truncation is explicit. DocSight never silently drops evidence to fit a limit.
+Truncation is explicit. DocSight never silently drops evidence to fit a limit. `--ndjson` implies the structured `docsight.agent/v2` error envelope on stderr, while successful stdout remains a sequence of JSON records. With `--sandbox --ndjson`, records are relayed as the worker emits them; consumers must require both exit code `0` and a final `done` record before accepting a stream. A failed sandbox stream can contain a valid prefix, but the non-zero exit invalidates the operation.
 
 ## Shell completion
 

@@ -305,6 +305,93 @@ fn diff_ndjson_streaming_events() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn diff_ndjson_continuation_emits_every_item_once() -> Result<(), Box<dyn std::error::Error>> {
+    let before = fixture("sample_headings.docx");
+    let after = fixture("sample_tables.docx");
+    let before_text = before.to_str().ok_or("before path")?;
+    let after_text = after.to_str().ok_or("after path")?;
+
+    let baseline_output = docsight()
+        .args(["--agent", "--ndjson", "diff", before_text, after_text])
+        .output()?;
+    assert!(baseline_output.status.success());
+    let baseline_records = baseline_output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let baseline_items = baseline_records
+        .iter()
+        .filter_map(|record| {
+            if !record["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("diff."))
+            {
+                return None;
+            }
+            let mut record = record.clone();
+            if let Some(object) = record.as_object_mut() {
+                object.remove("seq");
+            }
+            Some(record)
+        })
+        .collect::<Vec<_>>();
+    let total_items = baseline_records
+        .last()
+        .and_then(|record| record["limits"]["total_items"].as_u64())
+        .ok_or("baseline total items")?;
+
+    let mut collected = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut command = docsight();
+        command.args([
+            "--agent",
+            "--ndjson",
+            "--max-items",
+            "2",
+            "diff",
+            before_text,
+            after_text,
+        ]);
+        if let Some(token) = &token {
+            command.args(["--continue", token]);
+        }
+        let output = command.output()?;
+        assert!(output.status.success());
+        let records = output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_slice)
+            .collect::<Result<Vec<serde_json::Value>, _>>()?;
+        for record in &records {
+            let mut record = record.clone();
+            let kind = record["type"].as_str().unwrap_or_default();
+            if kind.starts_with("diff.") {
+                if let Some(object) = record.as_object_mut() {
+                    object.remove("seq");
+                }
+                collected.push(record);
+            }
+        }
+        let done = records.last().ok_or("done record")?;
+        assert_eq!(done["type"], "done");
+        token = done["limits"]["continuation_token"]
+            .as_str()
+            .map(str::to_owned);
+        if token.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(collected.len() as u64, total_items);
+    assert_eq!(collected, baseline_items);
+    Ok(())
+}
+
+#[test]
 fn diff_visual_ndjson_streams_complete_verifiable_evidence()
 -> Result<(), Box<dyn std::error::Error>> {
     let before = fixture("sample_headings.docx");

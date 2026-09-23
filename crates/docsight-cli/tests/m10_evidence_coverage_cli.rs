@@ -263,6 +263,24 @@ fn coverage_pdf_json_filtered_page() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn coverage_rejects_zero_and_nonexistent_pages() -> Result<(), Box<dyn std::error::Error>> {
+    let document = fixture("sample_headings.docx");
+    let document_text = document.to_str().ok_or("document path")?;
+    let zero = docsight()
+        .args(["--agent", "coverage", document_text, "--page", "0"])
+        .output()?;
+    assert_eq!(zero.status.code(), Some(2));
+    assert!(zero.stdout.is_empty());
+
+    let missing = docsight()
+        .args(["--agent", "coverage", document_text, "--page", "999"])
+        .output()?;
+    assert_eq!(missing.status.code(), Some(21));
+    assert!(missing.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
 fn coverage_ndjson_streaming() -> Result<(), Box<dyn std::error::Error>> {
     let doc_path = fixture("sample_headings.docx");
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
@@ -284,6 +302,117 @@ fn coverage_ndjson_streaming() -> Result<(), Box<dyn std::error::Error>> {
     let last: serde_json::Value = serde_json::from_str(lines[lines.len() - 1])?;
     assert_eq!(last["type"], "done");
 
+    Ok(())
+}
+
+#[test]
+fn coverage_ndjson_continuation_has_no_duplicates_or_scope_alias()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = fixture("sample_headings.docx");
+    let document_text = document.to_str().ok_or("document path")?;
+    let baseline_output = docsight()
+        .args(["--agent", "--ndjson", "coverage", document_text])
+        .output()?;
+    assert!(baseline_output.status.success());
+    let baseline_records = baseline_output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let baseline_items = baseline_records
+        .iter()
+        .filter_map(|record| {
+            let kind = record["type"].as_str().unwrap_or_default();
+            if !kind.starts_with("coverage.") {
+                return None;
+            }
+            let mut record = record.clone();
+            if let Some(object) = record.as_object_mut() {
+                object.remove("seq");
+            }
+            Some(record)
+        })
+        .collect::<Vec<_>>();
+
+    let mut records = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut command = docsight();
+        command.args([
+            "--agent",
+            "--ndjson",
+            "--max-items",
+            "2",
+            "coverage",
+            document_text,
+        ]);
+        if let Some(token) = &token {
+            command.args(["--continue", token]);
+        }
+        let output = command.output()?;
+        assert!(output.status.success());
+        let page = output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_slice)
+            .collect::<Result<Vec<serde_json::Value>, _>>()?;
+        for record in &page {
+            let mut record = record.clone();
+            if record["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("coverage."))
+            {
+                if let Some(object) = record.as_object_mut() {
+                    object.remove("seq");
+                }
+                records.push(record);
+            }
+        }
+        let done = page.last().ok_or("done record")?;
+        token = done["limits"]["continuation_token"]
+            .as_str()
+            .map(str::to_owned);
+        if token.is_none() {
+            break;
+        }
+    }
+    assert_eq!(records, baseline_items);
+
+    let first = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "--max-items",
+            "2",
+            "coverage",
+            document_text,
+        ])
+        .output()?;
+    let first_records = first
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let first_token = first_records
+        .last()
+        .and_then(|record| record["limits"]["continuation_token"].as_str())
+        .ok_or("continuation token")?;
+    let wrong_scope = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "coverage",
+            document_text,
+            "--regions",
+            "--continue",
+            first_token,
+        ])
+        .output()?;
+    assert_eq!(wrong_scope.status.code(), Some(2));
+    assert!(wrong_scope.stdout.is_empty());
     Ok(())
 }
 

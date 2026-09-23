@@ -233,7 +233,15 @@ impl ContinuationToken {
             });
         }
 
-        if !expected_sha256.starts_with(digest_prefix) {
+        let canonical_digest_prefix = digest_prefix.len() == 16
+            && digest_prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if !canonical_digest_prefix
+            || !expected_sha256
+                .as_bytes()
+                .starts_with(digest_prefix.as_bytes())
+        {
             return Err(DocsightError::InvalidArgument {
                 message: "continuation token does not match the target document".to_owned(),
             });
@@ -245,6 +253,19 @@ impl ContinuationToken {
                 message: "continuation token offset is not a valid integer".to_owned(),
             })
     }
+}
+
+fn validate_continuation_offset(
+    token: Option<&str>,
+    offset: usize,
+    total_items: usize,
+) -> Result<(), DocsightError> {
+    if token.is_some() && offset >= total_items {
+        return Err(DocsightError::InvalidArgument {
+            message: "continuation token offset is outside the current result set".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -774,6 +795,7 @@ pub fn apply_collection_limits<T: Clone>(
     };
 
     let total_items = items.len();
+    validate_continuation_offset(limits.continue_token.as_deref(), start_offset, total_items)?;
     if start_offset >= total_items {
         return Ok((
             Vec::new(),
@@ -844,6 +866,7 @@ where
     };
 
     let total_items = items.len();
+    validate_continuation_offset(limits.continue_token.as_deref(), start_offset, total_items)?;
     let available = if start_offset < total_items {
         &items[start_offset..]
     } else {
@@ -948,7 +971,9 @@ pub struct NdjsonWriter<W: Write> {
     bytes_written: usize,
     items_emitted: usize,
     truncated: bool,
-    continuation_offset: usize,
+    continuation_start: usize,
+    skipped_items: usize,
+    next_item_offset: usize,
     total_items: usize,
     text_truncated: bool,
     warnings_seen: usize,
@@ -964,11 +989,17 @@ impl<W: Write> NdjsonWriter<W> {
         sha256: String,
         total_items: usize,
     ) -> Result<Self, DocsightError> {
-        let continuation_offset = if let Some(ref token) = limits.continue_token {
+        let command = format!("ndjson-{command}");
+        let continuation_start = if let Some(ref token) = limits.continue_token {
             ContinuationToken::decode(token, &command, &sha256)?
         } else {
             0
         };
+        validate_continuation_offset(
+            limits.continue_token.as_deref(),
+            continuation_start,
+            total_items,
+        )?;
 
         Ok(Self {
             writer,
@@ -979,17 +1010,15 @@ impl<W: Write> NdjsonWriter<W> {
             bytes_written: 0,
             items_emitted: 0,
             truncated: false,
-            continuation_offset,
+            continuation_start,
+            skipped_items: 0,
+            next_item_offset: continuation_start,
             total_items,
             text_truncated: false,
             warnings_seen: 0,
             warnings_emitted: 0,
             page_end_reserve: None,
         })
-    }
-
-    pub fn continuation_offset(&self) -> usize {
-        self.continuation_offset
     }
 
     fn serialized_line(val: &serde_json::Value) -> Result<String, DocsightError> {
@@ -1003,6 +1032,7 @@ impl<W: Write> NdjsonWriter<W> {
         self.writer
             .write_all(line.as_bytes())
             .and_then(|_| self.writer.write_all(b"\n"))
+            .and_then(|_| self.writer.flush())
             .map_err(|e| DocsightError::Io {
                 path: PathBuf::from("stdout"),
                 source: e,
@@ -1119,6 +1149,11 @@ impl<W: Write> NdjsonWriter<W> {
     }
 
     pub fn write_page_begin(&mut self, page: u32) -> Result<bool, DocsightError> {
+        if self.page_end_reserve.is_some() {
+            return Err(DocsightError::MalformedDocument {
+                message: "NDJSON page boundary is already open".to_owned(),
+            });
+        }
         let begin_seq = self.seq.saturating_add(1);
         let line = serde_json::json!({
             "seq": begin_seq,
@@ -1144,7 +1179,9 @@ impl<W: Write> NdjsonWriter<W> {
 
     pub fn write_page_end(&mut self, page: u32) -> Result<bool, DocsightError> {
         let Some(reserved) = self.page_end_reserve.take() else {
-            return Ok(false);
+            return Err(DocsightError::MalformedDocument {
+                message: "NDJSON page end has no matching page begin".to_owned(),
+            });
         };
         self.seq += 1;
         let line = serde_json::json!({
@@ -1205,6 +1242,16 @@ impl<W: Write> NdjsonWriter<W> {
             return Ok(false);
         }
 
+        if self.skipped_items < self.continuation_start {
+            self.skipped_items += 1;
+            return Ok(true);
+        }
+        if self.next_item_offset >= self.total_items {
+            return Err(DocsightError::MalformedDocument {
+                message: "NDJSON item count exceeds the declared total".to_owned(),
+            });
+        }
+
         let mut projected = if let Some(ref fields) = self.limits.select {
             validate_projection(data, fields)?;
             project_json(data, fields)
@@ -1246,28 +1293,26 @@ impl<W: Write> NdjsonWriter<W> {
             return Ok(false);
         }
 
-        self.writer
-            .write_all(line_str.as_bytes())
-            .and_then(|_| self.writer.write_all(b"\n"))
-            .map_err(|e| DocsightError::Io {
-                path: PathBuf::from("stdout"),
-                source: e,
-            })?;
+        self.write_serialized_line(&line_str)?;
 
-        self.bytes_written += line_bytes;
         self.seq = seq;
         self.items_emitted += 1;
-        self.continuation_offset += 1;
+        self.next_item_offset += 1;
 
         Ok(true)
     }
 
     pub fn finish(mut self) -> Result<OutputLimits, DocsightError> {
-        let truncated = self.truncated || self.continuation_offset < self.total_items;
-        let continuation_token = if truncated && self.continuation_offset < self.total_items {
+        if self.page_end_reserve.is_some() {
+            return Err(DocsightError::MalformedDocument {
+                message: "NDJSON stream ended with an open page boundary".to_owned(),
+            });
+        }
+        let truncated = self.truncated || self.next_item_offset < self.total_items;
+        let continuation_token = if truncated && self.next_item_offset < self.total_items {
             Some(ContinuationToken::encode(
                 &self.command,
-                self.continuation_offset,
+                self.next_item_offset,
                 &self.sha256,
             ))
         } else {
@@ -1508,6 +1553,97 @@ mod tests {
         assert_eq!(line3["type"], "done");
         assert_eq!(line3["limits"]["truncated"], true);
 
+        Ok(())
+    }
+
+    #[test]
+    fn ndjson_resume_skips_the_consumed_prefix() -> Result<(), Box<dyn std::error::Error>> {
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let doc_ref = DocumentReference {
+            id: "doc_123".into(),
+            sha256: digest.into(),
+        };
+        let mut first = Vec::new();
+        let mut writer = NdjsonWriter::new(
+            &mut first,
+            QueryLimits {
+                max_items: Some(1),
+                ..Default::default()
+            },
+            "outline".into(),
+            digest.into(),
+            3,
+        )?;
+        writer.write_meta(&doc_ref)?;
+        assert!(writer.write_item("heading", &serde_json::json!({"id": "h_1"}))?);
+        assert!(!writer.write_item("heading", &serde_json::json!({"id": "h_2"}))?);
+        let token = writer
+            .finish()?
+            .continuation_token
+            .ok_or("continuation token")?;
+
+        let mut resumed = Vec::new();
+        let mut writer = NdjsonWriter::new(
+            &mut resumed,
+            QueryLimits {
+                continue_token: Some(token),
+                ..Default::default()
+            },
+            "outline".into(),
+            digest.into(),
+            3,
+        )?;
+        writer.write_meta(&doc_ref)?;
+        assert!(writer.write_item("heading", &serde_json::json!({"id": "h_1"}))?);
+        assert!(writer.write_item("heading", &serde_json::json!({"id": "h_2"}))?);
+        assert!(writer.write_item("heading", &serde_json::json!({"id": "h_3"}))?);
+        let limits = writer.finish()?;
+        assert!(!limits.truncated);
+
+        let records = std::str::from_utf8(&resumed)?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let item_ids = records
+            .iter()
+            .filter(|record| record["type"] == "heading")
+            .filter_map(|record| record["id"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(item_ids, ["h_2", "h_3"]);
+        Ok(())
+    }
+
+    #[test]
+    fn ndjson_rejects_terminal_offsets_and_open_page_boundaries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let token = ContinuationToken::encode("outline", 1, digest);
+        let mut bytes = Vec::new();
+        let writer = NdjsonWriter::new(
+            &mut bytes,
+            QueryLimits {
+                continue_token: Some(token),
+                ..Default::default()
+            },
+            "outline".into(),
+            digest.into(),
+            1,
+        );
+        assert!(matches!(writer, Err(DocsightError::InvalidArgument { .. })));
+
+        let mut page_bytes = Vec::new();
+        let mut writer = NdjsonWriter::new(
+            &mut page_bytes,
+            QueryLimits::default(),
+            "page".into(),
+            digest.into(),
+            1,
+        )?;
+        assert!(writer.write_page_begin(1)?);
+        assert!(matches!(
+            writer.finish(),
+            Err(DocsightError::MalformedDocument { .. })
+        ));
         Ok(())
     }
 

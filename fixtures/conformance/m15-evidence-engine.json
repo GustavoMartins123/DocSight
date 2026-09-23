@@ -733,7 +733,7 @@
     {
       "file": "ndjson-event.json",
       "id": "https://docsight.dev/schemas/v2/ndjson-event.json",
-      "sha256": "370bd1d793309c601d69adb47b0dad414117cb813d56e757044615cd7b26d72d"
+      "sha256": "aba6733bbcca134df8ac618fb9824df40da7c2bdbd697ebf413b4b28ea09be8c"
     },
     {
       "file": "outline-result.json",

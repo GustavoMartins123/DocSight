@@ -20,14 +20,66 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 const TRACE_SCHEMA: &str = "docsight.trace/v2";
 const PROOF_BUNDLE_SCHEMA: &str = "docsight.proof-bundle/v2";
 const MAX_ARTIFACT_MANIFEST_BYTES: u64 = 1_048_576;
-const MAX_ARTIFACT_CROP_BYTES: u64 = 75_000_000;
+const MAX_ARTIFACT_CROP_BYTES: u64 = docsight_core::MAX_RASTER_OUTPUT_BYTES;
 const MAX_ARCHIVE_OVERHEAD_BYTES: u64 = 4_096;
-const MAX_TRACE_BYTES: u64 =
-    docsight_core::MAX_INSPECT_BYTES + MAX_ARTIFACT_MANIFEST_BYTES + MAX_ARCHIVE_OVERHEAD_BYTES;
-const MAX_PROOF_BUNDLE_BYTES: u64 = docsight_core::MAX_INSPECT_BYTES
-    + MAX_ARTIFACT_MANIFEST_BYTES
-    + MAX_ARTIFACT_CROP_BYTES
-    + MAX_ARCHIVE_OVERHEAD_BYTES;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArtifactLimits {
+    pub max_document_bytes: u64,
+}
+
+impl Default for ArtifactLimits {
+    fn default() -> Self {
+        Self {
+            max_document_bytes: docsight_core::MAX_INSPECT_BYTES,
+        }
+    }
+}
+
+fn checked_limit(value: u64, additions: &[u64], resource: &str) -> Result<u64, DocsightError> {
+    additions.iter().try_fold(value, |total, addition| {
+        total
+            .checked_add(*addition)
+            .ok_or_else(|| DocsightError::ResourceLimit {
+                resource: resource.to_owned(),
+                limit: u64::MAX,
+            })
+    })
+}
+
+fn trace_archive_limit(limits: ArtifactLimits) -> Result<u64, DocsightError> {
+    checked_limit(
+        limits.max_document_bytes,
+        &[MAX_ARTIFACT_MANIFEST_BYTES, MAX_ARCHIVE_OVERHEAD_BYTES],
+        "trace archive byte limit",
+    )
+}
+
+fn proof_archive_limit(limits: ArtifactLimits) -> Result<u64, DocsightError> {
+    checked_limit(
+        limits.max_document_bytes,
+        &[
+            MAX_ARTIFACT_MANIFEST_BYTES,
+            MAX_ARTIFACT_CROP_BYTES,
+            MAX_ARCHIVE_OVERHEAD_BYTES,
+        ],
+        "proof archive byte limit",
+    )
+}
+
+fn validate_document_size(
+    actual: u64,
+    limits: ArtifactLimits,
+    resource: &str,
+) -> Result<(), DocsightError> {
+    if actual > limits.max_document_bytes {
+        return Err(DocsightError::ResourceLimit {
+            resource: resource.to_owned(),
+            limit: limits.max_document_bytes,
+        });
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -342,14 +394,16 @@ pub fn record_trace(
     source: &DocumentSource,
     request: &RenderRequest,
 ) -> Result<TraceArtifact, DocsightError> {
-    record_trace_with_password(source, request, b"")
+    record_trace_with_password(source, request, b"", ArtifactLimits::default())
 }
 
 pub fn record_trace_with_password(
     source: &DocumentSource,
     request: &RenderRequest,
     password: &[u8],
+    limits: ArtifactLimits,
 ) -> Result<TraceArtifact, DocsightError> {
+    validate_document_size(source.size_bytes(), limits, "trace source bytes")?;
     let rendered = render_document_with_password(source, request, password)?;
     let selector = TraceSelector::from_render_target(&request.target);
     let target = TraceTarget {
@@ -433,7 +487,13 @@ pub fn create_proof_bundle(
     request: &RenderRequest,
     include_crop: bool,
 ) -> Result<ProofBundle, DocsightError> {
-    create_proof_bundle_with_password(source, request, include_crop, b"")
+    create_proof_bundle_with_password(
+        source,
+        request,
+        include_crop,
+        b"",
+        ArtifactLimits::default(),
+    )
 }
 
 pub fn create_proof_bundle_with_password(
@@ -441,8 +501,9 @@ pub fn create_proof_bundle_with_password(
     request: &RenderRequest,
     include_crop: bool,
     password: &[u8],
+    limits: ArtifactLimits,
 ) -> Result<ProofBundle, DocsightError> {
-    let trace = record_trace_with_password(source, request, password)?;
+    let trace = record_trace_with_password(source, request, password, limits)?;
     let document = load_document(source, password)?;
     let glyph_coverage = document_glyph_coverage(&document, source);
     let evidence = selected_evidence(
@@ -487,33 +548,54 @@ pub fn create_proof_bundle_with_password(
 }
 
 pub fn read_trace(path: &Path) -> Result<TraceArtifact, DocsightError> {
-    let bytes = read_artifact(path, MAX_TRACE_BYTES, "trace artifact")?;
-    TraceArtifact::from_bytes(&bytes)
+    read_trace_with_limits(path, ArtifactLimits::default())
+}
+
+pub fn read_trace_with_limits(
+    path: &Path,
+    limits: ArtifactLimits,
+) -> Result<TraceArtifact, DocsightError> {
+    let maximum = trace_archive_limit(limits)?;
+    let bytes = read_artifact(path, maximum, "trace artifact")?;
+    TraceArtifact::from_bytes_with_limits(&bytes, limits)
 }
 
 pub fn read_proof_bundle(path: &Path) -> Result<ProofBundle, DocsightError> {
-    let bytes = read_artifact(path, MAX_PROOF_BUNDLE_BYTES, "proof bundle")?;
-    ProofBundle::from_bytes(&bytes)
+    read_proof_bundle_with_limits(path, ArtifactLimits::default())
+}
+
+pub fn read_proof_bundle_with_limits(
+    path: &Path,
+    limits: ArtifactLimits,
+) -> Result<ProofBundle, DocsightError> {
+    let maximum = proof_archive_limit(limits)?;
+    let bytes = read_artifact(path, maximum, "proof bundle")?;
+    ProofBundle::from_bytes_with_limits(&bytes, limits)
 }
 
 pub fn verify_trace(trace: &TraceArtifact) -> Result<ReplayVerification, DocsightError> {
-    verify_trace_with_password(trace, b"")
+    verify_trace_with_password(trace, b"", ArtifactLimits::default())
 }
 
 pub fn verify_trace_with_password(
     trace: &TraceArtifact,
     password: &[u8],
+    limits: ArtifactLimits,
 ) -> Result<ReplayVerification, DocsightError> {
     validate_trace_manifest(&trace.manifest)?;
     let source = DocumentSource::from_bytes(trace.source_bytes.clone())?;
-    let reproduced =
-        record_trace_with_password(&source, &trace.manifest.target.to_request(), password)?;
+    let reproduced = record_trace_with_password(
+        &source,
+        &trace.manifest.target.to_request(),
+        password,
+        limits,
+    )?;
     if trace.manifest != reproduced.manifest {
         return Err(DocsightError::VerificationFailed {
             message: "trace manifest differs from deterministic replay".to_owned(),
         });
     }
-    let trace_bytes = trace.to_bytes()?;
+    let trace_bytes = trace.to_bytes_with_limits(limits)?;
     Ok(ReplayVerification {
         schema: TRACE_SCHEMA,
         valid: true,
@@ -525,12 +607,13 @@ pub fn verify_trace_with_password(
 }
 
 pub fn verify_proof_bundle(bundle: &ProofBundle) -> Result<ProofVerification, DocsightError> {
-    verify_proof_bundle_with_password(bundle, b"")
+    verify_proof_bundle_with_password(bundle, b"", ArtifactLimits::default())
 }
 
 pub fn verify_proof_bundle_with_password(
     bundle: &ProofBundle,
     password: &[u8],
+    limits: ArtifactLimits,
 ) -> Result<ProofVerification, DocsightError> {
     validate_proof_manifest(&bundle.manifest)?;
     let source = DocumentSource::from_bytes(bundle.source_bytes.clone())?;
@@ -539,6 +622,7 @@ pub fn verify_proof_bundle_with_password(
         &bundle.manifest.trace.target.to_request(),
         bundle.crop_png.is_some(),
         password,
+        limits,
     )?;
     if bundle.manifest != reproduced.manifest {
         return Err(DocsightError::VerificationFailed {
@@ -550,7 +634,7 @@ pub fn verify_proof_bundle_with_password(
             message: "proof bundle crop differs from deterministic verification".to_owned(),
         });
     }
-    let bundle_bytes = bundle.to_bytes()?;
+    let bundle_bytes = bundle.to_bytes_with_limits(limits)?;
     Ok(ProofVerification {
         schema: PROOF_BUNDLE_SCHEMA,
         valid: true,
@@ -568,28 +652,46 @@ impl TraceArtifact {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, DocsightError> {
+        self.to_bytes_with_limits(ArtifactLimits::default())
+    }
+
+    pub fn to_bytes_with_limits(&self, limits: ArtifactLimits) -> Result<Vec<u8>, DocsightError> {
         validate_trace_manifest(&self.manifest)?;
-        if self.source_bytes.len() as u64 > docsight_core::MAX_INSPECT_BYTES {
-            return Err(DocsightError::ResourceLimit {
-                resource: "trace source bytes".to_owned(),
-                limit: docsight_core::MAX_INSPECT_BYTES,
-            });
-        }
+        let source_bytes = checked_len(self.source_bytes.len(), "trace source bytes")?;
+        validate_document_size(source_bytes, limits, "trace source bytes")?;
         let manifest = canonical_json(&self.manifest)?;
-        if manifest.len() as u64 > MAX_ARTIFACT_MANIFEST_BYTES {
+        let manifest_bytes = checked_len(manifest.len(), "trace manifest bytes")?;
+        if manifest_bytes > MAX_ARTIFACT_MANIFEST_BYTES {
             return Err(DocsightError::ResourceLimit {
                 resource: "trace manifest bytes".to_owned(),
                 limit: MAX_ARTIFACT_MANIFEST_BYTES,
             });
         }
-        encode_archive(&[
+        let bytes = encode_archive(&[
             ("manifest.json", manifest),
             ("source.bin", self.source_bytes.clone()),
-        ])
+        ])?;
+        let archive_bytes = checked_len(bytes.len(), "trace artifact bytes")?;
+        let maximum = trace_archive_limit(limits)?;
+        if archive_bytes > maximum {
+            return Err(DocsightError::ResourceLimit {
+                resource: "trace artifact bytes".to_owned(),
+                limit: maximum,
+            });
+        }
+        Ok(bytes)
     }
 
     pub fn write(&self, path: &Path) -> Result<ArtifactWriteResult, DocsightError> {
-        let bytes = self.to_bytes()?;
+        self.write_with_limits(path, ArtifactLimits::default())
+    }
+
+    pub fn write_with_limits(
+        &self,
+        path: &Path,
+        limits: ArtifactLimits,
+    ) -> Result<ArtifactWriteResult, DocsightError> {
+        let bytes = self.to_bytes_with_limits(limits)?;
         write_all(path, &bytes)?;
         Ok(ArtifactWriteResult {
             sha256: sha256_hex(&bytes),
@@ -598,10 +700,19 @@ impl TraceArtifact {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DocsightError> {
-        if bytes.len() as u64 > MAX_TRACE_BYTES {
+        Self::from_bytes_with_limits(bytes, ArtifactLimits::default())
+    }
+
+    pub fn from_bytes_with_limits(
+        bytes: &[u8],
+        limits: ArtifactLimits,
+    ) -> Result<Self, DocsightError> {
+        let archive_bytes = checked_len(bytes.len(), "trace artifact bytes")?;
+        let maximum = trace_archive_limit(limits)?;
+        if archive_bytes > maximum {
             return Err(DocsightError::ResourceLimit {
                 resource: "trace artifact bytes".to_owned(),
-                limit: MAX_TRACE_BYTES,
+                limit: maximum,
             });
         }
         let entries = decode_archive(bytes, &["manifest.json", "source.bin"])?;
@@ -611,7 +722,7 @@ impl TraceArtifact {
             source_bytes: entries[1].clone(),
         };
         validate_trace_manifest(&artifact.manifest)?;
-        if artifact.to_bytes()? != bytes {
+        if artifact.to_bytes_with_limits(limits)? != bytes {
             return Err(DocsightError::VerificationFailed {
                 message: "trace archive is not canonical".to_owned(),
             });
@@ -626,15 +737,16 @@ impl ProofBundle {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, DocsightError> {
+        self.to_bytes_with_limits(ArtifactLimits::default())
+    }
+
+    pub fn to_bytes_with_limits(&self, limits: ArtifactLimits) -> Result<Vec<u8>, DocsightError> {
         validate_proof_manifest(&self.manifest)?;
-        if self.source_bytes.len() as u64 > docsight_core::MAX_INSPECT_BYTES {
-            return Err(DocsightError::ResourceLimit {
-                resource: "proof source bytes".to_owned(),
-                limit: docsight_core::MAX_INSPECT_BYTES,
-            });
-        }
+        let source_bytes = checked_len(self.source_bytes.len(), "proof source bytes")?;
+        validate_document_size(source_bytes, limits, "proof source bytes")?;
         let manifest = canonical_json(&self.manifest)?;
-        if manifest.len() as u64 > MAX_ARTIFACT_MANIFEST_BYTES {
+        let manifest_bytes = checked_len(manifest.len(), "proof manifest bytes")?;
+        if manifest_bytes > MAX_ARTIFACT_MANIFEST_BYTES {
             return Err(DocsightError::ResourceLimit {
                 resource: "proof manifest bytes".to_owned(),
                 limit: MAX_ARTIFACT_MANIFEST_BYTES,
@@ -645,7 +757,8 @@ impl ProofBundle {
             ("source.bin", self.source_bytes.clone()),
         ];
         if let Some(crop) = &self.crop_png {
-            if crop.len() as u64 > MAX_ARTIFACT_CROP_BYTES {
+            let crop_bytes = checked_len(crop.len(), "proof crop bytes")?;
+            if crop_bytes > MAX_ARTIFACT_CROP_BYTES {
                 return Err(DocsightError::ResourceLimit {
                     resource: "proof crop bytes".to_owned(),
                     limit: MAX_ARTIFACT_CROP_BYTES,
@@ -653,11 +766,28 @@ impl ProofBundle {
             }
             entries.push(("crop.png", crop.clone()));
         }
-        encode_archive(&entries)
+        let bytes = encode_archive(&entries)?;
+        let archive_bytes = checked_len(bytes.len(), "proof bundle bytes")?;
+        let maximum = proof_archive_limit(limits)?;
+        if archive_bytes > maximum {
+            return Err(DocsightError::ResourceLimit {
+                resource: "proof bundle bytes".to_owned(),
+                limit: maximum,
+            });
+        }
+        Ok(bytes)
     }
 
     pub fn write(&self, path: &Path) -> Result<ArtifactWriteResult, DocsightError> {
-        let bytes = self.to_bytes()?;
+        self.write_with_limits(path, ArtifactLimits::default())
+    }
+
+    pub fn write_with_limits(
+        &self,
+        path: &Path,
+        limits: ArtifactLimits,
+    ) -> Result<ArtifactWriteResult, DocsightError> {
+        let bytes = self.to_bytes_with_limits(limits)?;
         write_all(path, &bytes)?;
         Ok(ArtifactWriteResult {
             sha256: sha256_hex(&bytes),
@@ -666,10 +796,19 @@ impl ProofBundle {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DocsightError> {
-        if bytes.len() as u64 > MAX_PROOF_BUNDLE_BYTES {
+        Self::from_bytes_with_limits(bytes, ArtifactLimits::default())
+    }
+
+    pub fn from_bytes_with_limits(
+        bytes: &[u8],
+        limits: ArtifactLimits,
+    ) -> Result<Self, DocsightError> {
+        let archive_bytes = checked_len(bytes.len(), "proof bundle bytes")?;
+        let maximum = proof_archive_limit(limits)?;
+        if archive_bytes > maximum {
             return Err(DocsightError::ResourceLimit {
                 resource: "proof bundle bytes".to_owned(),
-                limit: MAX_PROOF_BUNDLE_BYTES,
+                limit: maximum,
             });
         }
         let entries = decode_archive_flexible(bytes)?;
@@ -709,7 +848,7 @@ impl ProofBundle {
                 message: "proof crop manifest and artifact entry disagree".to_owned(),
             });
         }
-        if bundle.to_bytes()? != bytes {
+        if bundle.to_bytes_with_limits(limits)? != bytes {
             return Err(DocsightError::VerificationFailed {
                 message: "proof bundle archive is not canonical".to_owned(),
             });
@@ -1315,7 +1454,13 @@ fn read_artifact(path: &Path, limit: u64, resource: &str) -> Result<Vec<u8>, Doc
         path: path.to_path_buf(),
         source,
     })?;
-    let mut reader = file.take(limit + 1);
+    let read_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| DocsightError::ResourceLimit {
+            resource: resource.to_owned(),
+            limit,
+        })?;
+    let mut reader = file.take(read_limit);
     let mut bytes = Vec::new();
     reader
         .read_to_end(&mut bytes)
@@ -1323,7 +1468,7 @@ fn read_artifact(path: &Path, limit: u64, resource: &str) -> Result<Vec<u8>, Doc
             path: path.to_path_buf(),
             source,
         })?;
-    if bytes.len() as u64 > limit {
+    if checked_len(bytes.len(), resource)? > limit {
         return Err(DocsightError::ResourceLimit {
             resource: resource.to_owned(),
             limit,

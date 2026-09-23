@@ -40,6 +40,23 @@ fn password_file_unlocks_agent_inspection_and_text_deterministically()
         .output()?;
     assert!(text.status.success());
     assert!(String::from_utf8(text.stdout)?.contains("Confidential"));
+
+    let hit = docsight()
+        .args(["--agent", "--password-file"])
+        .arg(&password)
+        .arg("hit")
+        .arg(&pdf)
+        .args(["--page", "1", "--bbox", "0,0,612,792", "--json"])
+        .output()?;
+    assert!(hit.status.success());
+    let hit: serde_json::Value = serde_json::from_slice(&hit.stdout)?;
+    assert_eq!(hit["result"]["total_hits"], 1);
+    assert!(
+        hit["result"]["targets"][0]["text_snippet"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Confidential")
+    );
     Ok(())
 }
 
