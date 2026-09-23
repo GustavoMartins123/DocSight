@@ -1,6 +1,7 @@
 # Building and reviewing a DocSight release candidate
 
-This guide implements the maintainer side of DS10-DS12 and DS16. Source code, packaging
+This guide implements the maintainer side of release candidate tooling and
+distribution operation. Source code, packaging
 unit tests and workflow definitions are not evidence of a published release,
 native behavior, a completed beta or visual fidelity. The current workspace
 remains 0.1.4. No command here promotes a version or publishes a release.
@@ -27,7 +28,7 @@ protocol or immutable IR contracts.
 dispatch. It has `contents: read`. Each native job runs the Rust tooling tests,
 architecture gate, formatter, Clippy, workspace tests and workspace release
 build with locked dependencies. Windows keeps static CRT flags in `RUSTFLAGS`.
-The canonical Linux x64 host also enforces DS9 benchmark budgets.
+The canonical Linux x64 host also enforces the benchmark budgets.
 
 The native packager validates both executable architectures, collects notices,
 creates a bounded deterministic ZIP and verifies it. Smoke execution then uses
@@ -261,7 +262,7 @@ cargo xtask validate --out target/candidate-evidence/validation
 ```
 
 The nine checks are Rust tooling tests, the Rust-only architecture audit, corpus
-inventory, Cargo format, Clippy, workspace tests, release build, DS9 budgets and
+inventory, Cargo format, Clippy, workspace tests, release build, benchmark budgets and
 Git whitespace validation. Every gate is attempted even when an earlier gate
 fails. Logs, hashes, elapsed time, real exit codes, source revision and clean-tree
 state before and after are retained. The `docsight.validation/v2` status values
@@ -419,7 +420,7 @@ consistency of these artifacts is not independent certification.
 ## Remaining engine gaps and schema transition
 
 `release/known-gaps.json` records multi-section DOCX geometry and line-level
-pagination as resolved by the DS13 layout engine, and the persistent
+pagination as resolved by the layout engine, and the persistent
 content-addressed document IR cache as resolved. No v1-blocking engine
 gap remains open, so the known-gaps criterion no longer reports
 `OPEN_V1_PRODUCT_GAPS`; the other readiness criteria still require their own

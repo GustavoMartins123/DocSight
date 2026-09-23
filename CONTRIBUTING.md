@@ -64,3 +64,9 @@ Every pull request must pass the automated maintainer verification suite:
 - **No Unsafe Code:** `unsafe_code` is strictly denied across the workspace.
 - **Error Propagation:** Do not use `unwrap()`, `expect()`, `panic!()`, `todo!()`, or `unimplemented!()` in production code. Propagate errors using typed error structures.
 - **Contract Integrity:** Changes to CLI flags, agent schemas, IDs, exit codes, or canonical JSON serialization require corresponding contract tests and documentation updates.
+
+## License
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in DocSight by you shall be dual-licensed under MIT OR Apache-2.0,
+without any additional terms or conditions.

@@ -1,6 +1,6 @@
 # Running a real DocSight beta
 
-This is the DS11 operating procedure, not evidence that a beta has happened.
+This is the operating procedure for a real beta, not evidence that a beta has happened.
 Recruit 5-10 technical users who run the same reviewed candidate on their own
 machines. Synthetic test participants and maintainer-generated reports do not
 count as independent users. Keep the consent record and the association between
@@ -61,7 +61,7 @@ this beta harness, not the full engine's capabilities or performance limits.
 Aggregation rejects mixed revisions and duplicate reports, including a copied
 report with different JSON whitespace. It counts unique pseudonyms, not real
 identities; a human must verify the independent participants. Timing summaries
-are observational percentiles, not DS9 benchmark results or hardware-normalized
+are observational percentiles, not benchmark-gate results or hardware-normalized
 performance comparisons. Preserve the individual reports alongside the summary.
 
 ## Triage without collecting private content by default
