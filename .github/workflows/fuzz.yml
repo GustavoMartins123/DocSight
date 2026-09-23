@@ -1,8 +1,6 @@
 name: fuzz
 
 on:
-  push:
-  pull_request:
   schedule:
     - cron: "23 3 * * 1"
   workflow_dispatch:
