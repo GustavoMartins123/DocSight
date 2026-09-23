@@ -93,6 +93,10 @@ The password is limited to 127 bytes, cleared from the CLI's memory when the ope
 
 Use `docsight <command> --help` for human-readable flags. Use the machine contract for integrations; command names, schemas, units, ordering and exit codes are public contracts.
 
+## Artifact publication
+
+`render`, `crop` and `bundle` atomically replace one explicit, writable regular-file path. The source, output and trace paths must be distinct filesystem identities; symbolic-link outputs and read-only files are rejected. `render --trace` stages its PNG and trace as one group and rolls both back when publication fails; rollback failures are reported as I/O errors. `diff --out-dir` uses no-clobber publication and rejects an existing destination. A failure before publication leaves existing artifacts unchanged.
+
 ## Reusing parsed documents
 
 An agent that runs several commands against the same document can keep the parsed IR in a private cache directory:

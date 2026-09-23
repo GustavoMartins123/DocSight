@@ -7,7 +7,6 @@ use docsight_render::{RenderRequest, RenderTarget, encode_png, render_document_w
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Cursor;
-use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -312,7 +311,7 @@ pub struct DiffOptions {
     pub visual: bool,
     pub dpi: u16,
     pub threshold: u8,
-    pub out_dir: Option<std::path::PathBuf>,
+    pub emit_visual_artifacts: bool,
 }
 
 impl Default for DiffOptions {
@@ -321,7 +320,7 @@ impl Default for DiffOptions {
             visual: false,
             dpi: 144,
             threshold: 8,
-            out_dir: None,
+            emit_visual_artifacts: false,
         }
     }
 }
@@ -350,7 +349,7 @@ pub fn diff_documents_with_passwords(
     let pages_before = doc_before.pages.len() as u32;
     let pages_after = doc_after.pages.len() as u32;
 
-    let visual = if options.visual || options.out_dir.is_some() {
+    let visual = if options.visual || options.emit_visual_artifacts {
         Some(diff_visual_with_passwords(VisualDiffInputs {
             source_before,
             source_after,
@@ -358,7 +357,7 @@ pub fn diff_documents_with_passwords(
             doc_after: &doc_after,
             dpi: options.dpi,
             threshold: options.threshold,
-            out_dir: options.out_dir.as_deref(),
+            emit_visual_artifacts: options.emit_visual_artifacts,
             password_before,
             password_after,
         })?)
@@ -1845,7 +1844,7 @@ pub fn diff_visual(
     doc_after: &Document,
     dpi: u16,
     threshold: u8,
-    out_dir: Option<&Path>,
+    emit_visual_artifacts: bool,
 ) -> Result<VisualDiff, DocsightError> {
     diff_visual_with_passwords(VisualDiffInputs {
         source_before,
@@ -1854,7 +1853,7 @@ pub fn diff_visual(
         doc_after,
         dpi,
         threshold,
-        out_dir,
+        emit_visual_artifacts,
         password_before: b"",
         password_after: b"",
     })
@@ -1867,7 +1866,7 @@ struct VisualDiffInputs<'a> {
     doc_after: &'a Document,
     dpi: u16,
     threshold: u8,
-    out_dir: Option<&'a Path>,
+    emit_visual_artifacts: bool,
     password_before: &'a [u8],
     password_after: &'a [u8],
 }
@@ -1880,7 +1879,7 @@ fn diff_visual_with_passwords(inputs: VisualDiffInputs<'_>) -> Result<VisualDiff
         doc_after,
         dpi,
         threshold,
-        out_dir,
+        emit_visual_artifacts,
         password_before,
         password_after,
     } = inputs;
@@ -1909,13 +1908,6 @@ fn diff_visual_with_passwords(inputs: VisualDiffInputs<'_>) -> Result<VisualDiff
     let mut changed_area_pixels = 0_u64;
     let mut compared_area_pixels = 0_u64;
     let mut page_diffs = Vec::new();
-
-    if let Some(dir) = out_dir {
-        std::fs::create_dir_all(dir).map_err(|error| DocsightError::Io {
-            path: dir.to_path_buf(),
-            source: error,
-        })?;
-    }
 
     for p in 1..=max_pages {
         let request = RenderRequest {
@@ -2018,17 +2010,11 @@ fn diff_visual_with_passwords(inputs: VisualDiffInputs<'_>) -> Result<VisualDiff
                 resource: "visual diff compared area".to_owned(),
                 limit: u64::MAX,
             })?;
-        let (diff_png, artifact) = if changed_pixels > 0 || out_dir.is_some() {
+        let (diff_png, artifact) = if changed_pixels > 0 || emit_visual_artifacts {
             let png_bytes = encode_png(width, height, &diff_canvas)?;
-            let artifact = if let Some(dir) = out_dir {
-                let relative_path = format!("diff_p{p:04}.png");
-                let file_path = dir.join(&relative_path);
-                std::fs::write(&file_path, &png_bytes).map_err(|error| DocsightError::Io {
-                    path: file_path,
-                    source: error,
-                })?;
+            let artifact = if emit_visual_artifacts {
                 Some(VisualDiffArtifact {
-                    relative_path,
+                    relative_path: format!("diff_p{p:04}.png"),
                     media_type: "image/png".to_owned(),
                     bytes: u64::try_from(png_bytes.len()).map_err(|_| {
                         DocsightError::ResourceLimit {

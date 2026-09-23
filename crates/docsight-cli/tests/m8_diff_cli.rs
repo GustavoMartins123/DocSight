@@ -310,6 +310,7 @@ fn diff_visual_ndjson_streams_complete_verifiable_evidence()
     let before = fixture("sample_headings.docx");
     let after = fixture("sample_tables.docx");
     let directory = tempfile::tempdir()?;
+    let out_dir = directory.path().join("visual");
     let output = docsight()
         .args([
             "--agent",
@@ -323,7 +324,7 @@ fn diff_visual_ndjson_streams_complete_verifiable_evidence()
             "--threshold",
             "4",
             "--out-dir",
-            directory.path().to_str().ok_or("output path")?,
+            out_dir.to_str().ok_or("output path")?,
         ])
         .output()?;
     assert!(output.status.success());
@@ -351,7 +352,7 @@ fn diff_visual_ndjson_streams_complete_verifiable_evidence()
     for (index, record) in visual_pages.iter().enumerate() {
         let page = index + 1;
         let relative_path = format!("diff_p{page:04}.png");
-        let bytes = std::fs::read(directory.path().join(&relative_path))?;
+        let bytes = std::fs::read(out_dir.join(&relative_path))?;
         assert_eq!(record["page"], page);
         assert_eq!(record["artifact"]["relative_path"], relative_path);
         assert_eq!(record["artifact"]["bytes"], bytes.len());

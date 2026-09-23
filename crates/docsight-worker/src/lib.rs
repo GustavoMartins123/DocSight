@@ -308,11 +308,13 @@ fn infer_write_paths(args: &[String]) -> Vec<String> {
             expects_path = false;
             continue;
         }
-        if argument == "--out" || argument == "--out-dir" {
+        if argument == "--out" || argument == "--out-dir" || argument == "--trace" {
             expects_path = true;
         } else if let Some(path) = argument.strip_prefix("--out=") {
             paths.push(path.to_owned());
         } else if let Some(path) = argument.strip_prefix("--out-dir=") {
+            paths.push(path.to_owned());
+        } else if let Some(path) = argument.strip_prefix("--trace=") {
             paths.push(path.to_owned());
         }
     }
@@ -402,4 +404,37 @@ fn terminate_and_drain(
     join_pipe_reader(stdout_reader, "stdout")?;
     join_pipe_reader(stderr_reader, "stderr")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infers_all_explicit_artifact_write_paths() -> Result<(), DocsightError> {
+        let directory = tempfile::tempdir().map_err(|error| DocsightError::Io {
+            path: PathBuf::from("<test>"),
+            source: error,
+        })?;
+        let output = directory.path().join("output");
+        let trace = directory.path().join("trace");
+        let args = [
+            "render".to_owned(),
+            "input.pdf".to_owned(),
+            "--out".to_owned(),
+            output.display().to_string(),
+            "--trace".to_owned(),
+            trace.display().to_string(),
+        ];
+        let (_, writes) = sandbox_paths(&args, &[])?;
+        let canonical = directory
+            .path()
+            .canonicalize()
+            .map_err(|source| DocsightError::Io {
+                path: directory.path().to_owned(),
+                source,
+            })?;
+        assert_eq!(writes, vec![canonical.display().to_string()]);
+        Ok(())
+    }
 }

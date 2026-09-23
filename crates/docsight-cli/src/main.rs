@@ -1,6 +1,8 @@
+mod artifacts;
 mod cache;
 pub(crate) mod mcp;
 
+use artifacts::validate_command_artifacts;
 use cache::{CacheAction, CacheSettings, DocumentLoader, Reporting};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell};
@@ -13,7 +15,8 @@ use docsight_core::{
     BlockContent, CoverageStatus, Diagnostic, DiagnosticSeverity, DocsightError, Document,
     DocumentFormat, DocumentSource, ObjectId, PageFidelity, Rect, compute_coverage,
     compute_evidence, document_capabilities, table_to_csv, table_to_html, table_to_markdown,
-    table_to_tsv, table_to_tsv_string,
+    table_to_tsv, table_to_tsv_string, validate_new_artifact_directory, write_all, write_all_group,
+    write_directory_atomic,
 };
 use docsight_diff::{
     DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents_with_passwords,
@@ -1262,6 +1265,14 @@ fn main() -> ExitCode {
         }
         Err(error) => error.exit(),
     };
+    if let Err(error) = validate_command_artifacts(&cli.command) {
+        let exit_code = error.exit_code();
+        return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+            ExitCode::from(exit_code)
+        } else {
+            ExitCode::from(40)
+        };
+    }
     if cli.sandbox {
         if let Err(error) = validate_cache_arguments(&cli) {
             let exit_code = error.exit_code();
@@ -1724,11 +1735,12 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             summary: *summary,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
+            out_dir: out_dir.as_deref(),
             options: DiffOptions {
-                visual: *visual || out_dir.is_some(),
+                visual: *visual,
                 dpi: *dpi,
                 threshold: *threshold,
-                out_dir: out_dir.clone(),
+                emit_visual_artifacts: out_dir.is_some(),
             },
             limits: &limits,
             quiet,
@@ -3273,11 +3285,8 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
             Ok((path, trace_bytes, output))
         })
         .transpose()?;
-    rendered.write(args.out)?;
-    if let Some((path, bytes, _)) = &trace {
-        docsight_core::write_all(path, bytes)?;
-    }
     if !args.ndjson && !args.json {
+        commit_render_artifacts(args.out, rendered.png(), trace.as_ref())?;
         let stdout = io::stdout();
         let mut writer = stdout.lock();
         writeln!(
@@ -3329,22 +3338,37 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
         output_path,
         output_sha256,
         output_bytes,
-        trace: trace.map(|(_, _, output)| output),
+        trace: trace.as_ref().map(|(_, _, output)| output.clone()),
     };
-    if args.ndjson {
-        return write_single_ndjson(
+    let output = if args.ndjson {
+        build_single_ndjson(
             &source,
             args.command,
             args.command,
             &result,
             &rendered.warnings,
             args.limits,
-        );
-    }
-    write_single_json(&source, &result, rendered.warnings.clone(), args.limits)
+        )?
+    } else {
+        build_single_json(&source, &result, rendered.warnings.clone(), args.limits)?
+    };
+    commit_render_artifacts(args.out, rendered.png(), trace.as_ref())?;
+    write_stdout_bytes(&output)
 }
 
-#[derive(Serialize)]
+fn commit_render_artifacts(
+    output: &Path,
+    png: &[u8],
+    trace: Option<&(&Path, Vec<u8>, TraceOutput)>,
+) -> Result<(), DocsightError> {
+    if let Some((trace_path, trace_bytes, _)) = trace {
+        write_all_group(&[(output, png), (trace_path, trace_bytes.as_slice())])
+    } else {
+        write_all(output, png)
+    }
+}
+
+#[derive(Clone, Serialize)]
 struct TraceOutput {
     output_path: String,
     output_sha256: String,
@@ -3402,7 +3426,13 @@ fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
     };
     let proof =
         create_proof_bundle_with_password(&source, &request, args.include_crop, args.password)?;
-    let written = proof.write(args.out)?;
+    let proof_bytes = proof.to_bytes()?;
+    let output_sha256 = digest_bytes(&proof_bytes);
+    let output_bytes =
+        u64::try_from(proof_bytes.len()).map_err(|_| DocsightError::ResourceLimit {
+            resource: "proof bundle bytes".to_owned(),
+            limit: u64::MAX,
+        })?;
     let output_path = args
         .out
         .to_str()
@@ -3423,44 +3453,48 @@ fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
     }
     let result = BundleResult {
         output_path,
-        output_sha256: written.sha256,
-        output_bytes: written.bytes,
+        output_sha256,
+        output_bytes,
         target: proof.manifest.trace.target.clone(),
         evidence_count: proof.manifest.evidence.len(),
         crop_included: proof.manifest.crop.is_some(),
         trace_display_list_sha256: proof.manifest.trace.display_list.sha256.clone(),
         trace_raster_sha256: proof.manifest.trace.raster.sha256.clone(),
     };
-    if args.ndjson {
-        return write_single_ndjson(
+    if !args.ndjson && !args.json {
+        write_all(args.out, &proof_bytes)?;
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        writeln!(
+            writer,
+            "Proof bundle written to {} ({})",
+            args.out.display(),
+            result.output_sha256
+        )
+        .map_err(stdout_error)?;
+        writeln!(writer, "  Evidence records: {}", result.evidence_count).map_err(stdout_error)?;
+        writeln!(writer, "  Crop included:    {}", result.crop_included).map_err(stdout_error)?;
+        return emit_warnings(&proof.manifest.trace.warnings, args.quiet, args.json_errors);
+    }
+    let output = if args.ndjson {
+        build_single_ndjson(
             &source,
             "bundle",
             "bundle",
             &result,
             &proof.manifest.trace.warnings,
             args.limits,
-        );
-    }
-    if args.json {
-        return write_single_json(
+        )?
+    } else {
+        build_single_json(
             &source,
             &result,
             proof.manifest.trace.warnings.clone(),
             args.limits,
-        );
-    }
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    writeln!(
-        writer,
-        "Proof bundle written to {} ({})",
-        args.out.display(),
-        result.output_sha256
-    )
-    .map_err(stdout_error)?;
-    writeln!(writer, "  Evidence records: {}", result.evidence_count).map_err(stdout_error)?;
-    writeln!(writer, "  Crop included:    {}", result.crop_included).map_err(stdout_error)?;
-    emit_warnings(&proof.manifest.trace.warnings, args.quiet, args.json_errors)
+        )?
+    };
+    write_all(args.out, &proof_bytes)?;
+    write_stdout_bytes(&output)
 }
 
 struct ReplayArgs<'a> {
@@ -3777,6 +3811,16 @@ fn write_single_json<T: Serialize>(
     warnings: Vec<Diagnostic>,
     limits: &QueryLimits,
 ) -> Result<(), DocsightError> {
+    let bytes = build_single_json(source, result, warnings, limits)?;
+    write_stdout_bytes(&bytes)
+}
+
+fn build_single_json<T: Serialize>(
+    source: &DocumentSource,
+    result: &T,
+    warnings: Vec<Diagnostic>,
+    limits: &QueryLimits,
+) -> Result<Vec<u8>, DocsightError> {
     let mut val = serde_json::to_value(result).map_err(output_serialization_error)?;
     let mut text_truncated = false;
     if let Some(text_limit) = limits.text_limit {
@@ -3820,7 +3864,9 @@ fn write_single_json<T: Serialize>(
                 });
             }
         }
-        return write_envelope(&envelope);
+        let mut bytes = serde_json::to_vec(&envelope).map_err(output_serialization_error)?;
+        bytes.push(b'\n');
+        return Ok(bytes);
     }
 }
 
@@ -3832,9 +3878,21 @@ fn write_single_ndjson<T: Serialize>(
     warnings: &[Diagnostic],
     limits: &QueryLimits,
 ) -> Result<(), DocsightError> {
-    let stdout = io::stdout();
+    let bytes = build_single_ndjson(source, command, item_type, result, warnings, limits)?;
+    write_stdout_bytes(&bytes)
+}
+
+fn build_single_ndjson<T: Serialize>(
+    source: &DocumentSource,
+    command: &str,
+    item_type: &str,
+    result: &T,
+    warnings: &[Diagnostic],
+    limits: &QueryLimits,
+) -> Result<Vec<u8>, DocsightError> {
+    let mut bytes = Vec::new();
     let mut writer = NdjsonWriter::new(
-        stdout.lock(),
+        &mut bytes,
         limits.clone(),
         command.to_owned(),
         source.sha256().to_owned(),
@@ -3845,7 +3903,7 @@ fn write_single_ndjson<T: Serialize>(
     writer.write_item(item_type, &value)?;
     writer.write_warnings(warnings)?;
     writer.finish()?;
-    Ok(())
+    Ok(bytes)
 }
 
 fn write_envelope<T: Serialize>(envelope: &AgentEnvelope<T>) -> Result<(), DocsightError> {
@@ -3853,6 +3911,12 @@ fn write_envelope<T: Serialize>(envelope: &AgentEnvelope<T>) -> Result<(), Docsi
     let mut writer = stdout.lock();
     serde_json::to_writer(&mut writer, envelope).map_err(output_serialization_error)?;
     writer.write_all(b"\n").map_err(stdout_error)
+}
+
+fn write_stdout_bytes(bytes: &[u8]) -> Result<(), DocsightError> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writer.write_all(bytes).map_err(stdout_error)
 }
 
 fn emit_warnings(
@@ -5166,6 +5230,7 @@ struct DiffCommandArgs<'a> {
     summary: bool,
     json: bool,
     ndjson: bool,
+    out_dir: Option<&'a Path>,
     options: DiffOptions,
     limits: &'a QueryLimits,
     quiet: bool,
@@ -5219,16 +5284,19 @@ impl<'a> From<&'a VisualDiff> for DiffNdjsonVisualSummary<'a> {
 fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
     let source_before = DocumentSource::open_with_limit(args.before, args.max_document_bytes)?;
     let source_after = DocumentSource::open_with_limit(args.after, args.max_document_bytes)?;
-    let diff_result = diff_documents_with_passwords(
+    let mut diff_result = diff_documents_with_passwords(
         &source_before,
         &source_after,
         &args.options,
         args.password_before,
         args.password_after,
     )?;
+    let visual_files = args
+        .out_dir
+        .map(|_| take_visual_diff_files(&mut diff_result));
 
     if args.ndjson {
-        let stdout = io::stdout();
+        let mut output = Vec::new();
         let visual_items = match &diff_result.visual {
             Some(visual) => visual.page_diffs.len().checked_add(1).ok_or_else(|| {
                 DocsightError::ResourceLimit {
@@ -5252,14 +5320,14 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
                 "before={};after={};visual={};dpi={};threshold={};artifacts={}",
                 source_before.sha256(),
                 source_after.sha256(),
-                args.options.visual,
+                args.options.visual || args.out_dir.is_some(),
                 args.options.dpi,
                 args.options.threshold,
-                args.options.out_dir.is_some()
+                args.out_dir.is_some()
             ),
         );
         let mut writer = NdjsonWriter::new(
-            stdout.lock(),
+            &mut output,
             args.limits.clone(),
             scope,
             source_after.sha256().to_owned(),
@@ -5298,18 +5366,22 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
         }
         writer.write_warnings(&diff_result.warnings)?;
         writer.finish()?;
-        return Ok(());
+        publish_visual_diff(args.out_dir, visual_files.as_ref())?;
+        return write_stdout_bytes(&output);
     }
 
     if args.json {
-        return write_single_json(
+        let output = build_single_json(
             &source_after,
             &diff_result,
             diff_result.warnings.clone(),
             args.limits,
-        );
+        )?;
+        publish_visual_diff(args.out_dir, visual_files.as_ref())?;
+        return write_stdout_bytes(&output);
     }
 
+    publish_visual_diff(args.out_dir, visual_files.as_ref())?;
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     writeln!(writer, "{}", diff_result.summary.format_summary()).map_err(stdout_error)?;
@@ -5339,10 +5411,40 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
             .map_err(stdout_error)?;
         }
     }
-    if let Some(ref dir) = args.options.out_dir {
+    if let Some(dir) = args.out_dir {
         writeln!(writer, "Visual diffs written to {}", dir.display()).map_err(stdout_error)?;
     }
     emit_warnings(&diff_result.warnings, args.quiet, args.json_errors)
+}
+
+fn take_visual_diff_files(
+    result: &mut docsight_diff::DocumentDiffResult,
+) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    if let Some(visual) = result.visual.as_mut() {
+        for page in &mut visual.page_diffs {
+            if let Some(bytes) = page.diff_png.take()
+                && let Some(artifact) = page.artifact.as_ref()
+            {
+                files.insert(artifact.relative_path.clone(), bytes);
+            }
+        }
+    }
+    files
+}
+
+fn publish_visual_diff(
+    out_dir: Option<&Path>,
+    files: Option<&BTreeMap<String, Vec<u8>>>,
+) -> Result<(), DocsightError> {
+    match (out_dir, files) {
+        (Some(out_dir), Some(files)) => write_directory_atomic(out_dir, files),
+        (Some(out_dir), None) => {
+            validate_new_artifact_directory(out_dir)?;
+            write_directory_atomic(out_dir, &BTreeMap::new())
+        }
+        (None, _) => Ok(()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
