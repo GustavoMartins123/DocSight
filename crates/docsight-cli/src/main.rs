@@ -25,9 +25,9 @@ use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{
     HitQuery, RenderRequest, RenderTarget, render_document_with_password,
     trace::{
-        TraceDecisionCoverage, TraceTarget, create_proof_bundle_with_password, read_proof_bundle,
-        read_trace, record_trace_with_password, verify_proof_bundle_with_password,
-        verify_trace_with_password,
+        ArtifactLimits, TraceDecisionCoverage, TraceTarget, create_proof_bundle_with_password,
+        read_proof_bundle_with_limits, read_trace_with_limits, record_trace_with_password,
+        verify_proof_bundle_with_password, verify_trace_with_password,
     },
 };
 use docsight_search::{
@@ -201,7 +201,11 @@ impl Cli {
     }
 
     fn structured_errors(&self) -> bool {
-        self.json_errors || self.agent
+        self.json_errors || self.agent || self.ndjson
+    }
+
+    fn agent_error_envelope(&self) -> bool {
+        self.agent || self.ndjson
     }
 
     fn reporting(&self) -> Reporting {
@@ -1239,13 +1243,15 @@ fn parse_direct_password(secret: &str) -> Result<PdfPassword, DocsightError> {
 
 fn main() -> ExitCode {
     let agent_mode = std::env::args().any(|argument| argument == "--agent");
+    let ndjson_mode = std::env::args().any(|argument| argument == "--ndjson");
+    let machine_error_mode = agent_mode || ndjson_mode;
     let sandbox_json_errors =
-        agent_mode || std::env::args().any(|argument| argument == "--json-errors");
+        machine_error_mode || std::env::args().any(|argument| argument == "--json-errors");
     if let Err(error) =
         docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
     {
         let exit_code = error.exit_code();
-        return if emit_error(&error, sandbox_json_errors, agent_mode).is_ok() {
+        return if emit_error(&error, sandbox_json_errors, machine_error_mode).is_ok() {
             ExitCode::from(exit_code)
         } else {
             ExitCode::from(40)
@@ -1253,7 +1259,7 @@ fn main() -> ExitCode {
     }
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
-        Err(error) if agent_mode => {
+        Err(error) if machine_error_mode => {
             let docsight_error = DocsightError::InvalidArgument {
                 message: error.to_string(),
             };
@@ -1267,7 +1273,7 @@ fn main() -> ExitCode {
     };
     if let Err(error) = validate_command_artifacts(&cli.command) {
         let exit_code = error.exit_code();
-        return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+        return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope()).is_ok() {
             ExitCode::from(exit_code)
         } else {
             ExitCode::from(40)
@@ -1276,7 +1282,9 @@ fn main() -> ExitCode {
     if cli.sandbox {
         if let Err(error) = validate_cache_arguments(&cli) {
             let exit_code = error.exit_code();
-            return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+            return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope())
+                .is_ok()
+            {
                 ExitCode::from(exit_code)
             } else {
                 ExitCode::from(40)
@@ -1293,7 +1301,9 @@ fn main() -> ExitCode {
                     source: error,
                 };
                 let exit_code = error.exit_code();
-                return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+                return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope())
+                    .is_ok()
+                {
                     ExitCode::from(exit_code)
                 } else {
                     ExitCode::from(40)
@@ -1324,7 +1334,9 @@ fn main() -> ExitCode {
             Ok(prepared) => prepared,
             Err(error) => {
                 let exit_code = error.exit_code();
-                return if emit_error(&error, cli.structured_errors(), cli.agent).is_ok() {
+                return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope())
+                    .is_ok()
+                {
                     ExitCode::from(exit_code)
                 } else {
                     ExitCode::from(40)
@@ -1337,6 +1349,41 @@ fn main() -> ExitCode {
                 .filter(|arg| arg != "--sandbox")
                 .collect(),
         );
+        if cli.ndjson {
+            match docsight_worker::run_in_sandbox_streaming_with_env(
+                Some(&exe),
+                &docsight_worker::SandboxPolicy::default(),
+                &raw_args,
+                &environment,
+                io::stdout(),
+                io::stderr(),
+            ) {
+                Ok(output) => {
+                    if output.exit_code == 0
+                        && let Some(handoff) = handoff
+                        && let Err(error) = handoff.commit(cli.reporting())
+                    {
+                        let exit_code = error.exit_code();
+                        if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope())
+                            .is_err()
+                        {
+                            return ExitCode::from(40);
+                        }
+                        return ExitCode::from(exit_code);
+                    }
+                    return ExitCode::from(output.exit_code);
+                }
+                Err(error) => {
+                    let exit_code = error.exit_code();
+                    if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope())
+                        .is_err()
+                    {
+                        return ExitCode::from(40);
+                    }
+                    return ExitCode::from(exit_code);
+                }
+            }
+        }
         match docsight_worker::run_in_sandbox_with_env(
             Some(&exe),
             &docsight_worker::SandboxPolicy::default(),
@@ -1348,7 +1395,9 @@ fn main() -> ExitCode {
                     && let Err(error) = handoff.commit(cli.reporting())
                 {
                     let exit_code = error.exit_code();
-                    if emit_error(&error, cli.structured_errors(), cli.agent).is_err() {
+                    if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope())
+                        .is_err()
+                    {
                         return ExitCode::from(40);
                     }
                     return ExitCode::from(exit_code);
@@ -1362,7 +1411,8 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 let exit_code = error.exit_code();
-                if emit_error(&error, cli.structured_errors(), cli.agent).is_err() {
+                if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope()).is_err()
+                {
                     return ExitCode::from(40);
                 }
                 return ExitCode::from(exit_code);
@@ -1373,7 +1423,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let exit_code = error.exit_code();
-            if emit_error(&error, cli.structured_errors(), cli.agent).is_err() {
+            if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope()).is_err() {
                 return ExitCode::from(40);
             }
             ExitCode::from(exit_code)
@@ -1492,10 +1542,10 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         });
     }
     if matches!(cli.command, Command::Capabilities { .. })
-        && (cli.budget.is_some() || cli.budget_profile.is_some())
+        && (cli.has_machine_output_limits() || cli.max_document_bytes.is_some())
     {
         return Err(DocsightError::InvalidArgument {
-            message: "--budget and --budget-profile apply to document evidence, not capabilities"
+            message: "resource and output limits apply to document operations, not capabilities"
                 .to_owned(),
         });
     }
@@ -1810,6 +1860,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             limits: &limits,
             quiet,
             json_errors,
+            max_document_bytes: cli.max_document_bytes(),
         }),
         Command::Verify { bundle, json } => verify(VerifyArgs {
             bundle,
@@ -1819,6 +1870,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             limits: &limits,
             quiet,
             json_errors,
+            max_document_bytes: cli.max_document_bytes(),
         }),
         Command::Coverage {
             path,
@@ -2028,6 +2080,7 @@ const DOCX_PDF_FORMATS: &[&str] = &["docx", "pdf"];
 const NO_DOCUMENT_FORMATS: &[&str] = &[];
 const OUTPUT_MODES: &[&str] = &["json", "ndjson"];
 const AGENT_LIMITS: &[&str] = &[
+    "--max-document-bytes",
     "--max-bytes",
     "--max-items",
     "--text-limit",
@@ -2197,7 +2250,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 invocation: "page <path> <page>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
-                ndjson_events: &["span", "overlay"],
+                ndjson_events: &["page.begin", "span", "overlay", "page.end"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/page-result.json"),
                 result_root: None,
@@ -2722,8 +2775,7 @@ fn outline(
             headings.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        let offset = writer.continuation_offset();
-        for heading in headings.iter().skip(offset) {
+        for heading in &headings {
             let val = serde_json::to_value(heading).map_err(output_serialization_error)?;
             if !writer.write_item("heading", &val)? {
                 break;
@@ -2837,43 +2889,48 @@ fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: format!("page {}", args.number),
         })?;
-    let page_fidelity = docsight_core::page_fidelity(&document);
+    let page_fidelity = docsight_core::page_fidelity(&document, Some(args.number));
     let target_page_number = target_page.number;
     let target_page_width = target_page.width_pt;
     let target_page_height = target_page.height_pt;
+    let scope = continuation_scope("page", &args.number.to_string());
 
     if args.ndjson {
         let stdout = io::stdout();
         let mut writer = NdjsonWriter::new(
             stdout.lock(),
             args.limits.clone(),
-            "page".into(),
+            scope.clone(),
             source.sha256().to_owned(),
             spans.len() + overlays.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        writer.write_page_begin(args.number)?;
-        let offset = writer.continuation_offset();
-        let mut idx = 0;
+        if !writer.write_page_begin(args.number)? {
+            writer.write_warnings(&document.warnings)?;
+            writer.finish()?;
+            return Ok(());
+        }
+        let mut items_truncated = false;
         for span in &spans {
-            if idx >= offset {
-                let val = serde_json::to_value(span).map_err(output_serialization_error)?;
-                if !writer.write_item("span", &val)? {
+            let value = serde_json::to_value(span).map_err(output_serialization_error)?;
+            if !writer.write_item("span", &value)? {
+                items_truncated = true;
+                break;
+            }
+        }
+        if !items_truncated {
+            for overlay in &overlays {
+                let value = serde_json::to_value(overlay).map_err(output_serialization_error)?;
+                if !writer.write_item("overlay", &value)? {
                     break;
                 }
             }
-            idx += 1;
         }
-        for overlay in &overlays {
-            if idx >= offset {
-                let val = serde_json::to_value(overlay).map_err(output_serialization_error)?;
-                if !writer.write_item("overlay", &val)? {
-                    break;
-                }
-            }
-            idx += 1;
+        if !writer.write_page_end(args.number)? {
+            return Err(DocsightError::MalformedDocument {
+                message: "page end could not be published after page begin".to_owned(),
+            });
         }
-        writer.write_page_end(args.number)?;
         writer.write_warnings(&document.warnings)?;
         writer.finish()?;
         return Ok(());
@@ -2897,7 +2954,7 @@ fn page_command(args: PageCommandArgs<'_>) -> Result<(), DocsightError> {
         let envelope = apply_bounded_collection(
             &items,
             args.limits,
-            "page",
+            &scope,
             &source,
             document.warnings,
             |bounded| {
@@ -3026,8 +3083,7 @@ fn document_text(
             blocks.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        let offset = writer.continuation_offset();
-        for block in blocks.iter().skip(offset) {
+        for block in &blocks {
             let val = serde_json::to_value(block).map_err(output_serialization_error)?;
             if !writer.write_item("block", &val)? {
                 break;
@@ -3065,7 +3121,7 @@ fn tables(
 ) -> Result<(), DocsightError> {
     let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
-    let page_fidelity = docsight_core::page_fidelity(&document);
+    let page_fidelity = docsight_core::page_fidelity(&document, None);
     let tables: Vec<TableSummary> = document
         .tables()
         .map(|(block, table)| {
@@ -3097,8 +3153,7 @@ fn tables(
             tables.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        let offset = writer.continuation_offset();
-        for tbl in tables.iter().skip(offset) {
+        for tbl in &tables {
             let val = serde_json::to_value(tbl).map_err(output_serialization_error)?;
             if !writer.write_item("table", &val)? {
                 break;
@@ -3249,7 +3304,14 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
     let trace = args
         .trace
         .map(|path| {
-            let trace = record_trace_with_password(&source, &request, args.password)?;
+            let trace = record_trace_with_password(
+                &source,
+                &request,
+                args.password,
+                ArtifactLimits {
+                    max_document_bytes: args.max_document_bytes,
+                },
+            )?;
             if trace.manifest.raster.sha256 != digest_bytes(rendered.png()) {
                 return Err(DocsightError::VerificationFailed {
                     message: "rendered PNG does not match its deterministic trace".to_owned(),
@@ -3424,9 +3486,18 @@ fn bundle(args: BundleArgs<'_>) -> Result<(), DocsightError> {
         target,
         dpi: args.dpi,
     };
-    let proof =
-        create_proof_bundle_with_password(&source, &request, args.include_crop, args.password)?;
-    let proof_bytes = proof.to_bytes()?;
+    let proof = create_proof_bundle_with_password(
+        &source,
+        &request,
+        args.include_crop,
+        args.password,
+        ArtifactLimits {
+            max_document_bytes: args.max_document_bytes,
+        },
+    )?;
+    let proof_bytes = proof.to_bytes_with_limits(ArtifactLimits {
+        max_document_bytes: args.max_document_bytes,
+    })?;
     let output_sha256 = digest_bytes(&proof_bytes);
     let output_bytes =
         u64::try_from(proof_bytes.len()).map_err(|_| DocsightError::ResourceLimit {
@@ -3506,6 +3577,7 @@ struct ReplayArgs<'a> {
     limits: &'a QueryLimits,
     quiet: bool,
     json_errors: bool,
+    max_document_bytes: u64,
 }
 
 fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
@@ -3514,9 +3586,12 @@ fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
             message: "replay requires --verify".to_owned(),
         });
     }
-    let trace = read_trace(args.trace)?;
+    let limits = ArtifactLimits {
+        max_document_bytes: args.max_document_bytes,
+    };
+    let trace = read_trace_with_limits(args.trace, limits)?;
     let source = trace.document_source()?;
-    let verification = verify_trace_with_password(&trace, args.password)?;
+    let verification = verify_trace_with_password(&trace, args.password, limits)?;
     #[derive(Serialize)]
     struct ReplayResult {
         trace_path: String,
@@ -3586,12 +3661,16 @@ struct VerifyArgs<'a> {
     limits: &'a QueryLimits,
     quiet: bool,
     json_errors: bool,
+    max_document_bytes: u64,
 }
 
 fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
-    let bundle = read_proof_bundle(args.bundle)?;
+    let limits = ArtifactLimits {
+        max_document_bytes: args.max_document_bytes,
+    };
+    let bundle = read_proof_bundle_with_limits(args.bundle, limits)?;
     let source = bundle.document_source()?;
-    let verification = verify_proof_bundle_with_password(&bundle, args.password)?;
+    let verification = verify_proof_bundle_with_password(&bundle, args.password, limits)?;
     #[derive(Serialize)]
     struct VerifyResult {
         bundle_name: String,
@@ -3676,8 +3755,7 @@ fn images(
             images.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        let offset = writer.continuation_offset();
-        for img in images.iter().skip(offset) {
+        for img in &images {
             let val = serde_json::to_value(img).map_err(output_serialization_error)?;
             if !writer.write_item("image", &val)? {
                 break;
@@ -3759,8 +3837,7 @@ fn links(
             links.len(),
         )?;
         writer.write_meta(&(&source).into())?;
-        let offset = writer.continuation_offset();
-        for link in links.iter().skip(offset) {
+        for link in &links {
             let val = serde_json::to_value(link).map_err(output_serialization_error)?;
             if !writer.write_item("link", &val)? {
                 break;
@@ -3916,7 +3993,10 @@ fn write_envelope<T: Serialize>(envelope: &AgentEnvelope<T>) -> Result<(), Docsi
 fn write_stdout_bytes(bytes: &[u8]) -> Result<(), DocsightError> {
     let stdout = io::stdout();
     let mut writer = stdout.lock();
-    writer.write_all(bytes).map_err(stdout_error)
+    writer
+        .write_all(bytes)
+        .and_then(|_| writer.flush())
+        .map_err(stdout_error)
 }
 
 fn emit_warnings(
@@ -3957,11 +4037,13 @@ fn emit_error(error: &DocsightError, json: bool, agent: bool) -> io::Result<()> 
     if agent {
         let envelope = AgentErrorEnvelope::from_error(error);
         serde_json::to_writer(&mut writer, &envelope).map_err(io::Error::other)?;
-        writer.write_all(b"\n")
+        writer.write_all(b"\n")?;
+        writer.flush()
     } else if json {
         let diagnostic = error.diagnostic();
         serde_json::to_writer(&mut writer, &diagnostic).map_err(io::Error::other)?;
-        writer.write_all(b"\n")
+        writer.write_all(b"\n")?;
+        writer.flush()
     } else {
         let diagnostic = error.diagnostic();
         writeln!(writer, "{}: {}", diagnostic.code, diagnostic.message)
@@ -4143,16 +4225,12 @@ fn find_command(args: FindArgs<'_>) -> Result<(), DocsightError> {
             geometry_unavailable_matches: result.geometry_unavailable_matches,
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("find.summary", &summary)? {
+        if !writer.write_item("find.summary", &summary)? {
             writer.write_warnings(&warnings)?;
             writer.finish()?;
             return Ok(());
         }
-        for (index, item) in result.matches.iter().enumerate() {
-            if index + 1 < offset {
-                continue;
-            }
+        for item in &result.matches {
             let item = serde_json::to_value(item).map_err(output_serialization_error)?;
             if !writer.write_item("find.match", &item)? {
                 break;
@@ -4262,17 +4340,13 @@ fn query(args: QueryArgs<'_>) -> Result<(), DocsightError> {
             geometry_unavailable_objects: result.geometry_unavailable_objects,
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("query.summary", &summary)? {
+        if !writer.write_item("query.summary", &summary)? {
             writer.write_warnings(&warnings)?;
             writer.finish()?;
             return Ok(());
         }
         {
-            for (index, item) in result.matches.iter().enumerate() {
-                if index + 1 < offset {
-                    continue;
-                }
+            for item in &result.matches {
                 let item = serde_json::to_value(item).map_err(output_serialization_error)?;
                 if !writer.write_item("query.match", &item)? {
                     break;
@@ -4370,17 +4444,13 @@ fn overview(args: OverviewArgs<'_>) -> Result<(), DocsightError> {
             total_landmarks: result.total_landmarks,
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("overview.summary", &summary)? {
+        if !writer.write_item("overview.summary", &summary)? {
             writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
         {
-            for (index, landmark) in result.landmarks.iter().enumerate() {
-                if index + 1 < offset {
-                    continue;
-                }
+            for landmark in &result.landmarks {
                 let item = serde_json::to_value(landmark).map_err(output_serialization_error)?;
                 if !writer.write_item("overview.landmark", &item)? {
                     break;
@@ -4453,10 +4523,15 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
     let source = args.loader.open_source(args.path)?;
     let document = args.loader.load(&source)?;
     let (result, scope) = match (args.target, args.pages) {
-        (Some(target), None) => (
-            focus_object(&document, target, args.related)?,
-            continuation_scope("focus", target),
-        ),
+        (Some(target), None) => {
+            let result = focus_object(&document, target, args.related)?;
+            let scope = if args.related {
+                continuation_scope("focus", &format!("{target}|related=true"))
+            } else {
+                continuation_scope("focus", target)
+            };
+            (result, scope)
+        }
         (None, Some(pages)) if !args.related => (
             focus_pages(&document, pages)?,
             continuation_scope("focus", &format!("{}..{}", pages.start, pages.end)),
@@ -4495,27 +4570,19 @@ fn focus(args: FocusArgs<'_>) -> Result<(), DocsightError> {
             total_objects: result.total_objects,
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("focus.summary", &summary)? {
+        if !writer.write_item("focus.summary", &summary)? {
             writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
         {
-            for (index, item) in result.objects.iter().enumerate() {
-                if index + 1 < offset {
-                    continue;
-                }
+            for item in &result.objects {
                 let item = serde_json::to_value(item).map_err(output_serialization_error)?;
                 if !writer.write_item("focus.object", &item)? {
                     break;
                 }
             }
-            let visual_start = 1 + result.objects.len();
-            for (index, item) in result.visual_references.iter().enumerate() {
-                if visual_start + index < offset {
-                    continue;
-                }
+            for item in &result.visual_references {
                 let item = serde_json::to_value(item).map_err(output_serialization_error)?;
                 if !writer.write_item("focus.visual_reference", &item)? {
                     break;
@@ -4622,10 +4689,12 @@ fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
             });
         }
     };
-    let scope = continuation_scope(
-        "peek",
-        &serde_json::to_string(&result.target).map_err(output_serialization_error)?,
-    );
+    let target_scope = serde_json::to_string(&result.target).map_err(output_serialization_error)?;
+    let scope = if args.related {
+        continuation_scope("peek", &format!("{target_scope}|related=true"))
+    } else {
+        continuation_scope("peek", &target_scope)
+    };
     let limits = bounded_machine_limits(args.limits, DEFAULT_PEEK_ITEMS);
 
     if args.ndjson {
@@ -4644,16 +4713,12 @@ fn peek(args: PeekArgs<'_>) -> Result<(), DocsightError> {
             total_objects: result.total_objects,
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("peek.summary", &summary)? {
+        if !writer.write_item("peek.summary", &summary)? {
             writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
-        for (index, object) in result.objects.iter().enumerate() {
-            if index + 1 < offset {
-                continue;
-            }
+        for object in &result.objects {
             let value = serde_json::to_value(object).map_err(output_serialization_error)?;
             if !writer.write_item("peek.object", &value)? {
                 break;
@@ -4745,16 +4810,12 @@ fn resolve(args: ResolveArgs<'_>) -> Result<(), DocsightError> {
             total_candidates: result.total_candidates,
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("resolve.summary", &summary)? {
+        if !writer.write_item("resolve.summary", &summary)? {
             writer.write_warnings(&document.warnings)?;
             writer.finish()?;
             return Ok(());
         }
-        for (index, candidate) in result.candidates.iter().enumerate() {
-            if index + 1 < offset {
-                continue;
-            }
+        for candidate in &result.candidates {
             let value = serde_json::to_value(candidate).map_err(output_serialization_error)?;
             if !writer.write_item("resolve.candidate", &value)? {
                 break;
@@ -4911,7 +4972,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
         "object": args.object,
         "find": args.find,
         "kind": args.kind,
-        "include": args.include
+        "include": include
     }))
     .map_err(output_serialization_error)?;
     let scope = continuation_scope("context", &scope_input);
@@ -4935,16 +4996,12 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
             candidates: Vec::new(),
         })
         .map_err(output_serialization_error)?;
-        let offset = writer.continuation_offset();
-        if offset == 0 && !writer.write_item("context", &summary)? {
+        if !writer.write_item("context", &summary)? {
             writer.write_warnings(&warnings)?;
             writer.finish()?;
             return Ok(());
         }
-        for (index, candidate) in result.candidates.iter().enumerate() {
-            if index + 1 < offset {
-                continue;
-            }
+        for candidate in &result.candidates {
             let value = serde_json::to_value(candidate).map_err(output_serialization_error)?;
             if !writer.write_item("context.candidate", &value)? {
                 break;
@@ -5296,7 +5353,6 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
         .map(|_| take_visual_diff_files(&mut diff_result));
 
     if args.ndjson {
-        let mut output = Vec::new();
         let visual_items = match &diff_result.visual {
             Some(visual) => visual.page_diffs.len().checked_add(1).ok_or_else(|| {
                 DocsightError::ResourceLimit {
@@ -5326,8 +5382,9 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
                 args.out_dir.is_some()
             ),
         );
+        let stdout = io::stdout();
         let mut writer = NdjsonWriter::new(
-            &mut output,
+            stdout.lock(),
             args.limits.clone(),
             scope,
             source_after.sha256().to_owned(),
@@ -5367,7 +5424,7 @@ fn diff(args: DiffCommandArgs<'_>) -> Result<(), DocsightError> {
         writer.write_warnings(&diff_result.warnings)?;
         writer.finish()?;
         publish_visual_diff(args.out_dir, visual_files.as_ref())?;
-        return write_stdout_bytes(&output);
+        return Ok(());
     }
 
     if args.json {
@@ -5689,13 +5746,17 @@ fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let doc = args.loader.load(&source)?;
     let glyph_coverage = document_glyph_coverage(&doc, &source);
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
+    let scope = continuation_scope(
+        "coverage",
+        &format!("page={:?};regions={}", args.page, args.regions),
+    );
 
     if args.ndjson {
         let stdout = io::stdout();
         let mut writer = NdjsonWriter::new(
             stdout.lock(),
             args.limits.clone(),
-            "coverage".into(),
+            scope.clone(),
             source.sha256().to_owned(),
             1 + report.pages.len(),
         )?;

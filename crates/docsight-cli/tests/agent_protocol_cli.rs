@@ -38,6 +38,20 @@ fn assert_ndjson_event(
     Ok(())
 }
 
+fn assert_agent_error(
+    output: &std::process::Output,
+    code: &str,
+    exit_code: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(output.status.code(), Some(exit_code));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
+    assert_eq!(error["schema"], "docsight.agent/v2");
+    assert_eq!(error["error"]["code"], code);
+    assert_eq!(error["error"]["exit_code"], exit_code);
+    Ok(())
+}
+
 #[test]
 fn ndjson_streaming_emits_valid_sequence_and_events() -> Result<(), Box<dyn std::error::Error>> {
     let path = headings_fixture();
@@ -292,6 +306,20 @@ fn quiet_suppresses_stderr_diagnostics() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn capabilities_rejects_limits_it_does_not_apply() -> Result<(), Box<dyn std::error::Error>> {
+    for arguments in [
+        vec!["--agent", "capabilities", "--max-bytes", "1024"],
+        vec!["--agent", "capabilities", "--max-document-bytes", "1mb"],
+        vec!["--agent", "capabilities", "--max-items", "1"],
+    ] {
+        let output = docsight().args(arguments).output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn agent_mode_normalizes_json_errors_capabilities_and_artifacts()
 -> Result<(), Box<dyn std::error::Error>> {
     let path = headings_fixture();
@@ -354,6 +382,35 @@ fn agent_mode_normalizes_json_errors_capabilities_and_artifacts()
 }
 
 #[test]
+fn ndjson_alone_uses_structured_errors_for_parse_runtime_and_preflight_failures()
+-> Result<(), Box<dyn std::error::Error>> {
+    let missing = docsight()
+        .args(["--ndjson", "inspect", "nonexistent_file_xyz.docx"])
+        .output()?;
+    assert_agent_error(&missing, "IO_ERROR", 40)?;
+
+    let parse = docsight().args(["--ndjson", "unknown-command"]).output()?;
+    assert_agent_error(&parse, "USAGE", 2)?;
+
+    let document = headings_fixture();
+    let document_text = document.to_str().ok_or("document path")?;
+    let preflight = docsight()
+        .args([
+            "--ndjson",
+            "--json-errors",
+            "render",
+            document_text,
+            "--page",
+            "1",
+            "--out",
+            document_text,
+        ])
+        .output()?;
+    assert_agent_error(&preflight, "USAGE", 2)?;
+    Ok(())
+}
+
+#[test]
 fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::error::Error>> {
     let output = docsight().args(["--agent", "capabilities"]).output()?;
     assert!(output.status.success());
@@ -401,6 +458,8 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
     );
     assert_eq!(value["result"]["pdf_password"]["secret_in_argv"], false);
     assert_eq!(value["result"]["pdf_password"]["secret_persisted"], false);
+    let limits = value["result"]["limits"].as_array().ok_or("limits")?;
+    assert!(limits.iter().any(|limit| limit == "--max-document-bytes"));
     let commands = value["result"]["commands"]
         .as_array()
         .ok_or("missing commands")?;
@@ -628,6 +687,68 @@ fn max_bytes_truncates_warnings_without_losing_single_result()
 }
 
 #[test]
+fn page_ndjson_boundaries_stay_balanced_and_bind_the_page_target()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = headings_fixture();
+    let document_text = document.to_str().ok_or("document path")?;
+    let output = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "--max-items",
+            "1",
+            "page",
+            document_text,
+            "1",
+        ])
+        .output()?;
+    assert!(output.status.success());
+    let records = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_slice)
+        .collect::<Result<Vec<serde_json::Value>, _>>()?;
+    let event_types = records
+        .iter()
+        .map(|record| record["type"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        event_types
+            .iter()
+            .filter(|kind| **kind == "page.begin")
+            .count(),
+        1
+    );
+    assert_eq!(
+        event_types
+            .iter()
+            .filter(|kind| **kind == "page.end")
+            .count(),
+        1
+    );
+    assert!(event_types.last() == Some(&"done"));
+    let token = records
+        .last()
+        .and_then(|record| record["limits"]["continuation_token"].as_str())
+        .ok_or("continuation token")?;
+    let wrong_page = docsight()
+        .args([
+            "--agent",
+            "--ndjson",
+            "page",
+            document_text,
+            "2",
+            "--continue",
+            token,
+        ])
+        .output()?;
+    assert_eq!(wrong_page.status.code(), Some(2));
+    assert!(wrong_page.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
 fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::error::Error>> {
     let docx_path = headings_fixture();
     let out = docsight()
@@ -762,10 +883,24 @@ fn continuation_token_is_always_present_in_limits() -> Result<(), Box<dyn std::e
             done["limits"].get("continuation_token").is_some(),
             "the NDJSON done event must always carry continuation_token"
         );
-        assert_eq!(
-            done["limits"]["continuation_token"], limits["continuation_token"],
-            "bounded and streamed continuation tokens must agree"
-        );
+        if expect_truncated {
+            assert_ne!(
+                done["limits"]["continuation_token"], limits["continuation_token"],
+                "JSON and NDJSON continuation tokens must bind different physical streams"
+            );
+            let cross_mode = docsight()
+                .args([
+                    "--agent",
+                    "text",
+                    path,
+                    "--continue",
+                    done["limits"]["continuation_token"]
+                        .as_str()
+                        .ok_or("NDJSON continuation token")?,
+                ])
+                .output()?;
+            assert_eq!(cross_mode.status.code(), Some(2));
+        }
     }
     Ok(())
 }

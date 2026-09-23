@@ -1,6 +1,6 @@
 use crate::{
-    Block, BlockKind, DocsightError, Document, DocumentFormat, DocumentObject, DocumentSource,
-    ObjectId, OverlayKind, Rect,
+    Block, BlockKind, Diagnostic, DocsightError, Document, DocumentFormat, DocumentObject,
+    DocumentSource, ObjectId, OverlayKind, Rect,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -105,10 +105,31 @@ pub struct PageFidelity {
     pub reason_codes: Vec<String>,
 }
 
-pub fn page_fidelity(document: &Document) -> PageFidelity {
+fn warning_applies_to_page(
+    document: &Document,
+    warning: &Diagnostic,
+    page_number: Option<u32>,
+) -> bool {
+    let Some(page_number) = page_number else {
+        return true;
+    };
+    if let Some(page) = warning.page {
+        return page == page_number;
+    }
+    if let Some(object) = &warning.object {
+        return document
+            .blocks
+            .iter()
+            .any(|block| &block.id == object && block.occupies_page(page_number));
+    }
+    true
+}
+
+pub fn page_fidelity(document: &Document, page_number: Option<u32>) -> PageFidelity {
     let codes: BTreeSet<&str> = document
         .warnings
         .iter()
+        .filter(|warning| warning_applies_to_page(document, warning, page_number))
         .map(|warning| warning.code.as_str())
         .collect();
     let pagination = if codes
@@ -862,6 +883,17 @@ fn resource_coverage(doc: &Document, page_blocks: &[&Block], is_global: bool) ->
         .warnings
         .iter()
         .filter(|warning| RESOURCE_LOSS_CODES.contains(&warning.code.as_str()))
+        .filter(|warning| {
+            is_global
+                || warning
+                    .page
+                    .is_some_and(|page| page_blocks.iter().any(|block| block.occupies_page(page)))
+                || warning
+                    .object
+                    .as_ref()
+                    .is_some_and(|object| page_blocks.iter().any(|block| &block.id == object))
+                || (warning.page.is_none() && warning.object.is_none())
+        })
         .map(|warning| warning.code.clone())
         .collect::<BTreeSet<String>>()
         .into_iter()
@@ -911,6 +943,19 @@ pub fn compute_coverage(
 ) -> Result<CoverageReport, DocsightError> {
     let mut affected_ids = BTreeSet::new();
     let mut all_reason_codes = BTreeSet::new();
+
+    if page_filter == Some(0) {
+        return Err(DocsightError::InvalidArgument {
+            message: "page numbers are 1-based".to_owned(),
+        });
+    }
+    if let Some(page) = page_filter
+        && !doc.pages.iter().any(|candidate| candidate.number == page)
+    {
+        return Err(DocsightError::ObjectNotFound {
+            object: format!("page {page}"),
+        });
+    }
 
     let pages_to_process: Vec<u32> = match page_filter {
         Some(page) => vec![page],
@@ -1021,5 +1066,42 @@ fn region_bbox(block: &Block, page: u32, is_global: bool) -> Option<Rect> {
         block.bbox
     } else {
         block.bbox_on_page(page)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DocumentMetadata, IrVersion, TrackedChanges};
+
+    #[test]
+    fn page_fidelity_excludes_warnings_owned_by_other_pages() {
+        let mut warning = Diagnostic::warning(
+            "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
+            "header overlaps page 2".to_owned(),
+            "page 2 geometry is approximate",
+        );
+        warning.page = Some(2);
+        let document = Document {
+            version: IrVersion::default(),
+            id: "doc_test".to_owned(),
+            sha256: "0".repeat(64),
+            format: DocumentFormat::Docx,
+            size_bytes: 1,
+            metadata: DocumentMetadata::default(),
+            styles: Vec::new(),
+            sections: Vec::new(),
+            pages: Vec::new(),
+            blocks: Vec::new(),
+            resources: Vec::new(),
+            links: Vec::new(),
+            comments: Vec::new(),
+            tracked_changes: TrackedChanges::default(),
+            warnings: vec![warning],
+        };
+
+        assert!(page_fidelity(&document, Some(1)).authoritative);
+        assert!(!page_fidelity(&document, Some(2)).authoritative);
+        assert!(!page_fidelity(&document, None).authoritative);
     }
 }
