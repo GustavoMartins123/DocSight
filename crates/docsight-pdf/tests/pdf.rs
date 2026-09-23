@@ -581,7 +581,7 @@ fn exposes_xobject_placements_as_figure_blocks() -> Result<(), DocsightError> {
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 6 0 R >>".to_owned(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
-        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".to_owned(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\nabcd\nendstream".to_owned(),
         format!(
             "<< /Length {} >>\nstream\n{content}\nendstream",
             content.len()
@@ -610,7 +610,7 @@ fn renders_explicit_placeholder_for_undecoded_xobjects() -> Result<(), DocsightE
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
-        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".to_owned(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\nabcd\nendstream".to_owned(),
         format!(
             "<< /Length {} >>\nstream\n{content}\nendstream",
             content.len()
@@ -1738,5 +1738,27 @@ fn reports_a_scanned_page_as_having_no_text_layer() -> Result<(), Box<dyn std::e
         .find(|warning| warning.code == "PDF_PAGE_HAS_NO_TEXT_LAYER")
         .ok_or("scanned-page diagnostic missing")?;
     assert!(warning.effect.contains("OCR"));
+    Ok(())
+}
+
+#[test]
+fn reconstructs_kerned_text_without_table_fragmentation() -> Result<(), Box<dyn std::error::Error>>
+{
+    let content = "BT /F1 10 Tf 20 70 Td [(HABILID) 15 (ADES)] TJ ET";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document.tables().count(), 0);
+    let text: String = document.blocks.iter().map(|block| block.text()).collect();
+    assert!(
+        text.contains("HABILIDADES"),
+        "expected merged word, got: {text}"
+    );
     Ok(())
 }
