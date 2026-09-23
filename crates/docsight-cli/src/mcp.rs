@@ -537,7 +537,7 @@ fn tool_compare(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value,
         visual: false,
         dpi: 144,
         threshold: 8,
-        out_dir: None,
+        emit_visual_artifacts: false,
     };
     let diff = docsight_diff::diff_documents_with_passwords(
         &before_source,
