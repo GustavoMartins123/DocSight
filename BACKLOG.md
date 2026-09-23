@@ -44,7 +44,7 @@ Recorded 2026-09-20. The operation matrix, budgets and cost structure in `benchm
 - Filtered image scaling. Figure scaling is nearest-neighbour, chosen for determinism; a box or Lanczos filter would look closer to Word at the cost of a defined tolerance in the visual goldens.
 - Remaining PNG variants: 1, 2, 4 and 16 bits per channel, and interlaced images. Each currently fails closed with a diagnostic naming the variant.
 - Shading (`sh`) painting. The operator no longer vetoes a document, but the shaded area is left unpainted and reported through `PDF_SHADING_UNSUPPORTED`.
-- Image XObject decoding. PDF image pixels are still placeholders; DOCX PNG and JPEG parts are already decoded.
+- Remaining PDF Image XObject formats (JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit depths, DeviceCMYK, image masks). DCTDecode/JPEG and 8-bit FlateDecode (DeviceRGB, DeviceGray) are decoded natively; other formats fail closed and emit `PDF_XOBJECT_PLACEHOLDER`. OCR remains strictly out of scope.
 - Contextual spacing (`w:contextualSpacing`), which is parsed and reported but not applied between paragraphs of the same style.
 - Annotation appearance streams: an annotation currently contributes geometry and text to the IR, not its rendered pixels.
 - `Watermark` overlays in the IR. The entity exists but no parser produces it.

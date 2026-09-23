@@ -435,6 +435,11 @@ fn tool_get_page(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value
         .ok_or_else(|| DocsightError::InvalidArgument {
             message: "Missing required integer argument 'page'".to_owned(),
         })? as u32;
+    if page_num == 0 {
+        return Err(DocsightError::InvalidArgument {
+            message: "page must be greater than or equal to 1".to_owned(),
+        });
+    }
 
     let path = PathBuf::from(path_str);
     let source = loader.open_source(&path)?;
@@ -465,6 +470,11 @@ fn tool_get_region(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Val
         .ok_or_else(|| DocsightError::InvalidArgument {
             message: "Missing required integer argument 'page'".to_owned(),
         })? as u32;
+    if page_num == 0 {
+        return Err(DocsightError::InvalidArgument {
+            message: "page must be greater than or equal to 1".to_owned(),
+        });
+    }
 
     let point_str = arguments.get("point").and_then(Value::as_str);
     let bbox_str = arguments.get("bbox").and_then(Value::as_str);
@@ -561,7 +571,20 @@ fn tool_verify(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, 
 fn tool_evidence(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, DocsightError> {
     let path_str = required_string(arguments, "path")?;
     let object_id_str = required_string(arguments, "object_id")?;
-    let dpi = arguments.get("dpi").and_then(Value::as_u64).unwrap_or(150) as u16;
+    let dpi = match arguments.get("dpi") {
+        Some(val) => {
+            let n = val.as_u64().ok_or_else(|| DocsightError::InvalidArgument {
+                message: "dpi must be an integer between 36 and 600".to_owned(),
+            })?;
+            if !(36..=600).contains(&n) {
+                return Err(DocsightError::InvalidArgument {
+                    message: "dpi must be between 36 and 600".to_owned(),
+                });
+            }
+            n as u16
+        }
+        None => 150,
+    };
 
     let path = PathBuf::from(path_str);
     let source = loader.open_source(&path)?;

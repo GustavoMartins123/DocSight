@@ -427,3 +427,265 @@ fn mcp_tool_get_evidence() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn mcp_get_evidence_handles_object_without_geometry_or_unresolvable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let meta_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": {
+                "path": path_str,
+                "object_id": "meta"
+            }
+        }
+    });
+    let res = client.request(&meta_req.to_string())?;
+    assert_eq!(res["jsonrpc"], "2.0");
+    assert_eq!(res["id"], 20);
+    assert_eq!(res["result"]["isError"], true);
+    let text = res["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("OBJECT_NOT_FOUND"));
+
+    let doc_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": {
+                "path": path_str,
+                "object_id": "document"
+            }
+        }
+    });
+    let res2 = client.request(&doc_req.to_string())?;
+    assert_eq!(res2["jsonrpc"], "2.0");
+    assert_eq!(res2["id"], 21);
+    assert_eq!(res2["result"]["isError"], true);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_get_evidence_handles_nonexistent_object() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 30,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": {
+                "path": path_str,
+                "object_id": "nonexistent_obj_99999"
+            }
+        }
+    });
+    let res = client.request(&req.to_string())?;
+    assert_eq!(res["jsonrpc"], "2.0");
+    assert_eq!(res["id"], 30);
+    assert_eq!(res["result"]["isError"], true);
+    let text = res["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("OBJECT_NOT_FOUND"));
+
+    Ok(())
+}
+
+#[test]
+fn mcp_handles_invalid_arguments_across_tools() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let bad_dpi_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 40,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": {
+                "path": path_str,
+                "object_id": "span_0",
+                "dpi": 10
+            }
+        }
+    });
+    let res_dpi = client.request(&bad_dpi_req.to_string())?;
+    assert_eq!(res_dpi["result"]["isError"], true);
+    let text = res_dpi["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("dpi must be between 36 and 600"));
+
+    let bad_page_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 41,
+        "method": "tools/call",
+        "params": {
+            "name": "get_page",
+            "arguments": {
+                "path": path_str,
+                "page": 0
+            }
+        }
+    });
+    let res_page = client.request(&bad_page_req.to_string())?;
+    assert_eq!(res_page["result"]["isError"], true);
+    let text = res_page["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("page must be greater than or equal to 1"));
+
+    let bad_bbox_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "tools/call",
+        "params": {
+            "name": "get_region",
+            "arguments": {
+                "path": path_str,
+                "page": 1,
+                "bbox": "not,a,valid,bbox"
+            }
+        }
+    });
+    let res_bbox = client.request(&bad_bbox_req.to_string())?;
+    assert_eq!(res_bbox["result"]["isError"], true);
+
+    let nonexistent_file_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 43,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_document",
+            "arguments": {
+                "path": "nonexistent_file_does_not_exist.docx"
+            }
+        }
+    });
+    let res_file = client.request(&nonexistent_file_req.to_string())?;
+    assert_eq!(res_file["result"]["isError"], true);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_session_survives_tool_errors_in_sequence() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 50,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_document",
+            "arguments": { "path": path_str }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["id"], 50);
+    assert_eq!(res1["result"]["isError"], false);
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 51,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": {
+                "path": path_str,
+                "object_id": "missing_object"
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["id"], 51);
+    assert_eq!(res2["result"]["isError"], true);
+
+    let req3 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 52,
+        "method": "tools/call",
+        "params": {
+            "name": "get_page",
+            "arguments": {
+                "path": path_str,
+                "page": 0
+            }
+        }
+    });
+    let res3 = client.request(&req3.to_string())?;
+    assert_eq!(res3["id"], 52);
+    assert_eq!(res3["result"]["isError"], true);
+
+    let req4 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 53,
+        "method": "tools/call",
+        "params": {
+            "name": "get_page",
+            "arguments": {
+                "path": path_str,
+                "page": 1
+            }
+        }
+    });
+    let res4 = client.request(&req4.to_string())?;
+    assert_eq!(res4["id"], 53);
+    assert_eq!(res4["result"]["isError"], false);
+
+    let req5 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 54,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": {
+                "path": path_str,
+                "object_id": "any_id",
+                "dpi": 5
+            }
+        }
+    });
+    let res5 = client.request(&req5.to_string())?;
+    assert_eq!(res5["id"], 54);
+    assert_eq!(res5["result"]["isError"], true);
+
+    let headings_path = headings_fixture();
+    let headings_str = headings_path.to_str().ok_or("invalid path")?;
+    let req6 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 55,
+        "method": "tools/call",
+        "params": {
+            "name": "search_document",
+            "arguments": {
+                "path": headings_str,
+                "query": "Dados",
+                "mode": "literal"
+            }
+        }
+    });
+    let res6 = client.request(&req6.to_string())?;
+    assert_eq!(res6["id"], 55);
+    assert_eq!(res6["result"]["isError"], false);
+
+    Ok(())
+}

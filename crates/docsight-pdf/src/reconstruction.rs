@@ -26,6 +26,11 @@ pub(crate) fn reconstruct_page_semantics(
                 bbox,
                 resource_name,
                 ..
+            }
+            | DisplayCommand::Image {
+                bbox,
+                resource_name,
+                ..
             } => Some((*bbox, resource_name.clone())),
             _ => None,
         })
@@ -39,15 +44,7 @@ pub(crate) fn reconstruct_page_semantics(
     }
 
     let rulings = extract_rulings(commands);
-    let span_items: Vec<TextSpanItem> = text_runs
-        .iter()
-        .map(|run| TextSpanItem {
-            text: run.text.clone(),
-            bbox: run.bbox,
-            font_size: run.font_size,
-            bold: run.bold,
-        })
-        .collect();
+    let span_items = merge_contiguous_runs_for_spans(text_runs);
 
     let tables = detect_tables(page, &span_items, &rulings, page_width, page_height);
 
@@ -373,7 +370,11 @@ fn cluster_runs_into_lines(runs: &[TextRun]) -> Vec<LineCandidate> {
         for run in &group {
             if let Some(last_x) = prev_x1 {
                 let gap = run.bbox.x0 - last_x;
-                if gap >= 2.0 {
+                let space_threshold = (run.font_size * 0.22).max(2.2);
+                if gap >= space_threshold
+                    && !line_text.ends_with(char::is_whitespace)
+                    && !run.text.starts_with(char::is_whitespace)
+                {
                     line_text.push(' ');
                 }
             }
@@ -542,6 +543,61 @@ fn append_filled_ruling(points: &[Point], rulings: &mut Vec<RulingSegment>) {
             y1,
         });
     }
+}
+
+fn merge_contiguous_runs_for_spans(runs: &[TextRun]) -> Vec<TextSpanItem> {
+    if runs.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = runs.to_vec();
+    sorted.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .partial_cmp(&b.bbox.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.bbox
+                    .x0
+                    .partial_cmp(&b.bbox.x0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    let mut items: Vec<TextSpanItem> = Vec::new();
+    for run in sorted {
+        if let Some(last) = items.last_mut() {
+            let same_line = (run.bbox.y0 - last.bbox.y0).abs()
+                <= (last.font_size.min(run.font_size) * 0.35).max(3.0);
+            let gap = run.bbox.x0 - last.bbox.x1;
+            let intra_gap_limit = (last.font_size.max(run.font_size) * 0.22).max(2.2);
+            let min_negative_gap = -last.font_size.max(run.font_size) * 0.3;
+            let is_intra_word = same_line
+                && last.bold == run.bold
+                && gap <= intra_gap_limit
+                && gap >= min_negative_gap
+                && !last.text.ends_with(char::is_whitespace)
+                && !run.text.starts_with(char::is_whitespace);
+            if is_intra_word {
+                last.text.push_str(&run.text);
+                last.bbox = match Rect::new(
+                    last.bbox.x0.min(run.bbox.x0),
+                    last.bbox.y0.min(run.bbox.y0),
+                    last.bbox.x1.max(run.bbox.x1),
+                    last.bbox.y1.max(run.bbox.y1),
+                ) {
+                    Ok(r) => r,
+                    Err(_) => last.bbox,
+                };
+                continue;
+            }
+        }
+        items.push(TextSpanItem {
+            text: run.text.clone(),
+            bbox: run.bbox,
+            font_size: run.font_size,
+            bold: run.bold,
+        });
+    }
+    items
 }
 
 #[cfg(test)]
