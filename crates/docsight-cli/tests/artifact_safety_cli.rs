@@ -76,6 +76,21 @@ fn artifact_commands_reject_source_output_collisions_without_modifying_source()
     assert_error(&render, 2, "USAGE")?;
     assert_eq!(digest(&source)?, before);
 
+    let contact_sheet = docsight()
+        .args([
+            "--agent",
+            "--json-errors",
+            "contact-sheet",
+            source_text,
+            "--pages",
+            "1",
+            "--out",
+            source_text,
+        ])
+        .output()?;
+    assert_error(&contact_sheet, 2, "USAGE")?;
+    assert_eq!(digest(&source)?, before);
+
     let crop = docsight()
         .args([
             "--agent",
@@ -162,6 +177,21 @@ fn artifact_commands_reject_relative_and_hardlink_source_aliases()
         ])
         .output()?;
     assert_error(&hardlink_output, 2, "USAGE")?;
+    assert_eq!(digest(&source)?, before);
+
+    let contact_sheet_hardlink = docsight()
+        .args([
+            "--agent",
+            "--json-errors",
+            "contact-sheet",
+            source.to_str().ok_or("source path")?,
+            "--pages",
+            "1",
+            "--out",
+            hardlink.to_str().ok_or("hardlink path")?,
+        ])
+        .output()?;
+    assert_error(&contact_sheet_hardlink, 2, "USAGE")?;
     assert_eq!(digest(&source)?, before);
     Ok(())
 }
