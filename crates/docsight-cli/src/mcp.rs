@@ -1,12 +1,12 @@
 use crate::cache::DocumentLoader;
-use docsight_core::{DocsightError, ObjectId, compute_coverage, compute_evidence};
-use docsight_render::{HitQuery, RenderRequest, RenderTarget, render_document_with_password};
+use docsight_core::{Diagnostic, DocsightError, compute_coverage};
+use docsight_render::HitQuery;
 use docsight_search::{FindMode, FindRequest, PageRange, execute_spatial_query};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "docsight";
@@ -28,6 +28,20 @@ struct JsonRpcResponse {
     result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<JsonRpcError>,
+}
+
+struct ToolOutput {
+    value: Value,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl ToolOutput {
+    fn primary(value: Value) -> Self {
+        Self {
+            value,
+            diagnostics: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -138,20 +152,30 @@ pub fn run_mcp_server(loader: &DocumentLoader<'_>) -> Result<(), DocsightError> 
                 let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
                 let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                 match execute_tool(tool_name, &arguments, loader) {
-                    Ok(tool_result) => JsonRpcResponse {
-                        jsonrpc: "2.0",
-                        id: request_id,
-                        result: Some(json!({
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": serde_json::to_string_pretty(&tool_result).unwrap_or_default()
-                                }
-                            ],
-                            "isError": false
-                        })),
-                        error: None,
-                    },
+                    Ok(tool_result) => {
+                        let primary = serde_json::to_string_pretty(&tool_result.value)
+                            .map_err(serialization_error)?;
+                        let mut content = vec![json!({
+                            "type": "text",
+                            "text": primary
+                        })];
+                        for diagnostic in &tool_result.diagnostics {
+                            content.push(json!({
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(diagnostic)
+                                    .map_err(serialization_error)?
+                            }));
+                        }
+                        JsonRpcResponse {
+                            jsonrpc: "2.0",
+                            id: request_id,
+                            result: Some(json!({
+                                "content": content,
+                                "isError": false
+                            })),
+                            error: None,
+                        }
+                    }
                     Err(tool_error) => {
                         let diagnostic = tool_error.diagnostic();
                         JsonRpcResponse {
@@ -205,10 +229,13 @@ fn list_tools() -> Value {
                     },
                     "password": {
                         "type": "string",
-                        "description": "Optional password for password-protected PDF documents."
+                        "description": "Optional non-empty, single-line PDF password of at most 127 bytes. It cannot be combined with an invocation-level password."
                     }
                 },
                 "required": ["path"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/inspect-result.json"
             }
         },
         {
@@ -240,6 +267,12 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "query"]
+            },
+            "outputSchema": {
+                "oneOf": [
+                    { "$ref": "https://docsight.dev/schemas/v2/find-result.json" },
+                    { "$ref": "https://docsight.dev/schemas/v2/spatial-query-result.json" }
+                ]
             }
         },
         {
@@ -258,6 +291,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "page"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/page-result.json"
             }
         },
         {
@@ -284,6 +320,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "page"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/hit-result.json"
             }
         },
         {
@@ -299,20 +338,31 @@ fn list_tools() -> Value {
                     "after": {
                         "type": "string",
                         "description": "Path to the modified/later document."
+                    },
+                    "password_before_file": {
+                        "type": "string",
+                        "description": "Path to a bounded password file for the before document."
+                    },
+                    "password_after_file": {
+                        "type": "string",
+                        "description": "Path to a bounded password file for the after document."
                     }
                 },
                 "required": ["before", "after"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/diff-result.json"
             }
         },
         {
             "name": "verify_document",
-            "description": "Verify document fidelity profile, glyph coverage, and unsupported feature diagnostics, or verify a proof bundle.",
+            "description": "Verify DOCX or PDF fidelity, glyph coverage, and unsupported feature diagnostics.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the document or .zip proof bundle."
+                        "description": "Path to the DOCX or PDF document."
                     },
                     "page": {
                         "type": "integer",
@@ -320,6 +370,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/coverage-report.json"
             }
         },
         {
@@ -338,24 +391,30 @@ fn list_tools() -> Value {
                     },
                     "dpi": {
                         "type": "integer",
-                        "description": "Render resolution DPI for visual hash (default 150)."
+                        "description": "Render resolution DPI for visual hash (default 144)."
                     }
                 },
                 "required": ["path", "object_id"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/evidence-record.json"
             }
         },
         {
             "name": "replay_bundle",
-            "description": "Replay and cryptographically verify a DocSight proof bundle archive (.zip).",
+            "description": "Cryptographically verify a DocSight proof bundle archive independent of its filename extension.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "bundle_path": {
                         "type": "string",
-                        "description": "Path to the .zip proof bundle."
+                        "description": "Path to the DocSight proof bundle archive."
                     }
                 },
                 "required": ["bundle_path"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/verify-result.json"
             }
         }
     ])
@@ -365,27 +424,64 @@ fn execute_tool(
     name: &str,
     arguments: &Value,
     loader: &DocumentLoader<'_>,
-) -> Result<Value, DocsightError> {
-    match name {
-        "inspect_document" => tool_inspect(arguments, loader),
-        "search_document" => tool_search(arguments, loader),
-        "get_page" => tool_get_page(arguments, loader),
-        "get_region" => tool_get_region(arguments, loader),
-        "compare_documents" => tool_compare(arguments, loader),
-        "verify_document" => tool_verify(arguments, loader),
-        "get_evidence" => tool_evidence(arguments, loader),
-        "replay_bundle" => tool_replay_bundle(arguments, loader),
-        _ => Err(DocsightError::InvalidArgument {
-            message: format!("Unknown tool name: {name}"),
-        }),
-    }
+) -> Result<ToolOutput, DocsightError> {
+    let value = match name {
+        "inspect_document" => tool_inspect(arguments, loader)?,
+        "search_document" => tool_search(arguments, loader)?,
+        "get_page" => tool_get_page(arguments, loader)?,
+        "get_region" => tool_get_region(arguments, loader)?,
+        "compare_documents" => tool_compare(arguments, loader)?,
+        "verify_document" => tool_verify(arguments, loader)?,
+        "get_evidence" => return tool_evidence(arguments, loader),
+        "replay_bundle" => tool_replay_bundle(arguments, loader)?,
+        _ => {
+            return Err(DocsightError::InvalidArgument {
+                message: format!("Unknown tool name: {name}"),
+            });
+        }
+    };
+    Ok(ToolOutput::primary(value))
 }
 
 fn tool_inspect(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, DocsightError> {
     let path_str = required_string(arguments, "path")?;
+    let request_password = match arguments.get("password") {
+        None => None,
+        Some(Value::String(secret)) => {
+            if !loader.password().is_empty() {
+                return Err(DocsightError::InvalidArgument {
+                    message:
+                        "MCP inspect password cannot be combined with an invocation-level password"
+                            .to_owned(),
+                });
+            }
+            if loader.has_cache() {
+                return Err(DocsightError::InvalidArgument {
+                    message: "request-scoped document loading cannot use a cache".to_owned(),
+                });
+            }
+            Some(crate::parse_direct_password(secret)?)
+        }
+        Some(_) => {
+            return Err(DocsightError::InvalidArgument {
+                message: "password must be a string".to_owned(),
+            });
+        }
+    };
+    let request_loader = request_password.as_ref().map(|password| {
+        crate::cache::request_scoped_loader(
+            password.as_bytes(),
+            loader.reporting(),
+            loader.max_document_bytes(),
+        )
+    });
+    let active_loader = match &request_loader {
+        Some(request_loader) => request_loader,
+        None => loader,
+    };
     let path = PathBuf::from(path_str);
-    let source = loader.open_source(&path)?;
-    let (result, _warnings) = crate::inspect_source(&source, loader)?;
+    let source = active_loader.open_source(&path)?;
+    let (result, _warnings) = crate::inspect_source(&source, active_loader)?;
     serde_json::to_value(result).map_err(serialization_error)
 }
 
@@ -481,22 +577,7 @@ fn tool_get_region(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Val
 
     let query = match (point_str, bbox_str) {
         (Some(pt), None) => {
-            let parts: Vec<&str> = pt.split(',').map(str::trim).collect();
-            if parts.len() != 2 {
-                return Err(DocsightError::InvalidArgument {
-                    message: "point must be formatted as 'x,y'".to_owned(),
-                });
-            }
-            let x: f32 = parts[0]
-                .parse()
-                .map_err(|_| DocsightError::InvalidArgument {
-                    message: format!("invalid x: {}", parts[0]),
-                })?;
-            let y: f32 = parts[1]
-                .parse()
-                .map_err(|_| DocsightError::InvalidArgument {
-                    message: format!("invalid y: {}", parts[1]),
-                })?;
+            let (x, y) = crate::parse_point(pt)?;
             HitQuery::Point(x, y)
         }
         (None, Some(bb)) => {
@@ -532,6 +613,16 @@ fn tool_compare(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value,
 
     let before_source = loader.open_source(&before_path)?;
     let after_source = loader.open_source(&after_path)?;
+    let before_password = optional_password(arguments, "password_before_file")?;
+    let after_password = optional_password(arguments, "password_after_file")?;
+    let before_password = before_password
+        .as_ref()
+        .map(crate::PdfPassword::as_bytes)
+        .unwrap_or_else(|| loader.password());
+    let after_password = after_password
+        .as_ref()
+        .map(crate::PdfPassword::as_bytes)
+        .unwrap_or_else(|| loader.password());
 
     let options = docsight_diff::DiffOptions {
         visual: false,
@@ -543,8 +634,8 @@ fn tool_compare(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value,
         &before_source,
         &after_source,
         &options,
-        loader.password(),
-        loader.password(),
+        before_password,
+        after_password,
     )?;
     serde_json::to_value(diff).map_err(serialization_error)
 }
@@ -553,76 +644,44 @@ fn tool_verify(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, 
     let path_str = required_string(arguments, "path")?;
     let path = PathBuf::from(path_str);
 
-    if path_str.ends_with(".zip") || path_str.ends_with(".dse") {
-        return tool_replay_bundle(arguments, loader);
-    }
-
     let page_num = arguments
         .get("page")
         .and_then(Value::as_u64)
         .map(|p| p as u32);
     let source = loader.open_source(&path)?;
     let document = loader.load(&source)?;
-    let glyph_coverage = crate::document_glyph_coverage(&document, &source);
+    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source);
     let report = compute_coverage(&document, &source, page_num, true, glyph_coverage)?;
     serde_json::to_value(report).map_err(serialization_error)
 }
 
-fn tool_evidence(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, DocsightError> {
+fn tool_evidence(
+    arguments: &Value,
+    loader: &DocumentLoader<'_>,
+) -> Result<ToolOutput, DocsightError> {
     let path_str = required_string(arguments, "path")?;
-    let object_id_str = required_string(arguments, "object_id")?;
+    let object_id = required_string(arguments, "object_id")?;
     let dpi = match arguments.get("dpi") {
-        Some(val) => {
-            let n = val.as_u64().ok_or_else(|| DocsightError::InvalidArgument {
-                message: "dpi must be an integer between 36 and 600".to_owned(),
-            })?;
-            if !(36..=600).contains(&n) {
+        Some(value) => {
+            let dpi = value
+                .as_u64()
+                .ok_or_else(|| DocsightError::InvalidArgument {
+                    message: "dpi must be an integer between 36 and 600".to_owned(),
+                })?;
+            if !(36..=600).contains(&dpi) {
                 return Err(DocsightError::InvalidArgument {
                     message: "dpi must be between 36 and 600".to_owned(),
                 });
             }
-            n as u16
+            dpi as u16
         }
-        None => 150,
+        None => crate::DEFAULT_EVIDENCE_RENDER_DPI,
     };
-
-    let path = PathBuf::from(path_str);
-    let source = loader.open_source(&path)?;
-    let document = loader.load(&source)?;
-    let obj_id = ObjectId::from_raw(object_id_str);
-
-    let render_fingerprint = {
-        let req = RenderRequest {
-            target: RenderTarget::Object {
-                id: object_id_str.to_owned(),
-            },
-            dpi,
-        };
-        match render_document_with_password(&source, &req, loader.password()) {
-            Ok(rendered) => {
-                let mut hasher = sha2::Sha256::new();
-                use sha2::Digest;
-                hasher.update(rendered.png());
-                let hash = hasher.finalize();
-                Some(
-                    hash.iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>(),
-                )
-            }
-            Err(_) => None,
-        }
-    };
-
-    let glyph_coverage = crate::document_glyph_coverage(&document, &source);
-    let record = compute_evidence(
-        &document,
-        &source,
-        &obj_id,
-        render_fingerprint,
-        glyph_coverage,
-    )?;
-    serde_json::to_value(record).map_err(serialization_error)
+    let result = crate::object_evidence(&PathBuf::from(path_str), loader, object_id, dpi)?;
+    Ok(ToolOutput {
+        value: serde_json::to_value(result.record).map_err(serialization_error)?,
+        diagnostics: result.warnings,
+    })
 }
 
 fn tool_replay_bundle(
@@ -631,20 +690,40 @@ fn tool_replay_bundle(
 ) -> Result<Value, DocsightError> {
     let bundle_path_str = arguments
         .get("bundle_path")
-        .or_else(|| arguments.get("path"))
         .and_then(Value::as_str)
         .ok_or_else(|| DocsightError::InvalidArgument {
             message: "Missing required string argument 'bundle_path'".to_owned(),
         })?;
     let bundle_path = PathBuf::from(bundle_path_str);
-    let limits = docsight_render::trace::ArtifactLimits::default();
+    let limits = docsight_render::trace::ArtifactLimits {
+        max_document_bytes: loader.max_document_bytes(),
+    };
     let bundle = docsight_render::trace::read_proof_bundle_with_limits(&bundle_path, limits)?;
     let verification = docsight_render::trace::verify_proof_bundle_with_password(
         &bundle,
         loader.password(),
         limits,
     )?;
-    serde_json::to_value(verification).map_err(serialization_error)
+    let result = crate::VerifyResult {
+        bundle_name: crate::proof_bundle_name(&bundle_path)?,
+        verification,
+    };
+    serde_json::to_value(result).map_err(serialization_error)
+}
+
+fn optional_password(
+    arguments: &Value,
+    key: &str,
+) -> Result<Option<crate::PdfPassword>, DocsightError> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(None);
+    };
+    let path = value
+        .as_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: format!("Argument '{key}' must be a string path"),
+        })?;
+    crate::read_pdf_password(Path::new(path)).map(Some)
 }
 
 fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, DocsightError> {

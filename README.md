@@ -69,13 +69,11 @@ unset PDF_PASSWORD
 docsight --agent --password-file pdf-password.txt inspect "$DOC"
 ```
 
-DocSight also accepts `--password PASSWORD` directly when command-line arguments are safely isolated.
-
-The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes accept `--password-file` or `--password`. A wrong or absent password fails with exit code 12; DocSight never guesses it.
+DocSight accepts PDF passwords only through `--password-file`. For `diff`, pass `--password-before-file` and `--password-after-file` when the two documents use different credentials. The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes use the same file transport. A wrong or absent password fails with exit code 12; DocSight never guesses it.
 
 ## Command surface
 
-`docsight --agent capabilities` is authoritative for invocation grammar, formats, output modes and result schemas. The commands are:
+`docsight --version` reports the package version, agent schema, target triple and executable SHA-256. `docsight --agent capabilities` is authoritative for invocation grammar, formats, output modes and result schemas. The commands are:
 
 | Area | Commands | Purpose |
 | --- | --- | --- |
@@ -84,7 +82,7 @@ The password is limited to 127 bytes, cleared from the CLI's memory when the ope
 | Content | `outline`, `text`, `page`, `images`, `links` | Read normalized structure, text, page geometry and resources. |
 | Tables | `tables`, `table` | List tables or export one as JSON, Markdown, CSV, TSV or HTML. |
 | Retrieval | `find`, `query`, `hit` | Locate literal or regex matches, run spatial DQL and resolve coordinates. |
-| Visual evidence | `render`, `crop`, `evidence` | Produce deterministic PNG evidence and its provenance record. |
+| Visual evidence | `render`, `contact-sheet`, `crop`, `evidence` | Produce deterministic PNG evidence, bounded page indexes and provenance records. |
 | Portable evidence | `bundle`, `verify`, `replay` | Create and verify proof bundles or deterministic render traces offline. |
 | Comparison | `diff` | Compare package, semantic and visual changes with lineage. |
 | Caching | `cache` | Report, verify, prune or clear the opt-in document IR cache. |
@@ -107,7 +105,7 @@ docsight --agent --cache-dir .docsight-cache find "$DOC" "termination"
 docsight --agent --cache-dir .docsight-cache cache stats
 ```
 
-The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` and `--password` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
+The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; password files cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
 
 ## Bounded output
 

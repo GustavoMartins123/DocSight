@@ -13,21 +13,22 @@ use docsight_agent::{
 };
 use docsight_core::{
     BlockContent, CoverageStatus, Diagnostic, DiagnosticSeverity, DocsightError, Document,
-    DocumentFormat, DocumentSource, ObjectId, PageFidelity, Rect, compute_coverage,
-    compute_evidence, document_capabilities, table_to_csv, table_to_html, table_to_markdown,
-    table_to_tsv, table_to_tsv_string, validate_new_artifact_directory, write_all, write_all_group,
-    write_directory_atomic,
+    DocumentFormat, DocumentSource, EvidenceRecord, ObjectId, PageFidelity, Rect, compute_coverage,
+    compute_evidence, document_capabilities, validate_new_artifact_directory, write_all,
+    write_all_group, write_directory_atomic,
 };
 use docsight_diff::{
     DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents_with_passwords,
 };
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{
-    HitQuery, RenderRequest, RenderTarget, render_document_with_password,
+    ContactSheetRequest, HitQuery, RenderRequest, RenderTarget, render_contact_sheet_with_password,
+    render_document_with_password,
     trace::{
-        ArtifactLimits, TraceDecisionCoverage, TraceTarget, create_proof_bundle_with_password,
-        read_proof_bundle_with_limits, read_trace_with_limits, record_trace_with_password,
-        verify_proof_bundle_with_password, verify_trace_with_password,
+        ArtifactLimits, ProofVerification, TraceDecisionCoverage, TraceTarget,
+        create_proof_bundle_with_password, read_proof_bundle_with_limits, read_trace_with_limits,
+        record_trace_with_password, reproduction_fingerprint, verify_proof_bundle_with_password,
+        verify_trace_with_password,
     },
 };
 use docsight_search::{
@@ -37,6 +38,9 @@ use docsight_search::{
     execute_spatial_query, find as find_occurrences, focus_object, focus_pages,
     overview as document_overview, peek_object, peek_pages, peek_section,
     resolve as resolve_descriptor,
+};
+use docsight_tables::{
+    table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
 use serde::Serialize;
 use sha2::Digest;
@@ -131,10 +135,18 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        value_name = "PASSWORD",
-        help = "Supply the PDF password directly"
+        value_name = "PATH",
+        help = "Read the before-document PDF password from a bounded single-line file"
     )]
-    password: Option<String>,
+    password_before_file: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Read the after-document PDF password from a bounded single-line file"
+    )]
+    password_after_file: Option<PathBuf>,
 
     #[arg(
         long,
@@ -291,6 +303,16 @@ enum Command {
         #[arg(long)]
         trace: Option<PathBuf>,
     },
+    #[command(about = SUMMARY_CONTACT_SHEET)]
+    ContactSheet {
+        path: PathBuf,
+        #[arg(long, value_name = "PAGES")]
+        pages: String,
+        #[arg(long, default_value_t = docsight_render::CONTACT_SHEET_DEFAULT_DPI)]
+        dpi: u16,
+        #[arg(long)]
+        out: PathBuf,
+    },
     #[command(about = SUMMARY_CROP)]
     Crop {
         path: PathBuf,
@@ -344,7 +366,7 @@ enum Command {
     Evidence {
         path: PathBuf,
         object: String,
-        #[arg(long, default_value_t = 144)]
+        #[arg(long, default_value_t = DEFAULT_EVIDENCE_RENDER_DPI)]
         render_dpi: u16,
         #[arg(long)]
         json: bool,
@@ -877,10 +899,14 @@ struct AgentSandboxCapability {
 #[derive(Clone, Debug, Serialize)]
 struct AgentPdfPasswordCapability {
     flag: &'static str,
+    diff_flags: &'static [&'static str],
     applies_to: &'static [&'static str],
     transport: &'static str,
     file_format: &'static str,
     maximum_password_bytes: usize,
+    supported_algorithms: &'static [&'static str],
+    limitations: &'static [&'static str],
+    encrypted_document_exit_code: u8,
     secret_in_argv: bool,
     secret_persisted: bool,
     failure_mode: &'static str,
@@ -919,6 +945,7 @@ struct AgentErrorContract {
 struct AgentCapabilitiesResult {
     profile: &'static str,
     protocol: &'static str,
+    projection_schema: &'static str,
     error_schema: &'static str,
     error_channel: &'static str,
     errors: AgentErrorContract,
@@ -1142,9 +1169,10 @@ struct ContextResult {
     candidates: Vec<ResolveCandidate>,
 }
 
+const DEFAULT_EVIDENCE_RENDER_DPI: u16 = 144;
 const MAX_PDF_PASSWORD_BYTES: usize = 127;
 
-struct PdfPassword(Vec<u8>);
+pub(crate) struct PdfPassword(Vec<u8>);
 
 impl PdfPassword {
     fn as_bytes(&self) -> &[u8] {
@@ -1241,15 +1269,44 @@ fn parse_direct_password(secret: &str) -> Result<PdfPassword, DocsightError> {
     Ok(PdfPassword(secret.as_bytes().to_vec()))
 }
 
+fn print_build_identity() -> Result<(), DocsightError> {
+    let executable_sha256 = cache::running_executable_sha256()?;
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    writeln!(
+        writer,
+        "docsight {} schema={} target={} executable_sha256={}",
+        env!("CARGO_PKG_VERSION"),
+        docsight_agent::AGENT_SCHEMA,
+        env!("DOCSIGHT_BUILD_TARGET"),
+        executable_sha256
+    )
+    .map_err(stdout_error)
+}
+
 fn main() -> ExitCode {
+    let mut version_arguments = std::env::args_os();
+    let _program = version_arguments.next();
+    let version_request = version_arguments.next().as_deref()
+        == Some(std::ffi::OsStr::new("--version"))
+        && version_arguments.next().is_none();
+    if version_request {
+        return match print_build_identity() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                if emit_error(&error, false, false).is_err() {
+                    return ExitCode::from(40);
+                }
+                ExitCode::from(error.exit_code())
+            }
+        };
+    }
     let agent_mode = std::env::args().any(|argument| argument == "--agent");
     let ndjson_mode = std::env::args().any(|argument| argument == "--ndjson");
     let machine_error_mode = agent_mode || ndjson_mode;
     let sandbox_json_errors =
         machine_error_mode || std::env::args().any(|argument| argument == "--json-errors");
-    if let Err(error) =
-        docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
-    {
+    if let Err(error) = docsight_worker::apply_sandbox_limits_if_child() {
         let exit_code = error.exit_code();
         return if emit_error(&error, sandbox_json_errors, machine_error_mode).is_ok() {
             ExitCode::from(exit_code)
@@ -1454,6 +1511,7 @@ fn cached_document_path(command: &Command) -> Option<&Path> {
         Command::Capabilities { .. }
         | Command::Completions { .. }
         | Command::Render { .. }
+        | Command::ContactSheet { .. }
         | Command::Crop { .. }
         | Command::Diff { .. }
         | Command::Fingerprint { .. }
@@ -1513,21 +1571,13 @@ fn validate_cache_arguments(cli: &Cli) -> Result<(), DocsightError> {
             ),
         });
     }
-    if cli.password_file.is_some() {
+    if cli.password_file.is_some()
+        || cli.password_before_file.is_some()
+        || cli.password_after_file.is_some()
+    {
         return Err(DocsightError::InvalidArgument {
-            message: "--cache-dir cannot be combined with --password-file because decrypted document content is never persisted"
+            message: "--cache-dir cannot be combined with password files because decrypted document content is never persisted"
                 .to_owned(),
-        });
-    }
-    if cli.password.is_some() {
-        return Err(DocsightError::InvalidArgument {
-            message: "--cache-dir cannot be combined with --password because decrypted document content is never persisted"
-                .to_owned(),
-        });
-    }
-    if cli.password.is_some() && cli.password_file.is_some() {
-        return Err(DocsightError::InvalidArgument {
-            message: "cannot combine --password and --password-file".to_owned(),
         });
     }
     Ok(())
@@ -1557,12 +1607,21 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
-    if cli.password.is_some() && cli.password_file.is_some() {
+    let is_diff = matches!(cli.command, Command::Diff { .. });
+    if is_diff && cli.password_file.is_some() {
         return Err(DocsightError::InvalidArgument {
-            message: "cannot combine --password and --password-file".to_owned(),
+            message: "diff requires --password-before-file and --password-after-file instead of --password-file"
+                .to_owned(),
         });
     }
-    if cli.password_file.is_some()
+    if !is_diff && (cli.password_before_file.is_some() || cli.password_after_file.is_some()) {
+        return Err(DocsightError::InvalidArgument {
+            message: "--password-before-file and --password-after-file apply only to diff"
+                .to_owned(),
+        });
+    }
+    if !is_diff
+        && cli.password_file.is_some()
         && matches!(
             cli.command,
             Command::Capabilities { .. }
@@ -1576,28 +1635,39 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
-    if cli.password.is_some()
-        && matches!(
-            cli.command,
-            Command::Capabilities { .. }
-                | Command::Completions { .. }
-                | Command::Fingerprint { .. }
-                | Command::Cache { .. }
-        )
-    {
-        return Err(DocsightError::InvalidArgument {
-            message: "--password applies only to operations that decrypt PDF content".to_owned(),
-        });
-    }
-    let password_storage = if let Some(secret) = &cli.password {
-        Some(parse_direct_password(secret)?)
-    } else {
-        cli.password_file
+    let primary_storage: Option<PdfPassword>;
+    let before_storage: Option<PdfPassword>;
+    let after_storage: Option<PdfPassword>;
+    if is_diff {
+        primary_storage = None;
+        before_storage = cli
+            .password_before_file
             .as_deref()
             .map(read_pdf_password)
-            .transpose()?
-    };
-    let password = password_storage
+            .transpose()?;
+        after_storage = cli
+            .password_after_file
+            .as_deref()
+            .map(read_pdf_password)
+            .transpose()?;
+    } else {
+        primary_storage = cli
+            .password_file
+            .as_deref()
+            .map(read_pdf_password)
+            .transpose()?;
+        before_storage = None;
+        after_storage = None;
+    }
+    let password = primary_storage
+        .as_ref()
+        .map(PdfPassword::as_bytes)
+        .unwrap_or_default();
+    let password_before = before_storage
+        .as_ref()
+        .map(PdfPassword::as_bytes)
+        .unwrap_or_default();
+    let password_after = after_storage
         .as_ref()
         .map(PdfPassword::as_bytes)
         .unwrap_or_default();
@@ -1713,6 +1783,25 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             json_errors,
             max_document_bytes: cli.max_document_bytes(),
         }),
+        Command::ContactSheet {
+            path,
+            pages,
+            dpi,
+            out,
+        } => contact_sheet(ContactSheetCommandArgs {
+            path,
+            password,
+            pages: parse_contact_sheet_pages(pages)
+                .map_err(|message| DocsightError::InvalidArgument { message })?,
+            dpi: *dpi,
+            out,
+            json: cli.is_agent_json(false),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+            max_document_bytes: cli.max_document_bytes(),
+        }),
         Command::Crop {
             path,
             page,
@@ -1780,8 +1869,8 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         } => diff(DiffCommandArgs {
             before,
             after,
-            password_before: password,
-            password_after: password,
+            password_before,
+            password_after,
             summary: *summary,
             json: cli.is_agent_json(*json),
             ndjson: cli.ndjson,
@@ -2050,12 +2139,14 @@ const SUMMARY_IMAGES: &str = "list figure resources and placements";
 const SUMMARY_LINKS: &str = "list link metadata without fetching targets";
 const SUMMARY_RENDER: &str =
     "write a PNG artifact with provenance metadata and optional deterministic trace";
+const SUMMARY_CONTACT_SHEET: &str =
+    "write a bounded deterministic PNG contact sheet for selected pages";
 const SUMMARY_CROP: &str = "write a page or object crop with provenance metadata";
 const SUMMARY_DIFF: &str = "compare changes with evidence-backed cross-version lineage";
 const SUMMARY_FINGERPRINT: &str = "return reproducibility inputs and result fingerprint";
 const SUMMARY_EVIDENCE: &str = "return provenance and fidelity for one object";
 const SUMMARY_BUNDLE: &str =
-    "write a self-contained verifiable proof bundle for an object or region";
+    "write a self-contained verifiable proof bundle for page, region or object evidence";
 const SUMMARY_REPLAY: &str = "verify a deterministic trace using its embedded document bytes";
 const SUMMARY_VERIFY: &str = "verify a self-contained proof bundle offline";
 const SUMMARY_COVERAGE: &str = "return per-dimension fidelity and reason codes";
@@ -2106,6 +2197,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
     let result = AgentCapabilitiesResult {
         profile: "agent-first-v1",
         protocol: docsight_agent::AGENT_SCHEMA,
+        projection_schema: "https://docsight.dev/schemas/v2/projected-result.json",
         error_schema: ERROR_ENVELOPE_SCHEMA,
         error_channel: "stderr",
         errors: AgentErrorContract {
@@ -2133,10 +2225,19 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
         },
         pdf_password: AgentPdfPasswordCapability {
             flag: "--password-file",
+            diff_flags: &["--password-before-file", "--password-after-file"],
             applies_to: &["pdf"],
             transport: "file",
             file_format: "one byte string line with an optional LF or CRLF terminator",
             maximum_password_bytes: MAX_PDF_PASSWORD_BYTES,
+            supported_algorithms: &["rc4-40", "rc4-128", "aes-128", "aes-256-partial"],
+            limitations: &[
+                "AES-256 encrypted object streams are not supported",
+                "AES-256 per-object Crypt overrides are not supported",
+                "AES-256 password normalization is not implemented",
+            ],
+            encrypted_document_exit_code: docsight_core::DocsightError::EncryptedDocument
+                .exit_code(),
             secret_in_argv: false,
             secret_persisted: false,
             failure_mode: "reject",
@@ -2289,6 +2390,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 result_root: None,
             },
             CommandCapability {
+                name: "contact-sheet",
+                summary: SUMMARY_CONTACT_SHEET,
+                invocation: "contact-sheet <path> --pages <pages> --out <png> [--dpi <dpi>]",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                ndjson_events: &["contact-sheet"],
+                bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/contact-sheet-result.json"),
+                result_root: None,
+            },
+            CommandCapability {
                 name: "crop",
                 summary: SUMMARY_CROP,
                 invocation: "crop <path> (--object <id> | --page <page> --bbox <x0,y0,x1,y1>) --out <png> [--dpi <dpi>]",
@@ -2302,7 +2414,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             CommandCapability {
                 name: "diff",
                 summary: SUMMARY_DIFF,
-                invocation: "diff <before> <after> [--visual] [--dpi <dpi>] [--threshold <0..255>] [--out-dir <directory>]",
+                invocation: "diff <before> <after> [--password-before-file <path>] [--password-after-file <path>] [--visual] [--dpi <dpi>] [--threshold <0..255>] [--out-dir <directory>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
                 ndjson_events: &[
@@ -2341,7 +2453,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             CommandCapability {
                 name: "bundle",
                 summary: SUMMARY_BUNDLE,
-                invocation: "bundle <path> (--object <id> | --page <page> --bbox <x0,y0,x1,y1>) --out <dse> [--include-crop] [--dpi <dpi>]",
+                invocation: "bundle <path> [--object <id> | --page <page> [--bbox <x0,y0,x1,y1>]] --out <dse> [--include-crop] [--dpi <dpi>]",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: true,
                 ndjson_events: &["bundle"],
@@ -3430,6 +3542,113 @@ fn commit_render_artifacts(
     }
 }
 
+#[derive(Serialize)]
+struct ContactSheetResult {
+    pages: Vec<u32>,
+    labels: Vec<String>,
+    limits: docsight_render::ContactSheetLimits,
+    dpi: u16,
+    columns: usize,
+    rows: usize,
+    width_px: u32,
+    height_px: u32,
+    thumbnail_max_width_px: u32,
+    thumbnail_max_height_px: u32,
+    media_type: &'static str,
+    output_path: String,
+    output_sha256: String,
+    output_bytes: u64,
+}
+
+struct ContactSheetCommandArgs<'a> {
+    path: &'a PathBuf,
+    password: &'a [u8],
+    pages: Vec<u32>,
+    dpi: u16,
+    out: &'a Path,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+    max_document_bytes: u64,
+}
+
+fn contact_sheet(args: ContactSheetCommandArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open_with_limit(args.path, args.max_document_bytes)?;
+    let sheet = render_contact_sheet_with_password(
+        &source,
+        &ContactSheetRequest {
+            pages: args.pages,
+            dpi: args.dpi,
+        },
+        args.password,
+    )?;
+    let output_path = args
+        .out
+        .to_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "output path must be valid UTF-8 for agent output".to_owned(),
+        })?
+        .to_owned();
+    let output_bytes =
+        u64::try_from(sheet.png().len()).map_err(|_| DocsightError::ResourceLimit {
+            resource: "contact sheet artifact bytes".to_owned(),
+            limit: u64::MAX,
+        })?;
+    let result = ContactSheetResult {
+        pages: sheet.metadata.pages.clone(),
+        labels: sheet.metadata.labels.clone(),
+        limits: sheet.metadata.limits,
+        dpi: sheet.metadata.dpi,
+        columns: sheet.metadata.columns,
+        rows: sheet.metadata.rows,
+        width_px: sheet.metadata.width_px,
+        height_px: sheet.metadata.height_px,
+        thumbnail_max_width_px: sheet.metadata.thumbnail_max_width_px,
+        thumbnail_max_height_px: sheet.metadata.thumbnail_max_height_px,
+        media_type: sheet.metadata.media_type,
+        output_path,
+        output_sha256: digest_bytes(sheet.png()),
+        output_bytes,
+    };
+    if !args.ndjson && !args.json {
+        sheet.write(args.out)?;
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        writeln!(
+            writer,
+            "Rendered contact sheet for pages {} at {} DPI to {} ({}x{} px)",
+            result
+                .pages
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            result.dpi,
+            args.out.display(),
+            result.width_px,
+            result.height_px
+        )
+        .map_err(stdout_error)?;
+        return emit_warnings(&sheet.warnings, args.quiet, args.json_errors);
+    }
+    let output = if args.ndjson {
+        build_single_ndjson(
+            &source,
+            "contact-sheet",
+            "contact-sheet",
+            &result,
+            &sheet.warnings,
+            args.limits,
+        )?
+    } else {
+        build_single_json(&source, &result, sheet.warnings.clone(), args.limits)?
+    };
+    sheet.write(args.out)?;
+    write_stdout_bytes(&output)
+}
+
 #[derive(Clone, Serialize)]
 struct TraceOutput {
     output_path: String,
@@ -3653,6 +3872,21 @@ fn replay(args: ReplayArgs<'_>) -> Result<(), DocsightError> {
     emit_warnings(&trace.manifest.warnings, args.quiet, args.json_errors)
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct VerifyResult {
+    pub(crate) bundle_name: String,
+    pub(crate) verification: ProofVerification,
+}
+
+pub(crate) fn proof_bundle_name(path: &Path) -> Result<String, DocsightError> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "bundle path must end in a valid UTF-8 file name for agent output".to_owned(),
+        })
+}
+
 struct VerifyArgs<'a> {
     bundle: &'a Path,
     password: &'a [u8],
@@ -3671,19 +3905,7 @@ fn verify(args: VerifyArgs<'_>) -> Result<(), DocsightError> {
     let bundle = read_proof_bundle_with_limits(args.bundle, limits)?;
     let source = bundle.document_source()?;
     let verification = verify_proof_bundle_with_password(&bundle, args.password, limits)?;
-    #[derive(Serialize)]
-    struct VerifyResult {
-        bundle_name: String,
-        verification: docsight_render::trace::ProofVerification,
-    }
-    let bundle_name = args
-        .bundle
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| DocsightError::InvalidArgument {
-            message: "bundle path must end in a valid UTF-8 file name for agent output".to_owned(),
-        })?
-        .to_owned();
+    let bundle_name = proof_bundle_name(args.bundle)?;
     let result = VerifyResult {
         bundle_name,
         verification,
@@ -4142,6 +4364,53 @@ pub(crate) fn parse_page_range(raw: &str) -> Result<PageRange, String> {
         .parse::<u32>()
         .map_err(|_| "page range end must be a positive integer".to_owned())?;
     PageRange::new(start, end).map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_contact_sheet_pages(raw: &str) -> Result<Vec<u32>, String> {
+    let mut pages = Vec::new();
+    for item in raw.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err("contact sheet page selection contains an empty item".to_owned());
+        }
+        let (start, end) = match item.split_once("..") {
+            Some((start, end)) => (start, end),
+            None => item
+                .split_once('-')
+                .map_or((item, item), |(start, end)| (start, end)),
+        };
+        let start = start
+            .parse::<u32>()
+            .map_err(|_| "contact sheet page range start must be a positive integer".to_owned())?;
+        let end = end
+            .parse::<u32>()
+            .map_err(|_| "contact sheet page range end must be a positive integer".to_owned())?;
+        if start == 0 || end == 0 || start > end {
+            return Err(
+                "contact sheet page ranges must use 1-based inclusive pages with start not after end"
+                    .to_owned(),
+            );
+        }
+        let count = u64::from(end) - u64::from(start) + 1;
+        let current_count = u64::try_from(pages.len())
+            .map_err(|_| "contact sheet page selection is too large".to_owned())?;
+        let next_count = current_count
+            .checked_add(count)
+            .ok_or_else(|| "contact sheet page selection is too large".to_owned())?;
+        if next_count > docsight_render::CONTACT_SHEET_MAX_PAGES as u64 {
+            return Err(format!(
+                "contact sheet accepts at most {} pages",
+                docsight_render::CONTACT_SHEET_MAX_PAGES
+            ));
+        }
+        for page in start..=end {
+            pages.push(page);
+        }
+    }
+    if pages.is_empty() {
+        return Err("contact sheet requires at least one page".to_owned());
+    }
+    Ok(pages)
 }
 
 fn continuation_scope(command: &str, parameter: &str) -> String {
@@ -5155,7 +5424,7 @@ fn build_context_package(
     let fidelity = if include.contains(&ContextInclude::Fidelity) {
         match resolved.anchor_block() {
             Some(_) => {
-                let glyph_coverage = document_glyph_coverage(document, source);
+                let glyph_coverage = docsight_render::document_glyph_coverage(document, source);
                 let evidence = compute_evidence(document, source, target_id, None, glyph_coverage)?;
                 Some(ContextFidelity {
                     available: true,
@@ -5526,47 +5795,16 @@ fn fingerprint(
     max_document_bytes: u64,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open_with_limit(path, max_document_bytes)?;
-    let file_sha256 = source.sha256().to_owned();
-    let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
-    let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
-    let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));
-    let raster_engine = format!("docsight-render {}", env!("CARGO_PKG_VERSION"));
-    let layout_font = docsight_layout::font_fingerprint();
-    let raster_font = docsight_render::raster_font_fingerprint();
-    let fonts = format!("layout:{layout_font}|raster:{raster_font}");
-    let layout_profile = "agent-fidelity-v1".to_owned();
-
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(file_sha256.as_bytes());
-    hasher.update(b"|");
-    hasher.update(engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(ooxml_engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(pdf_engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(raster_engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(fonts.as_bytes());
-    hasher.update(b"|");
-    hasher.update(layout_profile.as_bytes());
-    hasher.update(b"|");
-    let hash = hasher.finalize();
-    let mut result_fingerprint = String::with_capacity(64);
-    for byte in hash {
-        use std::fmt::Write as _;
-        let _ = write!(&mut result_fingerprint, "{byte:02x}");
-    }
-
+    let fingerprint = reproduction_fingerprint(&source);
     let record = FingerprintRecord {
-        file_sha256,
-        engine,
-        ooxml_engine,
-        pdf_engine,
-        raster_engine,
-        fonts,
-        layout_profile,
-        result_fingerprint,
+        file_sha256: source.sha256().to_owned(),
+        engine: fingerprint.engine,
+        ooxml_engine: fingerprint.ooxml_engine,
+        pdf_engine: fingerprint.pdf_engine,
+        raster_engine: fingerprint.raster_engine,
+        fonts: fingerprint.fonts,
+        layout_profile: fingerprint.layout_profile,
+        result_fingerprint: fingerprint.result_fingerprint,
     };
 
     if ndjson {
@@ -5595,6 +5833,62 @@ fn fingerprint(
     emit_warnings(&[], quiet, json_errors)
 }
 
+struct ObjectEvidence {
+    source: DocumentSource,
+    record: EvidenceRecord,
+    warnings: Vec<Diagnostic>,
+}
+
+fn object_evidence(
+    path: &Path,
+    loader: &DocumentLoader<'_>,
+    object: &str,
+    render_dpi: u16,
+) -> Result<ObjectEvidence, DocsightError> {
+    let source = loader.open_source(path)?;
+    let document = loader.load(&source)?;
+    let object_id = ObjectId::from_raw(object);
+    let mut warnings = document.warnings.clone();
+    let request = RenderRequest {
+        target: RenderTarget::Object {
+            id: object.to_owned(),
+        },
+        dpi: render_dpi,
+    };
+    let render_fingerprint =
+        match render_document_with_password(&source, &request, loader.password()) {
+            Ok(rendered) => {
+                warnings.extend(rendered.warnings.iter().cloned());
+                Some(digest_bytes(rendered.png()))
+            }
+            Err(error) => {
+                warnings.push(Diagnostic {
+                    code: "RENDER_FINGERPRINT_UNAVAILABLE".to_owned(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!("render fingerprint was not computed for {object}: {error}"),
+                    effect: "visual provenance for this object is missing".to_owned(),
+                    object: Some(object_id.clone()),
+                    page: None,
+                    occurrences: None,
+                });
+                None
+            }
+        };
+    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source);
+    let record = compute_evidence(
+        &document,
+        &source,
+        &object_id,
+        render_fingerprint,
+        glyph_coverage,
+    )?;
+    Ok(ObjectEvidence {
+        source,
+        record,
+        warnings: docsight_agent::consolidate_warnings(warnings),
+    })
+}
+
 struct EvidenceArgs<'a> {
     path: &'a Path,
     loader: &'a DocumentLoader<'a>,
@@ -5608,48 +5902,11 @@ struct EvidenceArgs<'a> {
 }
 
 fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
-    let source = args.loader.open_source(args.path)?;
-    let doc = args.loader.load(&source)?;
-    let obj_id = ObjectId::from_raw(args.object);
-    let mut extra_warnings = Vec::new();
-
-    let render_fingerprint = {
-        let req = RenderRequest {
-            target: RenderTarget::Object {
-                id: args.object.to_owned(),
-            },
-            dpi: args.render_dpi,
-        };
-        match render_document_with_password(&source, &req, args.loader.password()) {
-            Ok(rendered) => {
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(rendered.png());
-                let hash = hasher.finalize();
-                let s = hash.iter().map(|byte| format!("{byte:02x}")).collect();
-                Some(s)
-            }
-            Err(render_error) => {
-                extra_warnings.push(Diagnostic {
-                    code: "RENDER_FINGERPRINT_UNAVAILABLE".to_owned(),
-                    severity: DiagnosticSeverity::Warning,
-                    message: format!(
-                        "render fingerprint was not computed for {}: {render_error}",
-                        args.object
-                    ),
-                    effect: "visual provenance for this object is missing".to_owned(),
-                    object: Some(obj_id.clone()),
-                    page: None,
-                    occurrences: None,
-                });
-                None
-            }
-        }
-    };
-
-    let glyph_coverage = document_glyph_coverage(&doc, &source);
-    let record = compute_evidence(&doc, &source, &obj_id, render_fingerprint, glyph_coverage)?;
-    let mut warnings = doc.warnings.clone();
-    warnings.extend(extra_warnings);
+    let ObjectEvidence {
+        source,
+        record,
+        warnings,
+    } = object_evidence(args.path, args.loader, args.object, args.render_dpi)?;
 
     if args.ndjson {
         return write_single_ndjson(
@@ -5718,17 +5975,6 @@ fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
     emit_warnings(&warnings, args.quiet, args.json_errors)
 }
 
-pub(crate) fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
-    let mut text = String::new();
-    for block in &doc.blocks {
-        text.push_str(&block.text());
-    }
-    match source.format() {
-        DocumentFormat::Docx => docsight_render::glyph_coverage(&text),
-        DocumentFormat::Pdf => docsight_pdf::pdf_glyph_coverage(&text),
-    }
-}
-
 struct CoverageArgs<'a> {
     path: &'a Path,
     loader: &'a DocumentLoader<'a>,
@@ -5744,7 +5990,7 @@ struct CoverageArgs<'a> {
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let source = args.loader.open_source(args.path)?;
     let doc = args.loader.load(&source)?;
-    let glyph_coverage = document_glyph_coverage(&doc, &source);
+    let glyph_coverage = docsight_render::document_glyph_coverage(&doc, &source);
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
     let scope = continuation_scope(
         "coverage",
@@ -5865,7 +6111,7 @@ struct HitArgs<'a> {
     json_errors: bool,
 }
 
-fn parse_point(input: &str) -> Result<(f32, f32), DocsightError> {
+pub(crate) fn parse_point(input: &str) -> Result<(f32, f32), DocsightError> {
     let parts: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
     if parts.len() != 2 {
         return Err(DocsightError::InvalidArgument {

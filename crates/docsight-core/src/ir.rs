@@ -343,7 +343,7 @@ impl Block {
             BlockContent::Paragraph(block) => block.text.clone(),
             BlockContent::Heading(block) => block.text.clone(),
             BlockContent::ListItem(block) => block.text.clone(),
-            BlockContent::Table(block) => table_to_tsv_string(block),
+            BlockContent::Table(block) => table_text(block),
             BlockContent::Figure(block) => block
                 .caption
                 .clone()
@@ -727,7 +727,7 @@ impl Document {
     }
 }
 
-pub fn table_to_tsv_string(table: &TableBlock) -> String {
+fn table_text(table: &TableBlock) -> String {
     let rows = table.rows as usize;
     let mut grid = vec![Vec::new(); rows];
     for cell in &table.cells {
@@ -739,176 +739,4 @@ pub fn table_to_tsv_string(table: &TableBlock) -> String {
         .map(|row| row.join("\t"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-pub fn table_to_markdown(table: &TableBlock) -> Result<String, DocsightError> {
-    let columns = usize::try_from(table.columns).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table columns".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    let rows = usize::try_from(table.rows).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table rows".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    if columns == 0 || rows == 0 {
-        return Ok(String::new());
-    }
-    let mut grid = vec![vec![String::new(); columns]; rows];
-    for cell in &table.cells {
-        let row = cell.row as usize;
-        let col = cell.column as usize;
-        let row_span = (cell.row_span as usize).max(1);
-        let col_span = (cell.column_span as usize).max(1);
-        for r in 0..row_span {
-            for c in 0..col_span {
-                if let Some(slot) = grid
-                    .get_mut(row.saturating_add(r))
-                    .and_then(|row_cells| row_cells.get_mut(col.saturating_add(c)))
-                {
-                    if r == 0 && c == 0 {
-                        *slot = cell.text.replace('\n', " ").replace('|', "\\|");
-                    } else if slot.is_empty() {
-                        *slot = format!("(merged r{row}c{col})");
-                    }
-                }
-            }
-        }
-    }
-    let mut widths = vec![3_usize; columns];
-    for row in &grid {
-        for (index, cell) in row.iter().enumerate() {
-            if let Some(width) = widths.get_mut(index) {
-                *width = (*width).max(cell.chars().count());
-            }
-        }
-    }
-    let mut output = String::new();
-    for (row_index, row) in grid.iter().enumerate() {
-        output.push('|');
-        for (col_index, cell) in row.iter().enumerate() {
-            let width = widths.get(col_index).copied().unwrap_or(3);
-            output.push(' ');
-            output.push_str(cell);
-            let padding = width.saturating_sub(cell.chars().count());
-            output.push_str(&" ".repeat(padding));
-            output.push_str(" |");
-        }
-        output.push('\n');
-        if row_index == 0 {
-            output.push('|');
-            for width in &widths {
-                output.push(' ');
-                output.push_str(&"-".repeat(*width));
-                output.push_str(" |");
-            }
-            output.push('\n');
-        }
-    }
-    Ok(output)
-}
-
-pub fn table_to_csv(table: &TableBlock) -> Result<String, DocsightError> {
-    let columns = usize::try_from(table.columns).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table columns".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    let rows = usize::try_from(table.rows).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table rows".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    if columns == 0 || rows == 0 {
-        return Ok(String::new());
-    }
-    let mut grid = vec![vec![String::new(); columns]; rows];
-    for cell in &table.cells {
-        let row = cell.row as usize;
-        let col = cell.column as usize;
-        if let Some(slot) = grid
-            .get_mut(row)
-            .and_then(|row_cells| row_cells.get_mut(col))
-        {
-            *slot = cell.text.clone();
-        }
-    }
-    let mut output = String::new();
-    for row in grid {
-        let escaped_row: Vec<String> = row
-            .into_iter()
-            .map(|cell| {
-                if cell.contains(',') || cell.contains('"') || cell.contains('\n') {
-                    format!("\"{}\"", cell.replace('"', "\"\""))
-                } else {
-                    cell
-                }
-            })
-            .collect();
-        output.push_str(&escaped_row.join(","));
-        output.push('\n');
-    }
-    Ok(output)
-}
-
-pub fn table_to_tsv(table: &TableBlock) -> Result<String, DocsightError> {
-    let columns = usize::try_from(table.columns).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table columns".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    let rows = usize::try_from(table.rows).map_err(|_| DocsightError::ResourceLimit {
-        resource: "table rows".to_owned(),
-        limit: usize::MAX as u64,
-    })?;
-    if columns == 0 || rows == 0 {
-        return Ok(String::new());
-    }
-    let mut grid = vec![vec![String::new(); columns]; rows];
-    for cell in &table.cells {
-        let row = cell.row as usize;
-        let col = cell.column as usize;
-        if let Some(slot) = grid
-            .get_mut(row)
-            .and_then(|row_cells| row_cells.get_mut(col))
-        {
-            *slot = cell.text.replace(['\t', '\n'], " ");
-        }
-    }
-    let mut output = String::new();
-    for row in grid {
-        output.push_str(&row.join("\t"));
-        output.push('\n');
-    }
-    Ok(output)
-}
-
-pub fn table_to_html(table: &TableBlock) -> Result<String, DocsightError> {
-    let mut output = String::from("<table>\n");
-    let mut grid_cells: std::collections::BTreeMap<(u32, u32), &TableCell> =
-        std::collections::BTreeMap::new();
-    for cell in &table.cells {
-        grid_cells.insert((cell.row, cell.column), cell);
-    }
-    for r in 0..table.rows {
-        output.push_str("  <tr>\n");
-        for c in 0..table.columns {
-            if let Some(cell) = grid_cells.get(&(r, c)) {
-                let tag = if r < table.header_rows { "th" } else { "td" };
-                let mut attrs = String::new();
-                if cell.row_span > 1 {
-                    attrs.push_str(&format!(" rowspan=\"{}\"", cell.row_span));
-                }
-                if cell.column_span > 1 {
-                    attrs.push_str(&format!(" colspan=\"{}\"", cell.column_span));
-                }
-                let escaped = cell
-                    .text
-                    .replace('&', "&amp;")
-                    .replace('<', "&lt;")
-                    .replace('>', "&gt;")
-                    .replace('"', "&quot;");
-                output.push_str(&format!("    <{tag}{attrs}>{escaped}</{tag}>\n"));
-            }
-        }
-        output.push_str("  </tr>\n");
-    }
-    output.push_str("</table>\n");
-    Ok(output)
 }

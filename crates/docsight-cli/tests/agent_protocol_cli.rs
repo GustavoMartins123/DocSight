@@ -152,6 +152,24 @@ fn ndjson_is_honored_by_single_result_commands() -> Result<(), Box<dyn std::erro
         docsight()
             .args([
                 "--ndjson",
+                "contact-sheet",
+                headings_str,
+                "--pages",
+                "1",
+                "--out",
+                temp_dir
+                    .path()
+                    .join("contact-sheet.png")
+                    .to_str()
+                    .ok_or("contact sheet path")?,
+            ])
+            .output()?,
+        "contact-sheet",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args([
+                "--ndjson",
                 "crop",
                 headings_str,
                 "--object",
@@ -292,6 +310,18 @@ fn field_projection_select_filters_properties() -> Result<(), Box<dyn std::error
         assert!(h.get("id").is_none());
         assert!(h.get("source").is_none());
     }
+    assert_eq!(
+        val["limits"]["selected_fields"],
+        serde_json::json!(["text", "level"])
+    );
+    let projection_schema: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v2/projected-result.json"),
+    )?)?;
+    assert_eq!(
+        projection_schema["$id"],
+        "https://docsight.dev/schemas/v2/projected-result.json"
+    );
+    assert_eq!(projection_schema["minProperties"], 1);
     Ok(())
 }
 
@@ -449,6 +479,10 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
     assert_eq!(value["result"]["sandbox"]["failure_mode"], "fail_closed");
     assert_eq!(value["result"]["pdf_password"]["flag"], "--password-file");
     assert_eq!(
+        value["result"]["pdf_password"]["diff_flags"],
+        serde_json::json!(["--password-before-file", "--password-after-file"])
+    );
+    assert_eq!(
         value["result"]["pdf_password"]["applies_to"],
         serde_json::json!(["pdf"])
     );
@@ -456,8 +490,25 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
         value["result"]["pdf_password"]["maximum_password_bytes"],
         127
     );
+    assert_eq!(
+        value["result"]["pdf_password"]["supported_algorithms"],
+        serde_json::json!(["rc4-40", "rc4-128", "aes-128", "aes-256-partial"])
+    );
+    assert!(
+        !value["result"]["pdf_password"]["limitations"]
+            .as_array()
+            .is_some_and(|limitations| limitations.is_empty())
+    );
+    assert_eq!(
+        value["result"]["pdf_password"]["encrypted_document_exit_code"],
+        12
+    );
     assert_eq!(value["result"]["pdf_password"]["secret_in_argv"], false);
     assert_eq!(value["result"]["pdf_password"]["secret_persisted"], false);
+    assert_eq!(
+        value["result"]["projection_schema"],
+        "https://docsight.dev/schemas/v2/projected-result.json"
+    );
     let limits = value["result"]["limits"].as_array().ok_or("limits")?;
     assert!(limits.iter().any(|limit| limit == "--max-document-bytes"));
     let commands = value["result"]["commands"]
@@ -546,6 +597,26 @@ fn capabilities_command_is_machine_discoverable() -> Result<(), Box<dyn std::err
         let schema_file: serde_json::Value = serde_json::from_slice(&std::fs::read(schema_path)?)?;
         assert!(schema_file["properties"][root].is_object());
     }
+    Ok(())
+}
+
+#[test]
+fn version_reports_the_executable_build_identity() -> Result<(), Box<dyn std::error::Error>> {
+    let output = docsight().arg("--version").output()?;
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let version = String::from_utf8(output.stdout)?;
+    let prefix = format!(
+        "docsight {} schema=docsight.agent/v2 target=",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(version.starts_with(&prefix));
+    let digest = version
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("executable_sha256="))
+        .ok_or("missing executable digest")?;
+    assert_eq!(digest.len(), 64);
+    assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     Ok(())
 }
 

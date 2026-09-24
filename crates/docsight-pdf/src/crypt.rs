@@ -1,6 +1,7 @@
 use crate::syntax::{ObjectRef, Value, malformed};
 use aes::cipher::{
-    Array, BlockCipherEncrypt, BlockModeDecrypt, KeyInit, KeyIvInit, block_padding::NoPadding,
+    Array, BlockCipherDecrypt, BlockCipherEncrypt, BlockModeDecrypt, KeyInit, KeyIvInit,
+    block_padding::NoPadding,
 };
 use docsight_core::DocsightError;
 use md5::Md5;
@@ -64,7 +65,15 @@ impl Decryptor {
             .map_err(|_| malformed("encryption revision is outside the supported range"))?;
 
         if version == 5 || revision >= 5 {
-            let key = aes256_key(dictionary, password, &owner, &user, revision)?;
+            let key = aes256_key(
+                dictionary,
+                password,
+                &owner,
+                &user,
+                permissions,
+                encrypt_metadata,
+                revision,
+            )?;
             return Ok(Self {
                 key,
                 stream_cipher: Cipher::Aes,
@@ -288,6 +297,8 @@ fn aes256_key(
     password: &[u8],
     owner: &[u8],
     user: &[u8],
+    permissions: i64,
+    encrypt_metadata: bool,
     revision: u8,
 ) -> Result<Vec<u8>, DocsightError> {
     if user.len() < 48 {
@@ -295,20 +306,63 @@ fn aes256_key(
     }
     let validation_salt = &user[32..40];
     let key_salt = &user[40..48];
-    if hardened_hash(password, validation_salt, &[], revision)? != user[..32] {
+    let key = if hardened_hash(password, validation_salt, &[], revision)? != user[..32] {
         if owner.len() >= 48
             && hardened_hash(password, &owner[32..40], &user[..48], revision)? == owner[..32]
         {
-            return owner_file_key(dictionary, password, owner, user, revision);
+            owner_file_key(dictionary, password, owner, user, revision)?
+        } else {
+            return Err(DocsightError::EncryptedDocument);
         }
-        return Err(DocsightError::EncryptedDocument);
+    } else {
+        let intermediate = hardened_hash(password, key_salt, &[], revision)?;
+        let encrypted = byte_string(dictionary, "UE")?;
+        if encrypted.len() != 32 {
+            return Err(malformed("AES-256 encryption requires a 32 byte UE value"));
+        }
+        decrypt_aes_cbc_no_iv(&intermediate, &encrypted)?
+    };
+    verify_perms(dictionary, &key, permissions, encrypt_metadata)?;
+    Ok(key)
+}
+
+fn verify_perms(
+    dictionary: &BTreeMap<String, Value>,
+    key: &[u8],
+    permissions: i64,
+    encrypt_metadata: bool,
+) -> Result<(), DocsightError> {
+    let encrypted = byte_string(dictionary, "Perms")?;
+    if encrypted.len() != 16 {
+        return Err(malformed(
+            "AES-256 encryption requires a 16 byte Perms value",
+        ));
     }
-    let intermediate = hardened_hash(password, key_salt, &[], revision)?;
-    let encrypted = byte_string(dictionary, "UE")?;
-    if encrypted.len() != 32 {
-        return Err(malformed("AES-256 encryption requires a 32 byte UE value"));
+    let block: [u8; 16] = encrypted
+        .try_into()
+        .map_err(|_| malformed("AES-256 Perms value has an invalid length"))?;
+    let mut block = Array::from(block);
+    let cipher = aes::Aes256::new_from_slice(key)
+        .map_err(|_| malformed("AES-256 key length is not supported"))?;
+    cipher.decrypt_block(&mut block);
+    let permission_bits = if let Ok(value) = i32::try_from(permissions) {
+        value as u32
+    } else if let Ok(value) = u32::try_from(permissions) {
+        value
+    } else {
+        return Err(malformed(
+            "AES-256 permissions value is outside the supported range",
+        ));
+    };
+    let mut expected = [0xff_u8; 16];
+    expected[..4].copy_from_slice(&permission_bits.to_le_bytes());
+    expected[4..8].copy_from_slice(&[0xff; 4]);
+    expected[8] = if encrypt_metadata { b'T' } else { b'F' };
+    expected[9..12].copy_from_slice(b"adb");
+    if block[..12] != expected[..12] {
+        return Err(malformed("AES-256 Perms validation failed"));
     }
-    decrypt_aes_cbc_no_iv(&intermediate, &encrypted)
+    Ok(())
 }
 
 fn owner_file_key(
@@ -362,7 +416,7 @@ fn hardened_hash(
             _ => Sha512::digest(&encrypted).to_vec(),
         };
         let last = usize::from(*encrypted.last().unwrap_or(&0));
-        if round >= 63 && last <= round - 63 {
+        if round >= 63 && last <= round - 32 {
             break;
         }
     }
@@ -478,5 +532,24 @@ fn byte_string(dictionary: &BTreeMap<String, Value>, key: &str) -> Result<Vec<u8
         }
         None => Ok(Vec::new()),
         Some(_) => Err(malformed("encryption dictionary entry must be a string")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hardened_hash;
+
+    #[test]
+    fn r6_hardened_hash_matches_the_standard_vector() -> Result<(), Box<dyn std::error::Error>> {
+        let digest = hardened_hash(b"test-only-password", &[0, 1, 2, 3, 4, 5, 6, 7], &[], 6)?;
+        let encoded = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            encoded,
+            "68e0a08a44140219b584ea2cd51ac4b522b08feca3613e5101e9167ce8266840"
+        );
+        Ok(())
     }
 }

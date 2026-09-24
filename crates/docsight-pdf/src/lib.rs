@@ -7,9 +7,10 @@ mod reconstruction;
 mod syntax;
 
 use content::{
-    ClipRegion, ContentResources, DisplayCommand, ExtGraphicsState, FontInfo, FormXObject, LineCap,
-    LineJoin, MAX_FORM_XOBJECT_DEPTH, Paint, PathSegment, Point, TextRun, VisualIssue,
-    XObjectEntry, ext_graphics_states_from_resources, fonts_from_resources, parse_content,
+    ClipRegion, ContentResources, DisplayCommand, ExtGraphicsState, FontCache, FontInfo,
+    FormXObject, LineCap, LineJoin, MAX_FORM_XOBJECT_DEPTH, Paint, PathSegment, Point, TextRun,
+    VisualIssue, XObjectEntry, ext_graphics_states_from_resources, fonts_from_resources,
+    parse_content,
 };
 use crypt::Decryptor;
 use docsight_core::{
@@ -216,6 +217,9 @@ pub struct PdfDocument<'a> {
     source: &'a DocumentSource,
     store: ObjectStore<'a>,
     pages: Vec<PageRecord>,
+    parsed_page: RefCell<Option<(u32, Rc<ParsedPage>)>>,
+    font_cache: FontCache,
+    image_cache: RefCell<BTreeMap<ObjectRef, XObjectEntry>>,
     header_offset: usize,
 }
 
@@ -291,6 +295,9 @@ impl<'a> PdfDocument<'a> {
             source,
             store,
             pages,
+            parsed_page: RefCell::new(None),
+            font_cache: FontCache::new(),
+            image_cache: RefCell::new(BTreeMap::new()),
             header_offset,
         })
     }
@@ -322,22 +329,43 @@ impl<'a> PdfDocument<'a> {
     }
 
     pub fn page(&self, number: u32) -> Result<PdfPage, DocsightError> {
-        let trace = self.trace_page(number)?;
+        let parsed = self.parse_page(number)?;
+        let projection = self.page_projection(number, &parsed)?;
         Ok(PdfPage {
-            number: trace.number,
-            width_pt: trace.width_pt,
-            height_pt: trace.height_pt,
-            spans: trace.spans,
-            warnings: trace.warnings,
+            number: projection.number,
+            width_pt: projection.width_pt,
+            height_pt: projection.height_pt,
+            spans: projection.spans,
+            warnings: projection.warnings,
         })
     }
 
     pub fn trace_page(&self, number: u32) -> Result<PdfTracePage, DocsightError> {
         let parsed = self.parse_page(number)?;
+        let projection = self.page_projection(number, &parsed)?;
+        Ok(PdfTracePage {
+            number: projection.number,
+            width_pt: projection.width_pt,
+            height_pt: projection.height_pt,
+            spans: projection.spans,
+            resources: parsed.trace_resources.clone(),
+            operations: parsed
+                .commands
+                .iter()
+                .map(trace_display_operation)
+                .collect(),
+            warnings: projection.warnings,
+        })
+    }
+
+    fn page_projection(
+        &self,
+        number: u32,
+        parsed: &ParsedPage,
+    ) -> Result<PageProjection, DocsightError> {
         let spans = parsed
             .text_runs
             .iter()
-            .cloned()
             .enumerate()
             .map(|(index, run)| self.make_span(number, index, run, parsed.approximated_font))
             .collect::<Result<Vec<_>, DocsightError>>()?;
@@ -357,21 +385,15 @@ impl<'a> PdfDocument<'a> {
             .collect::<Vec<_>>();
         warnings.extend(graphics_state_visual_warnings(
             number,
-            &parsed,
+            parsed,
             &warning_objects,
         ));
         let page = self.page_record(number)?;
-        Ok(PdfTracePage {
+        Ok(PageProjection {
             number,
             width_pt: page.media_box.width(),
             height_pt: page.media_box.height(),
             spans,
-            resources: parsed.trace_resources,
-            operations: parsed
-                .commands
-                .iter()
-                .map(trace_display_operation)
-                .collect(),
             warnings,
         })
     }
@@ -496,6 +518,25 @@ impl<'a> PdfDocument<'a> {
         )
     }
 
+    fn image_xobject_entry(
+        &self,
+        reference: Option<ObjectRef>,
+        stream: &StreamValue,
+    ) -> XObjectEntry {
+        if let Some(reference) = reference
+            && let Some(cached) = self.image_cache.borrow().get(&reference).cloned()
+        {
+            return cached;
+        }
+        let entry = self.decode_image_xobject(stream);
+        if let Some(reference) = reference {
+            self.image_cache
+                .borrow_mut()
+                .insert(reference, entry.clone());
+        }
+        entry
+    }
+
     fn xobject_entries(
         &self,
         resources: &BTreeMap<String, Value>,
@@ -528,7 +569,7 @@ impl<'a> PdfDocument<'a> {
                 _ => "",
             };
             if subtype != "Form" {
-                let entry = self.decode_image_xobject(&stream);
+                let entry = self.image_xobject_entry(reference, &stream);
                 entries.insert(name, entry);
                 continue;
             }
@@ -566,6 +607,7 @@ impl<'a> PdfDocument<'a> {
                     Value::Stream(stream) => decode_stream(&stream),
                     _ => Err(malformed("ToUnicode must resolve to a stream")),
                 },
+                &self.font_cache,
             )?;
             let graphics_states = ext_graphics_states_from_resources(
                 &nested_resources,
@@ -574,6 +616,7 @@ impl<'a> PdfDocument<'a> {
                     Value::Stream(stream) => decode_stream(&stream),
                     _ => Err(malformed("font program must resolve to a stream")),
                 },
+                &self.font_cache,
             )?;
             let xobjects = self.xobject_entries(&nested_resources, depth + 1, visited)?;
             if let Some(reference) = reference {
@@ -978,8 +1021,18 @@ impl<'a> PdfDocument<'a> {
         })
     }
 
-    fn parse_page(&self, number: u32) -> Result<ParsedPage, DocsightError> {
+    fn parse_page(&self, number: u32) -> Result<Rc<ParsedPage>, DocsightError> {
         let page = self.page_record(number)?;
+        let cached = self
+            .parsed_page
+            .borrow()
+            .as_ref()
+            .and_then(|(cached_number, cached)| {
+                (*cached_number == number).then(|| Rc::clone(cached))
+            });
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
         let resources = match page.resources.as_ref() {
             Some(value) => self.store.resolve_dict(value)?,
             None if page.contents.is_empty() => BTreeMap::new(),
@@ -999,6 +1052,7 @@ impl<'a> PdfDocument<'a> {
                     _ => Err(malformed("ToUnicode must resolve to a stream")),
                 }
             },
+            &self.font_cache,
         )?;
         let graphics_states = ext_graphics_states_from_resources(
             &resources,
@@ -1010,16 +1064,17 @@ impl<'a> PdfDocument<'a> {
                     _ => Err(malformed("font program must resolve to a stream")),
                 }
             },
+            &self.font_cache,
         )?;
         let mut visited = BTreeSet::new();
         let xobject_entries = self.xobject_entries(&resources, 0, &mut visited)?;
         let xobjects: BTreeSet<String> = xobject_entries.keys().cloned().collect();
-        let content_resources = ContentResources {
-            fonts: fonts.clone(),
-            xobjects: xobject_entries,
-            ext_graphics_states: graphics_states.states.clone(),
-        };
         let trace_resources = trace_resources(&fonts, &xobjects, &graphics_states.states);
+        let content_resources = ContentResources {
+            fonts,
+            xobjects: xobject_entries,
+            ext_graphics_states: graphics_states.states,
+        };
         let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(
             &content.bytes,
@@ -1041,7 +1096,7 @@ impl<'a> PdfDocument<'a> {
             }
             error.with_error_location(location)
         })?;
-        Ok(ParsedPage {
+        let parsed = Rc::new(ParsedPage {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
@@ -1049,7 +1104,9 @@ impl<'a> PdfDocument<'a> {
             page_visual_issues: parsed.page_visual_issues,
             unmapped_text_codes: parsed.unmapped_text_codes,
             trace_resources,
-        })
+        });
+        *self.parsed_page.borrow_mut() = Some((number, Rc::clone(&parsed)));
+        Ok(parsed)
     }
 
     fn read_content_streams(&self, contents: &[Value]) -> Result<ContentStreams, DocsightError> {
@@ -1111,7 +1168,7 @@ impl<'a> PdfDocument<'a> {
         &self,
         page: u32,
         index: usize,
-        run: TextRun,
+        run: &TextRun,
         approximated: bool,
     ) -> Result<PdfTextSpan, DocsightError> {
         let ordinal = u32::try_from(index + 1).map_err(|_| DocsightError::ResourceLimit {
@@ -1121,11 +1178,11 @@ impl<'a> PdfDocument<'a> {
         let source_path = format!("/pdf/page[{page}]/content/span[{ordinal}]");
         Ok(PdfTextSpan {
             id: self.source.object_id("span", &source_path),
-            text: run.text,
+            text: run.text.clone(),
             bbox: run.bbox,
             reading_order: ordinal,
             font_size_pt: run.font_size,
-            font_name: run.font_name,
+            font_name: run.font_name.clone(),
             baseline_y_pt: run.baseline_y,
             argb: run.argb,
             bold: run.bold,
@@ -1135,6 +1192,14 @@ impl<'a> PdfDocument<'a> {
             source: SourceSpan::with_range(source_path, run.source_offset, run.source_length),
         })
     }
+}
+
+struct PageProjection {
+    number: u32,
+    width_pt: f32,
+    height_pt: f32,
+    spans: Vec<PdfTextSpan>,
+    warnings: Vec<Diagnostic>,
 }
 
 struct ParsedPage {
@@ -1217,7 +1282,7 @@ fn decrypt_value(
 }
 
 fn trace_resources(
-    fonts: &BTreeMap<String, FontInfo>,
+    fonts: &BTreeMap<String, Rc<FontInfo>>,
     xobjects: &BTreeSet<String>,
     graphics_states: &BTreeMap<String, ExtGraphicsState>,
 ) -> Vec<PdfTraceResource> {

@@ -50,11 +50,7 @@ pub struct SandboxLimitsReport {
     pub filesystem_isolated: bool,
 }
 
-/// Applies the resource limits of a sandboxed worker. The parent passes the policy it runs the
-/// worker under; `fallback` applies only to a worker started without one.
-pub fn apply_sandbox_limits_if_child(
-    fallback: &SandboxPolicy,
-) -> Result<Option<SandboxLimitsReport>, DocsightError> {
+pub fn apply_sandbox_limits_if_child() -> Result<Option<SandboxLimitsReport>, DocsightError> {
     if std::env::var_os(SANDBOX_CHILD_ENV).is_none() {
         return Ok(None);
     }
@@ -67,7 +63,11 @@ pub fn apply_sandbox_limits_if_child(
                 platform::sandbox_failure(format!("{SANDBOX_POLICY_ENV} is invalid: {error}"))
             })?
         }
-        None => fallback.clone(),
+        None => {
+            return Err(platform::sandbox_failure(format!(
+                "{SANDBOX_POLICY_ENV} is missing for a sandboxed worker"
+            )));
+        }
     };
     platform::apply_resource_limits(&policy).map(Some)
 }
