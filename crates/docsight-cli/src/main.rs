@@ -1301,7 +1301,9 @@ fn main() -> ExitCode {
             }
         };
     }
-    let agent_mode = std::env::args().any(|argument| argument == "--agent");
+    let agent_env = std::env::var("DOCSIGHT_AGENT")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let agent_mode = agent_env || std::env::args().any(|argument| argument == "--agent");
     let ndjson_mode = std::env::args().any(|argument| argument == "--ndjson");
     let machine_error_mode = agent_mode || ndjson_mode;
     let sandbox_json_errors =
@@ -1314,7 +1316,7 @@ fn main() -> ExitCode {
             ExitCode::from(40)
         };
     }
-    let cli = match Cli::try_parse() {
+    let mut cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) if machine_error_mode => {
             let docsight_error = DocsightError::InvalidArgument {
@@ -1328,6 +1330,9 @@ fn main() -> ExitCode {
         }
         Err(error) => error.exit(),
     };
+    if agent_env && !cli.agent {
+        cli.agent = true;
+    }
     if let Err(error) = validate_command_artifacts(&cli.command) {
         let exit_code = error.exit_code();
         return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope()).is_ok() {
