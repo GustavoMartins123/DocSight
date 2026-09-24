@@ -120,6 +120,28 @@ fn inspects_page_geometry_and_text_spans() -> Result<(), DocsightError> {
 }
 
 #[test]
+fn page_projection_matches_trace_and_reuses_page_parsing() -> Result<(), DocsightError> {
+    let source = DocumentSource::from_bytes(sample_pdf())?;
+    let document = PdfDocument::open(&source)?;
+    let page = document.page(1)?;
+    let trace = document.trace_page(1)?;
+    assert_eq!(page.number, trace.number);
+    assert_eq!(page.width_pt, trace.width_pt);
+    assert_eq!(page.height_pt, trace.height_pt);
+    assert_eq!(page.spans, trace.spans);
+    assert_eq!(page.warnings, trace.warnings);
+    assert_eq!(document.page(1)?, page);
+    assert_eq!(document.trace_page(1)?, trace);
+    let raster = document.rasterize(1, 144, None)?;
+    assert_eq!(raster.page, page.number);
+    assert_eq!(
+        raster.bbox,
+        Rect::new(0.0, 0.0, page.width_pt, page.height_pt)?
+    );
+    Ok(())
+}
+
+#[test]
 fn creates_stable_span_identifiers() -> Result<(), DocsightError> {
     let source = DocumentSource::from_bytes(sample_pdf())?;
     let first = PdfDocument::open(&source)?.page(1)?;

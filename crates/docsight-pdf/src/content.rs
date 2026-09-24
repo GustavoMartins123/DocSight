@@ -1,8 +1,9 @@
 use crate::font::{FontProgram, GlyphOutline};
-use crate::syntax::{Value, malformed};
+use crate::syntax::{ObjectRef, Value, malformed};
 use docsight_core::{DocsightError, ErrorLocation, Rect};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::rc::Rc;
 
 pub const MAX_OPERATIONS: usize = 1_000_000;
 const MAX_CID_TO_GID_ENTRIES: usize = 65_536;
@@ -64,7 +65,7 @@ pub(crate) struct ExtGraphicsState {
     pub line_join: Option<LineJoin>,
     pub miter_limit: Option<f32>,
     pub dash: Option<(Vec<f32>, f32)>,
-    pub font: Option<(FontInfo, f32)>,
+    pub font: Option<(Rc<FontInfo>, f32)>,
     pub ignored_keys: BTreeSet<String>,
     pub blend_modes: Option<Vec<String>>,
     pub soft_mask: Option<bool>,
@@ -158,9 +159,9 @@ pub(crate) struct FontInfo {
     pub base_font: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
-    pub outline: Option<Arc<FontProgram>>,
+    pub outline: Option<Rc<FontProgram>>,
     cid_identity: bool,
-    cid_to_gid: Option<Arc<Vec<u16>>>,
+    cid_to_gid: Option<Rc<Vec<u16>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -169,12 +170,116 @@ struct CidWidths {
     widths: BTreeMap<u16, f32>,
 }
 
+const MAX_CACHED_FONTS: usize = 256;
+const MAX_CACHED_FONT_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FontCacheKey {
+    reference: ObjectRef,
+    resource_name: String,
+}
+
+pub(crate) struct FontCache {
+    fonts: RefCell<BTreeMap<FontCacheKey, Rc<FontInfo>>>,
+    bytes: Cell<usize>,
+}
+
+impl FontCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            fonts: RefCell::new(BTreeMap::new()),
+            bytes: Cell::new(0),
+        }
+    }
+
+    fn get(&self, reference: ObjectRef, resource_name: &str) -> Option<Rc<FontInfo>> {
+        self.fonts
+            .borrow()
+            .get(&FontCacheKey {
+                reference,
+                resource_name: resource_name.to_owned(),
+            })
+            .cloned()
+    }
+
+    fn insert(&self, reference: ObjectRef, resource_name: String, font: Rc<FontInfo>) {
+        let size = font_cache_size(&font);
+        let Some(total) = self.bytes.get().checked_add(size) else {
+            return;
+        };
+        let mut fonts = self.fonts.borrow_mut();
+        if fonts.len() < MAX_CACHED_FONTS
+            && total <= MAX_CACHED_FONT_BYTES
+            && !fonts.contains_key(&FontCacheKey {
+                reference,
+                resource_name: resource_name.clone(),
+            })
+        {
+            fonts.insert(
+                FontCacheKey {
+                    reference,
+                    resource_name,
+                },
+                font,
+            );
+            self.bytes.set(total);
+        }
+    }
+}
+
+fn font_cache_size(font: &FontInfo) -> usize {
+    let decoder = match &font.decoder {
+        FontDecoder::Ascii | FontDecoder::WinAnsi => 0,
+        FontDecoder::Simple(_encoding) => std::mem::size_of::<SimpleEncoding>()
+            .saturating_add(std::mem::size_of::<Rc<SimpleEncoding>>()),
+        FontDecoder::GlyphIdentity(program) => program.cache_size(),
+        FontDecoder::ToUnicode(map) => map
+            .mappings
+            .iter()
+            .fold(0_usize, |total, (key, value)| {
+                total.saturating_add(key.len()).saturating_add(value.len())
+            })
+            .saturating_add(
+                map.code_lengths
+                    .len()
+                    .saturating_mul(std::mem::size_of::<usize>()),
+            ),
+    };
+    let outline = font
+        .outline
+        .as_ref()
+        .map(|program| program.cache_size())
+        .unwrap_or_default();
+    let widths = font
+        .cid_widths
+        .as_ref()
+        .map(|widths| {
+            widths
+                .widths
+                .len()
+                .saturating_mul(std::mem::size_of::<(u16, f32)>())
+        })
+        .unwrap_or_default();
+    let cid_to_gid = font
+        .cid_to_gid
+        .as_ref()
+        .map(|table| table.len().saturating_mul(std::mem::size_of::<u16>()))
+        .unwrap_or_default();
+    font.base_font
+        .len()
+        .saturating_add(decoder)
+        .saturating_add(outline)
+        .saturating_add(widths)
+        .saturating_add(cid_to_gid)
+        .saturating_add(std::mem::size_of::<FontInfo>())
+}
+
 #[derive(Clone, Debug)]
 enum FontDecoder {
     Ascii,
     WinAnsi,
-    Simple(Arc<SimpleEncoding>),
-    GlyphIdentity(Arc<FontProgram>),
+    Simple(Rc<SimpleEncoding>),
+    GlyphIdentity(Rc<FontProgram>),
     ToUnicode(ToUnicodeMap),
 }
 
@@ -208,7 +313,7 @@ pub(crate) struct FormXObject {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ContentResources {
-    pub fonts: BTreeMap<String, FontInfo>,
+    pub fonts: BTreeMap<String, Rc<FontInfo>>,
     pub xobjects: BTreeMap<String, XObjectEntry>,
     pub ext_graphics_states: BTreeMap<String, ExtGraphicsState>,
 }
@@ -1718,9 +1823,9 @@ struct FontSelection {
     font_name: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
-    outline: Option<Arc<FontProgram>>,
+    outline: Option<Rc<FontProgram>>,
     cid_identity: bool,
-    cid_to_gid: Option<Arc<Vec<u16>>>,
+    cid_to_gid: Option<Rc<Vec<u16>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2255,7 +2360,8 @@ pub(crate) fn fonts_from_resources(
     resources: &BTreeMap<String, Value>,
     resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
     decode_stream_value: impl Fn(&Value) -> Result<Vec<u8>, DocsightError>,
-) -> Result<BTreeMap<String, FontInfo>, DocsightError> {
+    font_cache: &FontCache,
+) -> Result<BTreeMap<String, Rc<FontInfo>>, DocsightError> {
     let font_value = match resources.get("Font") {
         Some(value) => resolve(value)?,
         None => return Ok(BTreeMap::new()),
@@ -2266,6 +2372,16 @@ pub(crate) fn fonts_from_resources(
     };
     let mut fonts = BTreeMap::new();
     for (resource_name, value) in font_dict {
+        let reference = match value {
+            Value::Ref(reference) => Some(reference),
+            _ => None,
+        };
+        if let Some(reference) = reference
+            && let Some(font) = font_cache.get(reference, &resource_name)
+        {
+            fonts.insert(resource_name, font);
+            continue;
+        }
         let value = resolve(&value)?;
         let dict = match value {
             Value::Dict(dict) => dict,
@@ -2360,7 +2476,7 @@ pub(crate) fn fonts_from_resources(
                 };
                 match descriptor.get("FontFile2") {
                     Some(value) => match FontProgram::parse(decode_stream_value(value)?) {
-                        Ok(program) => Some(Arc::new(program)),
+                        Ok(program) => Some(Rc::new(program)),
                         Err(DocsightError::UnsupportedFeature { .. }) => None,
                         Err(error) => return Err(error),
                     },
@@ -2381,7 +2497,7 @@ pub(crate) fn fonts_from_resources(
             Some(value) => FontDecoder::ToUnicode(parse_to_unicode(&decode_stream_value(value)?)?),
             None if subtype == "Type0" => match &outline {
                 Some(program) if program.has_glyph_unicode() => {
-                    FontDecoder::GlyphIdentity(Arc::clone(program))
+                    FontDecoder::GlyphIdentity(Rc::clone(program))
                 }
                 _ => {
                     return Err(DocsightError::UnsupportedFeature {
@@ -2426,7 +2542,7 @@ pub(crate) fn fonts_from_resources(
                                 limit: MAX_CID_TO_GID_ENTRIES as u64,
                             });
                         }
-                        Some(Arc::new(
+                        Some(Rc::new(
                             table
                                 .chunks_exact(2)
                                 .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
@@ -2442,18 +2558,19 @@ pub(crate) fn fonts_from_resources(
             Some(descendant) => Some(CidWidths::parse(descendant, &resolve)?),
             None => None,
         };
-        fonts.insert(
-            resource_name,
-            FontInfo {
-                bold,
-                base_font: canonical_font.clone(),
-                decoder,
-                cid_widths,
-                outline,
-                cid_identity,
-                cid_to_gid,
-            },
-        );
+        let font = Rc::new(FontInfo {
+            bold,
+            base_font: canonical_font.clone(),
+            decoder,
+            cid_widths,
+            outline,
+            cid_identity,
+            cid_to_gid,
+        });
+        if let Some(reference) = reference {
+            font_cache.insert(reference, resource_name.clone(), Rc::clone(&font));
+        }
+        fonts.insert(resource_name, font);
     }
     Ok(fonts)
 }
@@ -2466,6 +2583,7 @@ pub(crate) fn ext_graphics_states_from_resources(
     resources: &BTreeMap<String, Value>,
     resolve: impl Fn(&Value) -> Result<Value, DocsightError>,
     decode_stream_value: impl Fn(&Value) -> Result<Vec<u8>, DocsightError>,
+    font_cache: &FontCache,
 ) -> Result<ExtGraphicsStates, DocsightError> {
     let Some(resource_value) = resources.get("ExtGState") else {
         return Ok(ExtGraphicsStates {
@@ -2533,6 +2651,7 @@ pub(crate) fn ext_graphics_states_from_resources(
                         &font_resources,
                         |font_value| resolve(font_value),
                         |font_value| decode_stream_value(font_value),
+                        font_cache,
                     )?;
                     let font = fonts
                         .remove("ExtGStateFont")
@@ -3222,7 +3341,7 @@ fn simple_encoding(dict: &BTreeMap<String, Value>) -> Result<FontDecoder, Docsig
             }
         }
     }
-    Ok(FontDecoder::Simple(Arc::new(SimpleEncoding { characters })))
+    Ok(FontDecoder::Simple(Rc::new(SimpleEncoding { characters })))
 }
 
 fn mac_roman_character(byte: u8) -> Option<char> {

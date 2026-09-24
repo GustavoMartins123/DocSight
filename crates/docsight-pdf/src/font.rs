@@ -1,10 +1,12 @@
 use docsight_core::DocsightError;
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 pub const MAX_FONT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CMAP_ENTRIES: usize = 1_000_000;
 const MAX_GLYPH_DEPTH: usize = 16;
+const MAX_CACHED_GLYPHS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct FontPoint {
@@ -33,6 +35,7 @@ pub(crate) struct FontProgram {
     code_cmap: BTreeMap<u32, u16>,
     code_first: bool,
     glyph_to_unicode: BTreeMap<u16, char>,
+    glyph_cache: RefCell<BTreeMap<u16, GlyphOutline>>,
 }
 
 impl FontProgram {
@@ -129,6 +132,7 @@ impl FontProgram {
             glyf_offset: glyf,
             hmtx_offset: hmtx,
             glyph_to_unicode: invert_cmap(&cmap),
+            glyph_cache: RefCell::new(BTreeMap::new()),
             cmap,
             code_cmap,
             code_first,
@@ -147,6 +151,20 @@ impl FontProgram {
         &self.sha256
     }
 
+    pub(crate) fn cache_size(&self) -> usize {
+        let map_bytes = self
+            .cmap
+            .len()
+            .saturating_add(self.code_cmap.len())
+            .saturating_add(self.glyph_to_unicode.len())
+            .saturating_mul(std::mem::size_of::<(u32, u16)>() + std::mem::size_of::<(u16, char)>());
+        self.data
+            .len()
+            .saturating_add(self.sha256.len())
+            .saturating_add(self.loca.len().saturating_mul(std::mem::size_of::<u32>()))
+            .saturating_add(map_bytes)
+    }
+
     pub(crate) fn glyph_for_char(&self, character: char) -> Result<u16, DocsightError> {
         self.cmap.get(&(character as u32)).copied().ok_or_else(|| {
             DocsightError::UnsupportedFeature {
@@ -163,6 +181,9 @@ impl FontProgram {
                 message: format!("TrueType glyph id {glyph_id} exceeds glyph count"),
             });
         }
+        if let Some(cached) = self.glyph_cache.borrow().get(&glyph_id).cloned() {
+            return Ok(cached);
+        }
         let advance = self.advance(glyph_id)?;
         let index = usize::from(glyph_id);
         let start = self.loca[index] as usize;
@@ -172,11 +193,16 @@ impl FontProgram {
             .get(self.glyf_offset + start..self.glyf_offset + end)
             .ok_or_else(|| malformed("TrueType glyph data is outside glyf table"))?;
         let contours = self.contours(glyph, 0)?;
-        Ok(GlyphOutline {
+        let outline = GlyphOutline {
             contours,
             advance,
             units_per_em: f32::from(self.units_per_em),
-        })
+        };
+        let mut cache = self.glyph_cache.borrow_mut();
+        if cache.len() < MAX_CACHED_GLYPHS {
+            cache.insert(glyph_id, outline.clone());
+        }
+        Ok(outline)
     }
 
     pub(crate) fn glyphs_for_identity(
