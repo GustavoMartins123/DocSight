@@ -416,7 +416,8 @@ fn hardened_hash(
             _ => Sha512::digest(&encrypted).to_vec(),
         };
         let last = usize::from(*encrypted.last().unwrap_or(&0));
-        if round >= 63 && last <= round - 32 {
+        let rounds = round + 1;
+        if rounds >= 64 && last <= rounds - 32 {
             break;
         }
     }
@@ -549,6 +550,21 @@ mod tests {
         assert_eq!(
             encoded,
             "68e0a08a44140219b584ea2cd51ac4b522b08feca3613e5101e9167ce8266840"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn r6_hardened_hash_stops_when_round_64_last_byte_is_32()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let digest = hardened_hash(b"boundary-751", &[0, 1, 2, 3, 4, 5, 6, 7], &[], 6)?;
+        let encoded = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            encoded,
+            "8231416444c7498f51f1472f30ba8b37d2f0dd8ebbb1e6c0c0b39a330d4fad4b"
         );
         Ok(())
     }

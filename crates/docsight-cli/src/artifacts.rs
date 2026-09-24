@@ -12,6 +12,9 @@ pub(crate) fn validate_command_artifacts(command: &Command) -> Result<(), Docsig
             }
             validate_artifact_paths(&[path.as_path()], &outputs)
         }
+        Command::ContactSheet { path, out, .. } => {
+            validate_artifact_paths(&[path.as_path()], &[out.as_path()])
+        }
         Command::Crop { path, out, .. } => {
             validate_artifact_paths(&[path.as_path()], &[out.as_path()])
         }
