@@ -457,6 +457,9 @@ impl Canvas {
         even_odd: bool,
         clips: &[ClipRegion],
     ) {
+        if polygons.is_empty() || polygons.iter().all(|polygon| polygon.is_empty()) {
+            return;
+        }
         let min_x = polygons
             .iter()
             .flatten()
@@ -477,15 +480,24 @@ impl Canvas {
             .flatten()
             .map(|point| point.y)
             .fold(f32::NEG_INFINITY, f32::max);
-        let x0 = self.pixel_floor_x(min_x).max(0);
-        let y0 = self.pixel_floor_y(min_y).max(0);
-        let x1 = self.pixel_ceil_x(max_x).min(self.width as i32);
-        let y1 = self.pixel_ceil_y(max_y).min(self.height as i32);
-        let raster_width = (x1 - x0).max(0) as usize;
-        let raster_height = (y1 - y0).max(0) as usize;
-        if raster_width == 0 || raster_height == 0 {
+        if !min_x.is_finite()
+            || !min_y.is_finite()
+            || !max_x.is_finite()
+            || !max_y.is_finite()
+            || min_x > max_x
+            || min_y > max_y
+        {
             return;
         }
+        let x0 = self.pixel_floor_x(min_x).clamp(0, self.width as i32);
+        let y0 = self.pixel_floor_y(min_y).clamp(0, self.height as i32);
+        let x1 = self.pixel_ceil_x(max_x).clamp(0, self.width as i32);
+        let y1 = self.pixel_ceil_y(max_y).clamp(0, self.height as i32);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let raster_width = (x1 - x0) as usize;
+        let raster_height = (y1 - y0) as usize;
         let coverage_len = raster_width.saturating_mul(raster_height);
         self.fill_scratch.coverage.clear();
         self.fill_scratch.coverage.resize(coverage_len, 0);
@@ -787,18 +799,30 @@ impl Canvas {
     }
 
     fn pixel_floor_x(&self, value: f32) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
         ((value - self.offset_x) * self.scale).floor() as i32
     }
 
     fn pixel_floor_y(&self, value: f32) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
         ((value - self.offset_y) * self.scale).floor() as i32
     }
 
     fn pixel_ceil_x(&self, value: f32) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
         ((value - self.offset_x) * self.scale).ceil() as i32
     }
 
     fn pixel_ceil_y(&self, value: f32) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
         ((value - self.offset_y) * self.scale).ceil() as i32
     }
 

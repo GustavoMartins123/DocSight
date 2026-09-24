@@ -1480,14 +1480,18 @@ fn tool_create_bundle(
     let path = PathBuf::from(path_str);
     let source = loader.open_source(&path)?;
     let request = docsight_render::RenderRequest { target, dpi };
+    let limits = docsight_render::trace::ArtifactLimits {
+        max_document_bytes: loader.max_document_bytes(),
+    };
     let proof = docsight_render::trace::create_proof_bundle_with_password(
         &source,
         &request,
         include_crop,
         loader.password(),
+        limits,
     )?;
     let out_path = PathBuf::from(out_str);
-    let written = proof.write(&out_path)?;
+    let written = proof.write_with_limits(&out_path, limits)?;
 
     Ok(json!({
         "output_path": out_str,

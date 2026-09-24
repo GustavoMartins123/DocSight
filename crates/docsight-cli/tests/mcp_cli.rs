@@ -1396,7 +1396,7 @@ fn mcp_tool_render_crop_and_create_bundle() -> Result<(), Box<dyn std::error::Er
         .as_str()
         .ok_or("missing text")?;
     let val3: serde_json::Value = serde_json::from_str(text3)?;
-    assert_eq!(val3["valid"], true);
+    assert_eq!(val3["verification"]["valid"], true);
 
     Ok(())
 }
