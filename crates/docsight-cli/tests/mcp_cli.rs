@@ -14,6 +14,10 @@ fn sample_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/validation/sample_features.docx")
 }
 
+fn tables_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/validation/sample_tables.docx")
+}
+
 fn headings_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/validation/sample_headings.docx")
 }
@@ -136,6 +140,16 @@ fn mcp_tools_list_declares_all_tools() -> Result<(), Box<dyn std::error::Error>>
         "verify_document",
         "get_evidence",
         "replay_bundle",
+        "get_overview",
+        "get_outline",
+        "list_tables",
+        "get_table",
+        "get_context",
+        "resolve_target",
+        "get_peek",
+        "get_focus",
+        "render_crop",
+        "create_bundle",
     ];
 
     for expected in expected_tools {
@@ -1092,6 +1106,350 @@ fn mcp_session_survives_tool_errors_in_sequence() -> Result<(), Box<dyn std::err
     let res6 = client.request(&req6.to_string())?;
     assert_eq!(res6["id"], 55);
     assert_eq!(res6["result"]["isError"], false);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_tool_get_overview_and_outline() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = headings_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_overview",
+            "arguments": {
+                "path": path_str,
+                "max_items": 2
+            }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["result"]["isError"], false);
+    let text1 = res1["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val1: serde_json::Value = serde_json::from_str(text1)?;
+    assert_eq!(val1["returned_landmarks"], 2);
+    assert_eq!(val1["truncated"], true);
+    assert!(val1["total_landmarks"].as_u64().unwrap_or(0) > 2);
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "get_outline",
+            "arguments": {
+                "path": path_str,
+                "max_items": 3
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["result"]["isError"], false);
+    let text2 = res2["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val2: serde_json::Value = serde_json::from_str(text2)?;
+    assert_eq!(val2["returned_headings"], 3);
+    assert_eq!(val2["truncated"], true);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_tool_tables_and_get_table() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = tables_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "list_tables",
+            "arguments": {
+                "path": path_str,
+                "max_items": 2
+            }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["result"]["isError"], false);
+    let text1 = res1["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val1: serde_json::Value = serde_json::from_str(text1)?;
+    assert_eq!(val1["returned_tables"], 2);
+    assert_eq!(val1["truncated"], true);
+    let first_table_id = val1["tables"][0]["id"].as_str().ok_or("missing table id")?;
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "get_table",
+            "arguments": {
+                "path": path_str,
+                "object_id": first_table_id,
+                "format": "markdown"
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["result"]["isError"], false);
+    let text2 = res2["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val2: serde_json::Value = serde_json::from_str(text2)?;
+    assert_eq!(val2["format"], "markdown");
+    assert!(val2["content"].as_str().unwrap_or("").contains('|'));
+
+    let req3 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "get_table",
+            "arguments": {
+                "path": path_str,
+                "object_id": first_table_id,
+                "format": "csv"
+            }
+        }
+    });
+    let res3 = client.request(&req3.to_string())?;
+    assert_eq!(res3["result"]["isError"], false);
+    let text3 = res3["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val3: serde_json::Value = serde_json::from_str(text3)?;
+    assert_eq!(val3["format"], "csv");
+    assert!(val3["content"].as_str().unwrap_or("").contains(','));
+
+    Ok(())
+}
+
+#[test]
+fn mcp_tool_context_and_resolve() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = headings_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_context",
+            "arguments": {
+                "path": path_str,
+                "find": "Application Architecture Guide"
+            }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["result"]["isError"], false);
+    let text1 = res1["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val1: serde_json::Value = serde_json::from_str(text1)?;
+    assert!(val1["status"].as_str().is_some());
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "resolve_target",
+            "arguments": {
+                "path": path_str,
+                "text": "Architecture",
+                "max_items": 2
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["result"]["isError"], false);
+    let text2 = res2["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val2: serde_json::Value = serde_json::from_str(text2)?;
+    assert_eq!(val2["returned_candidates"], 2);
+    assert_eq!(val2["truncated"], true);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_tool_peek_and_focus() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = headings_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_peek",
+            "arguments": {
+                "path": path_str,
+                "page": 1
+            }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["result"]["isError"], false);
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "get_focus",
+            "arguments": {
+                "path": path_str,
+                "pages": "1..2",
+                "max_items": 3
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["result"]["isError"], false);
+    let text2 = res2["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val2: serde_json::Value = serde_json::from_str(text2)?;
+    assert_eq!(val2["returned_objects"], 3);
+    assert_eq!(val2["truncated"], true);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_tool_render_crop_and_create_bundle() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+    let temp_dir = tempfile::tempdir()?;
+    let png_path = temp_dir.path().join("crop.png");
+    let bundle_path = temp_dir.path().join("bundle.dse");
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "render_crop",
+            "arguments": {
+                "path": path_str,
+                "page": 1,
+                "dpi": 72,
+                "out": png_path.to_str().ok_or("invalid out path")?
+            }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["result"]["isError"], false);
+    assert!(png_path.exists());
+    assert!(std::fs::metadata(&png_path)?.len() > 0);
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "create_bundle",
+            "arguments": {
+                "path": path_str,
+                "page": 1,
+                "out": bundle_path.to_str().ok_or("invalid bundle path")?
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["result"]["isError"], false);
+    assert!(bundle_path.exists());
+
+    let req3 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "replay_bundle",
+            "arguments": {
+                "bundle_path": bundle_path.to_str().ok_or("invalid bundle path")?
+            }
+        }
+    });
+    let res3 = client.request(&req3.to_string())?;
+    assert_eq!(res3["result"]["isError"], false);
+    let text3 = res3["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val3: serde_json::Value = serde_json::from_str(text3)?;
+    assert_eq!(val3["valid"], true);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_tool_search_and_page_limits() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = McpClient::start()?;
+    let path = headings_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    let req1 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "search_document",
+            "arguments": {
+                "path": path_str,
+                "query": "de",
+                "max_items": 2
+            }
+        }
+    });
+    let res1 = client.request(&req1.to_string())?;
+    assert_eq!(res1["result"]["isError"], false);
+    let text1 = res1["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val1: serde_json::Value = serde_json::from_str(text1)?;
+    assert_eq!(val1["returned_matches"], 2);
+    assert_eq!(val1["truncated"], true);
+
+    let req2 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "get_page",
+            "arguments": {
+                "path": path_str,
+                "page": 1,
+                "max_items": 2
+            }
+        }
+    });
+    let res2 = client.request(&req2.to_string())?;
+    assert_eq!(res2["result"]["isError"], false);
+    let text2 = res2["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let val2: serde_json::Value = serde_json::from_str(text2)?;
+    assert_eq!(val2["spans"].as_array().map(Vec::len), Some(2));
+    assert_eq!(val2["spans_truncated"], true);
 
     Ok(())
 }

@@ -586,7 +586,7 @@ impl From<BudgetProfile> for ProjectionProfile {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
-enum ContextInclude {
+pub(crate) enum ContextInclude {
     Content,
     Neighbors,
     Geometry,
@@ -766,16 +766,16 @@ pub(crate) struct InspectResult {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct HeadingRecord {
-    id: ObjectId,
-    level: u8,
-    text: String,
-    source: String,
+pub(crate) struct HeadingRecord {
+    pub(crate) id: ObjectId,
+    pub(crate) level: u8,
+    pub(crate) text: String,
+    pub(crate) source: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OutlineResult {
-    headings: Vec<HeadingRecord>,
+pub(crate) struct OutlineResult {
+    pub(crate) headings: Vec<HeadingRecord>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -791,24 +791,24 @@ struct TextResult {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct TableSummary {
-    id: String,
+pub(crate) struct TableSummary {
+    pub(crate) id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<u32>,
-    rows: u32,
-    columns: u32,
+    pub(crate) page: Option<u32>,
+    pub(crate) rows: u32,
+    pub(crate) columns: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    confidence: Option<f32>,
+    pub(crate) confidence: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    detector: Option<String>,
-    review: bool,
-    source: String,
+    pub(crate) detector: Option<String>,
+    pub(crate) review: bool,
+    pub(crate) source: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct TablesResult {
-    tables: Vec<TableSummary>,
-    page_fidelity: PageFidelity,
+pub(crate) struct TablesResult {
+    pub(crate) tables: Vec<TableSummary>,
+    pub(crate) page_fidelity: PageFidelity,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1007,61 +1007,61 @@ struct ResolveNdjsonSummary {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ContextSelectionMode {
+pub(crate) enum ContextSelectionMode {
     ExplicitObject,
     Find,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextSelection {
-    mode: ContextSelectionMode,
+pub(crate) struct ContextSelection {
+    pub(crate) mode: ContextSelectionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
-    descriptor: Option<String>,
+    pub(crate) descriptor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    chosen_object: Option<ObjectId>,
+    pub(crate) chosen_object: Option<ObjectId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    matched_range: Option<TextMatch>,
-    reasons: Vec<ResolveReason>,
+    pub(crate) matched_range: Option<TextMatch>,
+    pub(crate) reasons: Vec<ResolveReason>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextPage {
-    number: u32,
-    width_pt: f32,
-    height_pt: f32,
+pub(crate) struct ContextPage {
+    pub(crate) number: u32,
+    pub(crate) width_pt: f32,
+    pub(crate) height_pt: f32,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextSection {
-    id: ObjectId,
-    index: u32,
+pub(crate) struct ContextSection {
+    pub(crate) id: ObjectId,
+    pub(crate) index: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ContextSectionStatus {
+pub(crate) enum ContextSectionStatus {
     Exact,
     NotApplicable,
     Unavailable,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextContainers {
+pub(crate) struct ContextContainers {
     #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<ContextPage>,
+    pub(crate) page: Option<ContextPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    section: Option<ContextSection>,
-    section_status: ContextSectionStatus,
+    pub(crate) section: Option<ContextSection>,
+    pub(crate) section_status: ContextSectionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    section_reason: Option<String>,
+    pub(crate) section_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    object: Option<ContextContainerObject>,
+    pub(crate) object: Option<ContextContainerObject>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextContainerObject {
-    id: ObjectId,
-    kind: docsight_core::BlockKind,
+pub(crate) struct ContextContainerObject {
+    pub(crate) id: ObjectId,
+    pub(crate) kind: docsight_core::BlockKind,
 }
 
 fn context_content(
@@ -1096,77 +1096,77 @@ fn context_content(
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextRelatedObject {
-    role: ViewportRole,
-    confidence: f32,
-    provenance: String,
-    object: SemanticObject,
+pub(crate) struct ContextRelatedObject {
+    pub(crate) role: ViewportRole,
+    pub(crate) confidence: f32,
+    pub(crate) provenance: String,
+    pub(crate) object: SemanticObject,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextGeometry {
-    available: bool,
-    coordinate_system: &'static str,
+pub(crate) struct ContextGeometry {
+    pub(crate) available: bool,
+    pub(crate) coordinate_system: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<u32>,
+    pub(crate) page: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    bbox: Option<Rect>,
-    z_index: i32,
-    reading_order: u32,
+    pub(crate) bbox: Option<Rect>,
+    pub(crate) z_index: i32,
+    pub(crate) reading_order: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextFidelity {
-    available: bool,
+pub(crate) struct ContextFidelity {
+    pub(crate) available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<f32>,
+    pub(crate) text: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    structure: Option<f32>,
+    pub(crate) structure: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    geometry: Option<f32>,
+    pub(crate) geometry: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    visual: Option<f32>,
-    reasons: Vec<String>,
+    pub(crate) visual: Option<f32>,
+    pub(crate) reasons: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextProvenance {
-    source_path: String,
+pub(crate) struct ContextProvenance {
+    pub(crate) source_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    source_offset: Option<u64>,
+    pub(crate) source_offset: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    source_length: Option<u64>,
-    confidence: f32,
+    pub(crate) source_length: Option<u64>,
+    pub(crate) confidence: f32,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextPackage {
-    target: SemanticObject,
-    containers: ContextContainers,
+pub(crate) struct ContextPackage {
+    pub(crate) target: SemanticObject,
+    pub(crate) containers: ContextContainers,
     #[serde(skip_serializing_if = "Option::is_none")]
-    heading: Option<ContextRelatedObject>,
+    pub(crate) heading: Option<ContextRelatedObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    neighbors: Option<Vec<ContextRelatedObject>>,
+    pub(crate) neighbors: Option<Vec<ContextRelatedObject>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    related: Option<Vec<ContextRelatedObject>>,
+    pub(crate) related: Option<Vec<ContextRelatedObject>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<serde_json::Value>,
+    pub(crate) content: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    geometry: Option<ContextGeometry>,
+    pub(crate) geometry: Option<ContextGeometry>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    fidelity: Option<ContextFidelity>,
+    pub(crate) fidelity: Option<ContextFidelity>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provenance: Option<ContextProvenance>,
+    pub(crate) provenance: Option<ContextProvenance>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ContextResult {
-    status: ResolveStatus,
-    selection: ContextSelection,
+pub(crate) struct ContextResult {
+    pub(crate) status: ResolveStatus,
+    pub(crate) selection: ContextSelection,
     #[serde(skip_serializing_if = "Option::is_none")]
-    context: Option<ContextPackage>,
-    total_candidates: usize,
-    candidates: Vec<ResolveCandidate>,
+    pub(crate) context: Option<ContextPackage>,
+    pub(crate) total_candidates: usize,
+    pub(crate) candidates: Vec<ResolveCandidate>,
 }
 
 const DEFAULT_EVIDENCE_RENDER_DPI: u16 = 144;
@@ -2856,6 +2856,18 @@ fn inspect_pdf_source(
     Ok((result, warnings))
 }
 
+pub(crate) fn document_outline(document: &Document) -> Vec<HeadingRecord> {
+    document
+        .headings()
+        .map(|(block, heading)| HeadingRecord {
+            id: block.id.clone(),
+            level: heading.level,
+            text: heading.text.clone(),
+            source: block.source.path.clone(),
+        })
+        .collect()
+}
+
 fn outline(
     path: &PathBuf,
     loader: &DocumentLoader<'_>,
@@ -2867,15 +2879,7 @@ fn outline(
 ) -> Result<(), DocsightError> {
     let source = loader.open_source(path)?;
     let document = loader.load(&source)?;
-    let headings: Vec<HeadingRecord> = document
-        .headings()
-        .map(|(block, heading)| HeadingRecord {
-            id: block.id.clone(),
-            level: heading.level,
-            text: heading.text.clone(),
-            source: block.source.path.clone(),
-        })
-        .collect();
+    let headings = document_outline(&document);
 
     if ndjson {
         let stdout = io::stdout();
@@ -3222,18 +3226,8 @@ fn document_text(
     emit_warnings(&document.warnings, quiet, json_errors)
 }
 
-fn tables(
-    path: &PathBuf,
-    loader: &DocumentLoader<'_>,
-    json: bool,
-    ndjson: bool,
-    limits: &QueryLimits,
-    quiet: bool,
-    json_errors: bool,
-) -> Result<(), DocsightError> {
-    let source = loader.open_source(path)?;
-    let document = loader.load(&source)?;
-    let page_fidelity = docsight_core::page_fidelity(&document, None);
+pub(crate) fn document_tables(document: &Document, source: &DocumentSource) -> TablesResult {
+    let page_fidelity = docsight_core::page_fidelity(document, None);
     let tables: Vec<TableSummary> = document
         .tables()
         .map(|(block, table)| {
@@ -3254,6 +3248,26 @@ fn tables(
             }
         })
         .collect();
+    TablesResult {
+        tables,
+        page_fidelity,
+    }
+}
+
+fn tables(
+    path: &PathBuf,
+    loader: &DocumentLoader<'_>,
+    json: bool,
+    ndjson: bool,
+    limits: &QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+) -> Result<(), DocsightError> {
+    let source = loader.open_source(path)?;
+    let document = loader.load(&source)?;
+    let tables_res = document_tables(&document, &source);
+    let page_fidelity = tables_res.page_fidelity.clone();
+    let tables = tables_res.tables;
 
     if ndjson {
         let stdout = io::stdout();
@@ -4279,7 +4293,7 @@ fn output_serialization_error(source: serde_json::Error) -> DocsightError {
     }
 }
 
-fn digest_bytes(bytes: &[u8]) -> String {
+pub(crate) fn digest_bytes(bytes: &[u8]) -> String {
     let digest = sha2::Sha256::digest(bytes);
     let mut output = String::with_capacity(64);
     for byte in digest {
@@ -5146,39 +5160,44 @@ struct ContextArgs<'a> {
     json_errors: bool,
 }
 
-fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
-    let include = args.include.iter().copied().collect::<BTreeSet<_>>();
-    if include.len() != args.include.len() {
+pub(crate) fn evaluate_context(
+    document: &Document,
+    source: &DocumentSource,
+    object: Option<&str>,
+    find: Option<&str>,
+    kind: Option<SemanticKind>,
+    include: &[ContextInclude],
+) -> Result<(ContextResult, Vec<Diagnostic>), DocsightError> {
+    let include_set = include.iter().copied().collect::<BTreeSet<_>>();
+    if include_set.len() != include.len() {
         return Err(DocsightError::InvalidArgument {
             message: "context --include values must not be duplicated".to_owned(),
         });
     }
-    let source = args.loader.open_source(args.path)?;
-    let document = args.loader.load(&source)?;
     let mut warnings = document.warnings.clone();
-    let (status, selection, total_candidates, candidates, target) = match (args.object, args.find) {
-        (Some(object), None) if args.kind.is_none() => {
-            context_neighborhood(&document, object, false)?;
-            let object_id = ObjectId::from_raw(object);
+    let (status, selection, total_candidates, candidates, target) = match (object, find) {
+        (Some(object_id), None) if kind.is_none() => {
+            context_neighborhood(document, object_id, false)?;
+            let id = ObjectId::from_raw(object_id);
             let reason = ResolveReason {
                 code: docsight_search::ResolveReasonCode::ExplicitObjectId,
                 score: 1.0,
                 weight: 1.0,
                 contribution: 1.0,
-                evidence: Some(object.to_owned()),
+                evidence: Some(object_id.to_owned()),
             };
             (
                 ResolveStatus::Resolved,
                 ContextSelection {
                     mode: ContextSelectionMode::ExplicitObject,
                     descriptor: None,
-                    chosen_object: Some(object_id.clone()),
+                    chosen_object: Some(id.clone()),
                     matched_range: None,
                     reasons: vec![reason],
                 },
                 0,
                 Vec::new(),
-                Some(object_id),
+                Some(id),
             )
         }
         (Some(_), None) => {
@@ -5186,14 +5205,14 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
                 message: "context --kind is valid only with --find".to_owned(),
             });
         }
-        (None, Some(find)) => {
-            let resolved = resolve_descriptor(&document, find, args.kind, None)?;
+        (None, Some(query)) => {
+            let resolved = resolve_descriptor(document, query, kind, None)?;
             let chosen = (resolved.status == ResolveStatus::Resolved)
                 .then(|| resolved.candidates.first())
                 .flatten();
             let selection = ContextSelection {
                 mode: ContextSelectionMode::Find,
-                descriptor: Some(find.to_owned()),
+                descriptor: Some(query.to_owned()),
                 chosen_object: chosen.map(|candidate| candidate.object.id.clone()),
                 matched_range: chosen.and_then(|candidate| candidate.matched_range.clone()),
                 reasons: chosen
@@ -5228,7 +5247,9 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
     };
     let package = target
         .as_ref()
-        .map(|target| build_context_package(&document, &source, target, &include, &mut warnings))
+        .map(|target_id| {
+            build_context_package(document, source, target_id, &include_set, &mut warnings)
+        })
         .transpose()?;
     let result = ContextResult {
         status,
@@ -5237,6 +5258,20 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
         total_candidates,
         candidates,
     };
+    Ok((result, warnings))
+}
+
+fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
+    let source = args.loader.open_source(args.path)?;
+    let document = args.loader.load(&source)?;
+    let (result, warnings) = evaluate_context(
+        &document,
+        &source,
+        args.object,
+        args.find,
+        args.kind,
+        args.include,
+    )?;
     let scope_input = serde_json::to_string(&serde_json::json!({
         "object": args.object,
         "find": args.find,
