@@ -9,6 +9,7 @@ use std::ops::Range;
 
 const LINE_FIT_TOLERANCE: f32 = 0.001;
 const MINIMUM_SPLIT_LINES: usize = 2;
+const KEEP_CHAIN_FAST_GUARD: f32 = 0.01;
 
 #[derive(Clone, Debug)]
 pub(crate) struct PageRecord {
@@ -39,10 +40,18 @@ pub(crate) struct Pagination {
     pub warnings: Vec<Diagnostic>,
 }
 
+#[derive(Clone)]
+struct KeepChainInfo {
+    end: usize,
+    fast_height: f32,
+    follower_page_break: bool,
+}
+
 struct Paginator<'a> {
     document: &'a Document,
     geometries: &'a [SectionGeometry],
     measured: &'a [Measured],
+    keep_chains: Vec<KeepChainInfo>,
     pages: Vec<PageRecord>,
     placements: Vec<Placement>,
     warnings: Vec<Diagnostic>,
@@ -59,10 +68,12 @@ pub(crate) fn paginate(
     geometries: &[SectionGeometry],
     measured: &[Measured],
 ) -> Result<Pagination, DocsightError> {
+    let keep_chains = build_keep_chains(document, measured, ranges);
     let mut paginator = Paginator {
         document,
         geometries,
         measured,
+        keep_chains,
         pages: Vec::new(),
         placements: Vec::with_capacity(measured.len()),
         warnings: Vec::new(),
@@ -87,6 +98,63 @@ pub(crate) fn paginate(
         placements: paginator.placements,
         warnings: paginator.warnings,
     })
+}
+
+fn keep_boundary_near(value: f32, boundary: f32) -> bool {
+    let scale = value.abs().max(boundary.abs()).max(1.0);
+    (value - boundary).abs() <= KEEP_CHAIN_FAST_GUARD * scale
+}
+
+fn build_keep_chains(
+    document: &Document,
+    measured: &[Measured],
+    ranges: &[SectionRange],
+) -> Vec<KeepChainInfo> {
+    let mut infos = vec![
+        KeepChainInfo {
+            end: 0,
+            fast_height: 0.0,
+            follower_page_break: false,
+        };
+        measured.len()
+    ];
+    let mut chain_sum = vec![0.0_f64; measured.len()];
+    for range in ranges {
+        for index in (range.blocks.start..range.blocks.end).rev() {
+            if !document.blocks[index].flags.keep_with_next {
+                infos[index].end = index;
+                continue;
+            }
+            let next = index.saturating_add(1);
+            let next_is_keep =
+                next < range.blocks.end && document.blocks[next].flags.keep_with_next;
+            let end = if next_is_keep { infos[next].end } else { next };
+            let successor = if next_is_keep { chain_sum[next] } else { 0.0 };
+            let chain_total = measured[index].full_height() as f64 + successor;
+            chain_sum[index] = chain_total;
+            let follower_page_break =
+                end < range.blocks.end && document.blocks[end].flags.page_break_before;
+            let mut total = chain_total;
+            if !follower_page_break && end < range.blocks.end {
+                total += match &measured[end] {
+                    Measured::Text(metrics) => {
+                        metrics.leading_height(if document.blocks[end].flags.widow_control {
+                            MINIMUM_SPLIT_LINES
+                        } else {
+                            1
+                        }) as f64
+                    }
+                    Measured::Atomic { height } => *height as f64,
+                };
+            }
+            infos[index] = KeepChainInfo {
+                end,
+                fast_height: total as f32,
+                follower_page_break,
+            };
+        }
+    }
+    infos
 }
 
 impl Paginator<'_> {
@@ -247,22 +315,37 @@ impl Paginator<'_> {
         index: usize,
         range: &SectionRange,
     ) -> Result<(), DocsightError> {
-        let document = self.document;
-        let blocks = &document.blocks;
-        let measured = self.measured;
+        let info = &self.keep_chains[index];
+        if info.follower_page_break {
+            return Ok(());
+        }
+        let mut height = info.fast_height;
+        if self.has_content
+            && (!height.is_finite()
+                || keep_boundary_near(height, self.remaining())
+                || keep_boundary_near(height, self.content_height()))
+        {
+            height = self.exact_keep_height(index, range);
+        }
+        if self.has_content && height > self.remaining() && height <= self.content_height() {
+            self.continue_on_new_page(range.section)?;
+        }
+        Ok(())
+    }
+
+    fn exact_keep_height(&self, index: usize, range: &SectionRange) -> f32 {
+        let blocks = &self.document.blocks;
+        let end = self.keep_chains[index].end;
         let mut height = 0.0_f32;
         let mut next = index;
-        while next < range.blocks.end && blocks[next].flags.keep_with_next {
-            height += measured[next].full_height();
+        while next < end {
+            height += self.measured[next].full_height();
             next += 1;
         }
-        if next < range.blocks.end {
-            if blocks[next].flags.page_break_before {
-                return Ok(());
-            }
-            height += match &measured[next] {
+        if end < range.blocks.end {
+            height += match &self.measured[end] {
                 Measured::Text(metrics) => {
-                    metrics.leading_height(if blocks[next].flags.widow_control {
+                    metrics.leading_height(if blocks[end].flags.widow_control {
                         MINIMUM_SPLIT_LINES
                     } else {
                         1
@@ -271,10 +354,7 @@ impl Paginator<'_> {
                 Measured::Atomic { height } => *height,
             };
         }
-        if self.has_content && height > self.remaining() && height <= self.content_height() {
-            self.continue_on_new_page(range.section)?;
-        }
-        Ok(())
+        height
     }
 
     fn place_text(

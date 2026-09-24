@@ -109,6 +109,19 @@ pub fn decode_untrusted_entry(
     Ok(document)
 }
 
+pub(crate) fn verify_and_decode_untrusted_entry(
+    bytes: &[u8],
+    expected: &CacheKey,
+) -> Result<Document, EntryRejection> {
+    let (header, payload) = split_entry(bytes)?;
+    if header.key != *expected {
+        return Err(EntryRejection::KeyMismatch);
+    }
+    let document = decode_payload(&header, payload)?;
+    validate_canonical(&document).map_err(|_| EntryRejection::NonCanonical)?;
+    Ok(document)
+}
+
 pub(crate) fn verify_entry_integrity(
     bytes: &[u8],
 ) -> Result<(CacheKey, EntryProducer), EntryRejection> {

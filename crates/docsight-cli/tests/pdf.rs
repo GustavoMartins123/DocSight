@@ -93,6 +93,30 @@ fn renders_page_bbox_and_object_crops() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
+fn cli_renders_a_pdf_contact_sheet() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("sample.pdf");
+    let output = directory.path().join("contact.png");
+    fs::write(&path, pdf_fixture::sample_pdf())?;
+    let result = docsight()
+        .args([
+            "--agent",
+            "contact-sheet",
+            path.to_str().ok_or("invalid path")?,
+            "--pages",
+            "1",
+            "--out",
+            output.to_str().ok_or("invalid output path")?,
+        ])
+        .output()?;
+    assert!(result.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout)?;
+    assert_eq!(value["result"]["pages"], serde_json::json!([1]));
+    assert!(fs::read(&output)?.starts_with(b"\x89PNG\r\n\x1a\n"));
+    Ok(())
+}
+
+#[test]
 fn invalid_crop_contract_returns_usage_error() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("sample.pdf");

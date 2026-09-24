@@ -238,6 +238,21 @@ fn sandboxed_runs_share_the_parent_owned_cache() -> TestResult {
 }
 
 #[test]
+fn sandbox_cache_does_not_hide_source_open_failures() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let output = docsight()
+        .args(["--agent", "--sandbox", "--cache-dir"])
+        .arg(directory.path().join("cache"))
+        .args(["text", "missing-document.docx"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(40));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
+    assert_eq!(error["error"]["code"], "IO_ERROR");
+    Ok(())
+}
+
+#[test]
 fn corrupted_entries_are_quarantined_in_direct_and_sandboxed_runs() -> TestResult {
     for sandbox in [false, true] {
         let directory = tempfile::tempdir()?;
@@ -558,6 +573,17 @@ fn cache_arguments_outside_the_contract_are_rejected() -> TestResult {
                 document,
             ],
             "decrypted document content is never persisted",
+        ),
+        (
+            vec![
+                "--cache-dir",
+                cache,
+                "--password-before-file",
+                password,
+                "text",
+                document,
+            ],
+            "password files",
         ),
         (
             vec!["--sandbox", "--cache-dir", cache, "cache", "stats"],

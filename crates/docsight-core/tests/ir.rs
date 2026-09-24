@@ -1,8 +1,7 @@
 use docsight_core::{
     Block, BlockContent, BlockKind, CanonicalViolation, Document, DocumentFormat, DocumentMetadata,
     HeadingBlock, IR_ENGINE_VERSION, IR_SCHEMA_VERSION, IrVersion, ObjectId, Page, ParagraphBlock,
-    Rect, SourceSpan, TableBlock, TableCell, canonical_violations, table_to_csv, table_to_html,
-    table_to_markdown, table_to_tsv, validate_canonical,
+    Rect, SourceSpan, TableBlock, TableCell, canonical_violations, validate_canonical,
 };
 
 fn sample_document() -> Document {
@@ -152,25 +151,10 @@ fn queries_document_blocks_by_kind() {
 }
 
 #[test]
-fn formats_canonical_table_to_markdown_csv_tsv_html() -> Result<(), Box<dyn std::error::Error>> {
+fn projects_canonical_table_text() {
     let doc = sample_document();
-    let (_, table) = doc.tables().next().unwrap_or_else(|| unreachable!());
-
-    let md = table_to_markdown(table)?;
-    assert!(md.contains("| Header A | Header B |"));
-    assert!(md.contains("| -------- | -------- |"));
-
-    let csv = table_to_csv(table)?;
-    assert_eq!(csv.trim(), "Header A,Header B");
-
-    let tsv = table_to_tsv(table)?;
-    assert_eq!(tsv.trim(), "Header A\tHeader B");
-
-    let html = table_to_html(table)?;
-    assert!(html.contains("<table>"));
-    assert!(html.contains("<th>Header A</th>"));
-    assert!(html.contains("<th>Header B</th>"));
-    Ok(())
+    let (block, _) = doc.tables().next().unwrap_or_else(|| unreachable!());
+    assert_eq!(block.text(), "Header A\tHeader B");
 }
 
 #[test]

@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+- Add the bounded `contact-sheet` command for deterministic, labeled PNG indexes over explicitly selected DOCX or PDF pages, with page-count and pixel limits, fail-closed rendering and agent metadata.
+- Make MCP password inspection use the canonical encrypted-PDF path, expose the same evidence record and diagnostics as the CLI, and select document or proof-bundle verification from the named tool instead of a filename extension.
+- Use the trace reproduction fingerprint as the single canonical fingerprint implementation and make the `fingerprint` command report the same value; existing trace and proof-bundle fingerprints remain unchanged.
+- Make a sandbox child with the child marker but no explicit policy fail closed with `BACKEND_FAILURE`, and make `docsight-tables` the sole public owner of table format exporters.
 - Add five golden product workflows as executable task scenarios: inspect a DOCX from structure to fingerprint, compare two revisions with self-diff identity and render evidence, verify support and fidelity with coverage and evidence, investigate a PDF region from search to visual crop, and reproduce offline with proof bundles and verified traces.
 - Add `WORKFLOWS.md`, a public guide that runs each journey with the CLI surface only, in human and `--agent` forms, with budgets, typed errors and determinism rules, bound to the manifests that the test suite executes.
 
+- Add `benchmark hotspots`, a cross-platform native harness for large deterministic keep-with-next, canonical/coverage, PDF table/resource/vector/trace, semantic diff and Unicode search workloads. Repetitions must produce identical bounded evidence bytes; wall times are observational and are not portable budgets.
 - Add `benchmark operations`, a per-operation client-to-process matrix with cold and warm runs over small DOCX/PDF fixtures, the specification document, paired and self diffs, page-one renders and a typed-error probe. Cold iterations must be byte-identical, warm output must equal cold output, render artifacts must keep their digest, and wall, stdout-byte and peak-memory ceilings in `benchmarks/ds18-operations.json` are enforced by `--check`, with wall ceilings skipped explicitly off the reference host.
 - Record the first Windows x64 release baseline: every small-document operation completes in 30–110 ms with warm runs at or above cold runs, so startup dominates and the cache pays off only once parsing or layout dominates.
 - Enforce the operation matrix in CI on the Windows target, where wall ceilings, determinism, exit codes and stdout byte counts all apply.

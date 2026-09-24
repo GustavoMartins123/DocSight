@@ -27,7 +27,7 @@ binary can run commands directly; the existing benchmark subcommand is retained.
 | `readiness --revision SHA --evidence DIRECTORY` | `xtask/src/readiness/{mod,evidence,campaigns,reviews}.rs` | `tooling_readiness.rs` |
 | `rust-only` | `xtask/src/architecture.rs` | `tooling_architecture.rs` |
 | Open V1 engine gaps keep readiness blocked | `release/known-gaps.json` | `tooling_readiness.rs` |
-| Benchmark budgets and generated scale fixtures | `xtask/src/main.rs`, `benchmarks/` | unit tests in `xtask/src/main.rs` |
+| Benchmark budgets, generated scale fixtures and adversarial hotspot workloads | `xtask/src/main.rs`, `xtask/src/hotspots.rs`, `benchmarks/` | unit tests in `xtask/src/main.rs` and `hotspots.rs` |
 | Evidence schema conformance of generated artifacts, pinned workflow toolchain, locked Cargo commands, explicit `xtask` binary selection, target-filtered notices metadata | `schemas/tooling/v2/evidence.json`, `.github/workflows/`, shipped guides | `tooling_contracts.rs` |
 
 Use `cargo xtask --help` and each command's `--help` for complete options. The
@@ -69,9 +69,14 @@ creates tags, publishes releases or invents consent.
 Run `cargo test --locked -p xtask --all-targets` for maintenance coverage and
 `cargo test --locked --workspace --all-features` for the full workspace. The
 workspace contains two xtask binaries: `maint`, selected by the `cargo xtask`
-alias, and `xtask`, which owns the release benchmark. Run the benchmark with
-`cargo run --locked --release -p xtask --bin xtask -- benchmark --check`.
-The contract tests reject documented or CI invocations that omit the binary. Tests
+alias, and `xtask`, which owns the release and operation benchmarks plus the
+adversarial hotspot harness. Run the canonical budget gate with
+`cargo run --locked --release -p xtask --bin xtask -- benchmark --check`, the
+client matrix with `benchmark operations --check`, and the large deterministic
+workloads with `benchmark hotspots --iterations 3 --output PATH`. Hotspot
+timings are observational; identical result hashes and bounded output are the
+contract. The contract tests reject documented or CI invocations that omit the
+binary. Tests
 include synthetic executable headers and injected process results to exercise
 negative paths; those fixtures are not native-platform qualification receipts.
 Actual smoke, corpus and validation commands call the native process runner.

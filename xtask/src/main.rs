@@ -1,3 +1,5 @@
+mod hotspots;
+
 use docsight_core::{Document, DocumentFormat, DocumentSource};
 use docsight_layout::layout_docx;
 use docsight_ooxml::parse_docx;
@@ -217,6 +219,8 @@ fn run() -> TaskResult<()> {
             let rest: Vec<String> = arguments.collect();
             if rest.first().is_some_and(|command| command == "operations") {
                 run_operation_command(rest[1..].to_vec())
+            } else if rest.first().is_some_and(|command| command == "hotspots") {
+                hotspots::run(rest[1..].to_vec())
             } else {
                 run_benchmark_command(rest)
             }
@@ -235,7 +239,7 @@ fn run() -> TaskResult<()> {
         }
         Some(command) => Err(failure(format!("unknown xtask command: {command}"))),
         None => Err(failure(
-            "usage: cargo run --locked --release -p xtask --bin xtask -- benchmark [--check] [--budgets PATH] [--output PATH]",
+            "usage: cargo run --locked --release -p xtask --bin xtask -- benchmark [--check] [--budgets PATH] [--output PATH] | benchmark operations [--check] [--iterations N] [--output PATH] | benchmark hotspots [--iterations N] [--output PATH]",
         )),
     }
 }

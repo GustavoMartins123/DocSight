@@ -14,6 +14,7 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter, write::SimpleFileO
 
 pub const MAX_TOTAL_BYTES: u64 = 536_870_912;
 pub const SCHEMA: &str = "docsight.release/v1";
+pub const EXECUTABLE_SCHEMA: &str = "docsight.agent/v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +33,8 @@ pub struct Manifest {
     pub target: String,
     pub revision: String,
     pub toolchain: String,
+    pub executable_schema: String,
+    pub executable_sha256: String,
     pub files: Vec<Record>,
 }
 
@@ -184,12 +187,19 @@ pub fn make_package(
             .map_err(corrupt)?;
         writer.write_all(&bytes)?;
     }
+    let executable_sha256 = files
+        .iter()
+        .find(|record| record.path == binary_name)
+        .map(|record| record.sha256.clone())
+        .ok_or_else(|| corrupt(()))?;
     let manifest = Manifest {
         schema: SCHEMA.into(),
         version: version.into(),
         target: target.into(),
         revision: revision.into(),
         toolchain: toolchain(root)?,
+        executable_schema: EXECUTABLE_SCHEMA.into(),
+        executable_sha256,
         files,
     };
     writer
@@ -299,6 +309,21 @@ pub fn verify_archive(path: &Path) -> Result<Manifest> {
         "Archive name, root and manifest identity must agree",
     )?;
     let (binary_name, worker_name) = binary_names(&manifest.target)?;
+    require(
+        manifest.executable_schema == EXECUTABLE_SCHEMA,
+        "INVALID_EXECUTABLE_SCHEMA",
+        "Release executable schema is unsupported",
+    )?;
+    checked_digest(&manifest.executable_sha256)?;
+    require(
+        manifest
+            .files
+            .iter()
+            .find(|record| record.path == binary_name)
+            .is_some_and(|record| record.sha256 == manifest.executable_sha256),
+        "EXECUTABLE_IDENTITY_MISMATCH",
+        "Release executable digest does not match its manifest record",
+    )?;
     let mut expected = BTreeSet::from([manifests[0].clone()]);
     let mut previous: Option<&str> = None;
     for record in &manifest.files {

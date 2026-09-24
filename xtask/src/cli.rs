@@ -15,7 +15,7 @@ use std::process::ExitCode;
     name = "xtask",
     version,
     about = "Native DocSight maintenance and evidence tooling",
-    after_help = "The existing benchmark command also accepts: benchmark --check --output PATH"
+    after_help = "The xtask binary also accepts: benchmark --check --output PATH, benchmark operations --check --iterations N --output PATH, and benchmark hotspots --iterations N --output PATH"
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn collecting_a_failed_engine_outcome_still_writes_a_successful_observation() -> Result<()> {
         let temporary = tempfile::tempdir()?;
-        let path = temporary.path().join("observation.json");
+        let path = temporary.path().canonicalize()?.join("observation.json");
         let report = beta::Report {
             schema: "docsight.beta-report/v1".into(),
             version: workspace_version().into(),

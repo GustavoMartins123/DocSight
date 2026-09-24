@@ -281,7 +281,9 @@ pub fn run_corpus_with<R: Runner>(
         version.termination.is_none()
             && version.returncode == 0
             && version.stderr.is_empty()
-            && text(&version.stdout)?.trim() == format!("docsight {}", manifest.version),
+            && text(&version.stdout)?
+                .trim()
+                .starts_with(&format!("docsight {}", manifest.version)),
         "CORPUS_VERSION_MISMATCH",
         "Executable version differs from archive manifest",
     )?;

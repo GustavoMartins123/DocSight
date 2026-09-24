@@ -49,6 +49,13 @@ fn every_target_packages_and_verifies_with_both_native_binaries() -> TestResult 
         assert_eq!(manifest.revision, REVISION);
         assert_eq!(manifest.version, workspace_version());
         assert_eq!(manifest.toolchain, "1.96.0");
+        assert_eq!(manifest.executable_schema, "docsight.agent/v2");
+        let executable = manifest
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("docsight") || file.path.ends_with("docsight.exe"))
+            .ok_or("executable record")?;
+        assert_eq!(manifest.executable_sha256, executable.sha256);
         let declared: BTreeSet<_> = manifest
             .files
             .iter()

@@ -236,16 +236,18 @@ pub(crate) fn measure_block(
                 marker: None,
             }))
         }
-        BlockContent::Table(_)
-        | BlockContent::Figure(_)
-        | BlockContent::Shape(_)
-        | BlockContent::Unknown(_) => {
+        BlockContent::Table(_) => {
             let mut copy = block.clone();
             let emitted = emit_atomic(&mut copy, geometry, 0.0, &mut Vec::new(), resources)?;
             Ok(Measured::Atomic {
                 height: emitted.height,
             })
         }
+        BlockContent::Figure(figure) => Ok(Measured::Atomic {
+            height: figure.height_pt.unwrap_or(120.0).max(20.0) + 12.0,
+        }),
+        BlockContent::Shape(_) => Ok(Measured::Atomic { height: 1.0 }),
+        BlockContent::Unknown(_) => Ok(Measured::Atomic { height: 24.0 }),
     }
 }
 

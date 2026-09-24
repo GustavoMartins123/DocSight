@@ -1,7 +1,9 @@
+mod contact_sheet;
 mod docx_raster;
 pub mod hit;
 pub mod trace;
 
+pub use contact_sheet::*;
 use docsight_core::{
     Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect, write_all,
 };
@@ -37,6 +39,17 @@ pub struct RenderMetadata {
 
 pub use docsight_core::encode_png;
 pub use docx_raster::{glyph_coverage, raster_font_fingerprint};
+
+pub fn document_glyph_coverage(document: &Document, source: &DocumentSource) -> f32 {
+    let mut text = String::new();
+    for block in &document.blocks {
+        text.push_str(&block.text());
+    }
+    match source.format() {
+        DocumentFormat::Docx => glyph_coverage(&text),
+        DocumentFormat::Pdf => docsight_pdf::pdf_glyph_coverage(&text),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedImage {

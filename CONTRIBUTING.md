@@ -19,7 +19,7 @@ Before contributing code, please review the core project principles:
   rustup show
   ```
 - **Git:** With LF line endings configured (`core.autocrlf = input` or `false`).
-- Supported operating systems: Linux (x86_64), Windows (x86_64), and macOS (aarch64).
+- Supported host operating systems for routine CI: Linux (x86_64), Windows (x86_64), and macOS (aarch64). The canonical release/package matrix is `release/targets.json` and contains five targets, including Linux aarch64 and macOS x86_64; release jobs must use that matrix rather than a separately maintained list.
 
 ## Building and Testing
 
