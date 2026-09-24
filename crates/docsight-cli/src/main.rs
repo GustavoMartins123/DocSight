@@ -1613,10 +1613,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         });
     }
     let is_diff = matches!(cli.command, Command::Diff { .. });
-    if is_diff
-        && !cli.ndjson
-        && (cli.max_items.is_some() || cli.continue_token.is_some())
-    {
+    if is_diff && !cli.ndjson && (cli.max_items.is_some() || cli.continue_token.is_some()) {
         return Err(DocsightError::InvalidArgument {
             message: "diff pagination with --max-items or --continue requires --ndjson streaming"
                 .to_owned(),
@@ -5290,7 +5287,7 @@ fn context(args: ContextArgs<'_>) -> Result<(), DocsightError> {
         "object": args.object,
         "find": args.find,
         "kind": args.kind,
-        "include": include
+        "include": args.include
     }))
     .map_err(output_serialization_error)?;
     let scope = continuation_scope("context", &scope_input);
