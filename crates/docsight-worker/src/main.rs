@@ -75,9 +75,7 @@ struct WorkerInspectResult {
 }
 
 fn main() -> ExitCode {
-    if let Err(error) =
-        docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
-    {
+    if let Err(error) = docsight_worker::apply_sandbox_limits_if_child() {
         let code = error.exit_code();
         return if writeln!(io::stderr(), "{}: {}", error.diagnostic().code, error).is_ok() {
             ExitCode::from(code)

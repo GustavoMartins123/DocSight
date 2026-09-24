@@ -1,4 +1,4 @@
-use crate::{RenderRequest, RenderTarget, render_document_with_password};
+use crate::{RenderRequest, RenderTarget, document_glyph_coverage, render_document_with_password};
 use docsight_core::{
     BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document, DocumentFormat,
     DocumentSource, EvidenceRecord, ObjectId, Rect, ResourceKind, compute_evidence, write_all,
@@ -1068,18 +1068,7 @@ fn selected_evidence(
         .collect()
 }
 
-fn document_glyph_coverage(document: &Document, source: &DocumentSource) -> f32 {
-    let mut text = String::new();
-    for block in &document.blocks {
-        text.push_str(&block.text());
-    }
-    match source.format() {
-        DocumentFormat::Docx => crate::glyph_coverage(&text),
-        DocumentFormat::Pdf => docsight_pdf::pdf_glyph_coverage(&text),
-    }
-}
-
-fn reproduction_fingerprint(source: &DocumentSource) -> ReproductionFingerprint {
+pub fn reproduction_fingerprint(source: &DocumentSource) -> ReproductionFingerprint {
     let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
     let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
     let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));

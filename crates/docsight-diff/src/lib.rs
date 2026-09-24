@@ -1,9 +1,9 @@
 use docsight_core::{
     Block, Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect,
-    table_to_tsv_string,
 };
 use docsight_ingest::ingest_with_password as load_doc;
 use docsight_render::{RenderRequest, RenderTarget, encode_png, render_document_with_password};
+use docsight_tables::table_to_tsv_string;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Cursor;

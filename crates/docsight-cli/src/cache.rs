@@ -120,6 +120,18 @@ impl<'a> DocumentLoader<'a> {
         })
     }
 
+    pub(crate) fn has_cache(&self) -> bool {
+        self.cache.is_some()
+    }
+
+    pub(crate) fn reporting(&self) -> Reporting {
+        self.reporting
+    }
+
+    pub(crate) fn max_document_bytes(&self) -> u64 {
+        self.max_document_bytes
+    }
+
     pub(crate) fn open_source(
         &self,
         path: impl AsRef<Path>,
@@ -157,6 +169,19 @@ impl<'a> DocumentLoader<'a> {
             }
             Some(LoaderCache::Handoff(handoff)) => handoff.load(source, ingest),
         }
+    }
+}
+
+pub(crate) fn request_scoped_loader<'a>(
+    password: &'a [u8],
+    reporting: Reporting,
+    max_document_bytes: u64,
+) -> DocumentLoader<'a> {
+    DocumentLoader {
+        password,
+        cache: None,
+        reporting,
+        max_document_bytes,
     }
 }
 
