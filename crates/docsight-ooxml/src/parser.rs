@@ -134,8 +134,9 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         parts: &header_footer_contents,
         even_and_odd_headers: even_and_odd_headers(parts.settings.as_deref())?,
     };
-    let styles = parse_styles(parts.styles.as_deref())?;
-    let paragraph_defaults = parse_paragraph_defaults(parts.styles.as_deref())?;
+    let styles_document = parts.styles.as_deref().map(parse_xml).transpose()?;
+    let styles = parse_styles(styles_document.as_ref())?;
+    let paragraph_defaults = parse_paragraph_defaults(styles_document.as_ref())?;
     let numbering = parse_numbering(parts.numbering.as_deref())?;
     let xml = parse_xml(&parts.document)?;
     let body = xml
@@ -280,9 +281,8 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         ));
     }
 
-    let styles_root = parts.styles.as_deref().map(parse_xml).transpose()?;
     let rounded_measures = rounded_twips_measures(xml.root())
-        + styles_root
+        + styles_document
             .as_ref()
             .map_or(0, |styles| rounded_twips_measures(styles.root()));
     if rounded_measures > 0 {
@@ -595,6 +595,64 @@ fn parse_relationships(
     Ok(map)
 }
 
+struct DrawingFacts {
+    alt_text: Option<String>,
+    embedded_image: bool,
+    embed: Option<String>,
+    shape_type: Option<String>,
+    width: Option<String>,
+    height: Option<String>,
+}
+
+fn drawing_facts(drawing: Node<'_, '_>) -> DrawingFacts {
+    let alt_text = drawing
+        .descendants()
+        .find(|node| node.tag_name().name() == "docPr")
+        .and_then(|doc_pr| {
+            doc_pr
+                .attribute("descr")
+                .or_else(|| doc_pr.attribute("title"))
+                .or_else(|| doc_pr.attribute("name"))
+                .map(str::to_owned)
+        });
+    let blip = drawing.descendants().find(|node| {
+        node.tag_name().name() == "blip"
+            && node
+                .attribute((R_NS, "embed"))
+                .or_else(|| node.attribute("r:embed"))
+                .is_some()
+    });
+    let embed = blip.and_then(|node| {
+        node.attribute((R_NS, "embed"))
+            .or_else(|| node.attribute("r:embed"))
+            .map(str::to_owned)
+    });
+    let shape_type = drawing.descendants().find_map(|node| {
+        if node.tag_name().name() == "prstGeom" {
+            node.attribute("prst").map(str::to_owned)
+        } else {
+            None
+        }
+    });
+    let extent = drawing
+        .descendants()
+        .find(|node| node.tag_name().name() == "extent");
+    DrawingFacts {
+        alt_text,
+        embedded_image: embed.is_some(),
+        embed,
+        shape_type,
+        width: extent
+            .as_ref()
+            .and_then(|node| node.attribute("cx"))
+            .map(str::to_owned),
+        height: extent
+            .as_ref()
+            .and_then(|node| node.attribute("cy"))
+            .map(str::to_owned),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn extract_figures(
     node: Node<'_, '_>,
@@ -613,36 +671,13 @@ fn extract_figures(
     {
         *figure_index = figure_index.checked_add(1).ok_or_else(block_count_error)?;
         *reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
+        let facts = drawing_facts(drawing);
         let mut width_pt = None;
         let mut height_pt = None;
-        let mut alt_text = None;
+        let alt_text = facts.alt_text;
         let mut resource_id = None;
 
-        if let Some(doc_pr) = drawing
-            .descendants()
-            .find(|n| n.tag_name().name() == "docPr")
-        {
-            alt_text = doc_pr
-                .attribute("descr")
-                .or_else(|| doc_pr.attribute("title"))
-                .or_else(|| doc_pr.attribute("name"))
-                .map(str::to_owned);
-        }
-        let embedded_image = drawing.descendants().any(|node| {
-            node.tag_name().name() == "blip"
-                && node
-                    .attribute((R_NS, "embed"))
-                    .or_else(|| node.attribute("r:embed"))
-                    .is_some()
-        });
-        let shape_type = drawing.descendants().find_map(|node| {
-            if node.tag_name().name() == "prstGeom" {
-                node.attribute("prst").map(str::to_owned)
-            } else {
-                None
-            }
-        });
-        if !embedded_image && shape_type.as_deref() == Some("line") {
+        if !facts.embedded_image && facts.shape_type.as_deref() == Some("line") {
             let source_path = format!("/word/document.xml::shape[{figure_index}]");
             let shape_id = source.object_id("shape", &source_path);
             warnings.push(Diagnostic {
@@ -673,24 +708,13 @@ fn extract_figures(
             });
             continue;
         }
-        if let Some(extent) = drawing
-            .descendants()
-            .find(|n| n.tag_name().name() == "extent")
-        {
-            if let Some(cx) = extent.attribute("cx") {
-                width_pt = Some(emu_to_points(cx, "figure width")?);
-            }
-            if let Some(cy) = extent.attribute("cy") {
-                height_pt = Some(emu_to_points(cy, "figure height")?);
-            }
+        if let Some(cx) = facts.width.as_deref() {
+            width_pt = Some(emu_to_points(cx, "figure width")?);
         }
-        if let Some(blip) = drawing
-            .descendants()
-            .find(|n| n.tag_name().name() == "blip")
-            && let Some(embed) = blip
-                .attribute((R_NS, "embed"))
-                .or_else(|| blip.attribute("r:embed"))
-        {
+        if let Some(cy) = facts.height.as_deref() {
+            height_pt = Some(emu_to_points(cy, "figure height")?);
+        }
+        if let Some(embed) = facts.embed.as_deref() {
             let unresolved = |reason: String| {
                 Diagnostic {
                 code: "DOCX_IMAGE_UNRESOLVED".to_owned(),
@@ -1224,40 +1248,38 @@ const RUN_CONTAINERS: &[&str] = &[
     "smartTag",
 ];
 
-fn unsupported_run_elements(node: Node<'_, '_>) -> Vec<String> {
-    let mut unknown: BTreeSet<String> = BTreeSet::new();
-    for child in node.children().filter(Node::is_element) {
-        let name = child.tag_name().name();
-        if RUN_CONTAINERS.contains(&name) {
-            for grandchild in child.children().filter(Node::is_element) {
-                let inner = grandchild.tag_name().name();
-                if !KNOWN_RUN_CHILDREN.contains(&inner) {
-                    unknown.insert(format!("{name}/{inner}"));
-                }
-            }
-        } else if !KNOWN_PARAGRAPH_CHILDREN.contains(&name) {
-            unknown.insert(format!("p/{name}"));
-        }
-    }
-    if node
-        .descendants()
-        .any(|descendant| descendant.tag_name().name() == "oMath")
-    {
-        unknown.insert("oMath".to_owned());
-    }
-    unknown.into_iter().collect()
-}
-
 struct ParagraphSegments {
     texts: Vec<String>,
     leading_page_break: bool,
     trailing_page_break: bool,
 }
 
-fn paragraph_segments(node: Node<'_, '_>) -> ParagraphSegments {
+struct ParagraphFacts {
+    segments: ParagraphSegments,
+    unsupported: Vec<String>,
+}
+
+fn paragraph_facts(node: Node<'_, '_>) -> ParagraphFacts {
     let mut texts = vec![String::new()];
     let mut leading_page_break = false;
+    let mut unknown: BTreeSet<String> = BTreeSet::new();
     for descendant in node.descendants().filter(Node::is_element) {
+        let name = descendant.tag_name().name();
+        if let Some(parent) = descendant.parent() {
+            if parent == node {
+                if !KNOWN_PARAGRAPH_CHILDREN.contains(&name) {
+                    unknown.insert(format!("p/{name}"));
+                }
+            } else if parent.parent() == Some(node)
+                && RUN_CONTAINERS.contains(&parent.tag_name().name())
+                && !KNOWN_RUN_CHILDREN.contains(&name)
+            {
+                unknown.insert(format!("{}/{name}", parent.tag_name().name()));
+            }
+        }
+        if name == "oMath" {
+            unknown.insert("oMath".to_owned());
+        }
         if descendant
             .ancestors()
             .any(|ancestor| ancestor.has_tag_name((W_NS, "del")))
@@ -1274,7 +1296,7 @@ fn paragraph_segments(node: Node<'_, '_>) -> ParagraphSegments {
         }) {
             continue;
         }
-        if descendant.tag_name().name() == "fldSimple" {
+        if name == "fldSimple" {
             let is_page = descendant.attributes().any(|attribute| {
                 (attribute.name() == "instr" || attribute.name().ends_with(":instr"))
                     && attribute.value().to_uppercase().contains("PAGE")
@@ -1317,10 +1339,13 @@ fn paragraph_segments(node: Node<'_, '_>) -> ParagraphSegments {
         texts.pop();
         trailing_page_break = true;
     }
-    ParagraphSegments {
-        texts,
-        leading_page_break,
-        trailing_page_break,
+    ParagraphFacts {
+        segments: ParagraphSegments {
+            texts,
+            leading_page_break,
+            trailing_page_break,
+        },
+        unsupported: unknown.into_iter().collect(),
     }
 }
 
@@ -1616,7 +1641,8 @@ fn parse_paragraph(
     let inherited_numbering = resolve_style_numbering(style_id.as_deref(), styles)?;
     let list_reference = merge_numbering(direct_numbering, inherited_numbering);
     let list = resolve_list_marker(list_reference, numbering, warnings);
-    let segments = paragraph_segments(node);
+    let facts = paragraph_facts(node);
+    let segments = facts.segments;
     let paragraph_flags = paragraph_layout_flags(node, style_id.as_deref(), styles, defaults);
     let segment_count = segments.texts.len();
     let last_segment = segment_count.saturating_sub(1);
@@ -1675,7 +1701,7 @@ fn parse_paragraph(
 
         let id = source.object_id(prefix, &source_path);
         if segment_index == 0 {
-            warn_unsupported_run_content(node, &id, warnings);
+            warn_unsupported_run_content(&facts.unsupported, &id, warnings);
         }
 
         blocks.push(Block {
@@ -1697,11 +1723,10 @@ fn parse_paragraph(
 }
 
 fn warn_unsupported_run_content(
-    node: Node<'_, '_>,
+    unknown: &[String],
     block_id: &ObjectId,
     warnings: &mut Vec<Diagnostic>,
 ) {
-    let unknown = unsupported_run_elements(node);
     if !unknown.is_empty() {
         warnings.push(Diagnostic {
             code: "DOCX_RUN_ELEMENT_UNSUPPORTED".to_owned(),
@@ -1985,11 +2010,12 @@ fn table_cell_vertical_merge(node: Node<'_, '_>) -> Result<Option<String>, Docsi
     ))
 }
 
-fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, DocsightError> {
-    let Some(xml) = xml else {
+fn parse_styles(
+    document: Option<&XmlDocument<'_>>,
+) -> Result<BTreeMap<String, StyleDefinition>, DocsightError> {
+    let Some(document) = document else {
         return Ok(BTreeMap::new());
     };
-    let document = parse_xml(xml)?;
     let mut styles = BTreeMap::new();
     for node in document
         .descendants()
@@ -2056,11 +2082,12 @@ fn parse_styles(xml: Option<&str>) -> Result<BTreeMap<String, StyleDefinition>, 
     Ok(styles)
 }
 
-fn parse_paragraph_defaults(xml: Option<&str>) -> Result<ParagraphDefaults, DocsightError> {
-    let Some(xml) = xml else {
+fn parse_paragraph_defaults(
+    document: Option<&XmlDocument<'_>>,
+) -> Result<ParagraphDefaults, DocsightError> {
+    let Some(document) = document else {
         return Ok(ParagraphDefaults::default());
     };
-    let document = parse_xml(xml)?;
     let root = document.root_element();
     let layout_flags = child_element(root, "docDefaults")
         .and_then(|defaults| child_element(defaults, "pPrDefault"))

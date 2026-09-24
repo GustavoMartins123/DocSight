@@ -69,6 +69,7 @@ pub(crate) fn rasterize(
         scale,
         offset_x: target.x0,
         offset_y: target.y0,
+        fill_scratch: FillScratch::default(),
     };
     for command in commands {
         match command {
@@ -146,6 +147,24 @@ fn transformed_glyph_contours(
         .collect()
 }
 
+struct ScanEdge {
+    start: Point,
+    end: Point,
+    min_y: f32,
+    max_y: f32,
+    ordinal: usize,
+}
+
+#[derive(Default)]
+struct FillScratch {
+    edges: Vec<ScanEdge>,
+    active_edges: Vec<usize>,
+    next_edge: usize,
+    crossings: Vec<(f32, i32, usize)>,
+    spans: Vec<(f32, f32)>,
+    coverage: Vec<u8>,
+}
+
 struct Canvas {
     width: u32,
     height: u32,
@@ -153,6 +172,7 @@ struct Canvas {
     scale: f32,
     offset_x: f32,
     offset_y: f32,
+    fill_scratch: FillScratch,
 }
 
 impl Canvas {
@@ -466,40 +486,99 @@ impl Canvas {
         if raster_width == 0 || raster_height == 0 {
             return;
         }
-        let mut coverage = vec![0u8; raster_width.saturating_mul(raster_height)];
-        for y in y0..y1 {
-            for sample_y in [0.125, 0.375, 0.625, 0.875] {
-                let scan_y = (y as f32 + sample_y) / self.scale + self.offset_y;
-                let spans = scanline_spans(polygons, scan_y, even_odd);
-                if spans.is_empty() {
-                    continue;
-                }
-                let mut span_index = 0usize;
-                for x in x0..x1 {
-                    for sample_x in [0.125, 0.375, 0.625, 0.875] {
-                        let point = self.sample_point(x, y, sample_x, sample_y);
-                        while span_index < spans.len() && point.x >= spans[span_index].1 {
-                            span_index += 1;
+        let coverage_len = raster_width.saturating_mul(raster_height);
+        self.fill_scratch.coverage.clear();
+        self.fill_scratch.coverage.resize(coverage_len, 0);
+        self.fill_scratch.edges.clear();
+        self.fill_scratch.edges.clear();
+        for (ordinal, edge) in polygons
+            .iter()
+            .flat_map(|polygon| polygon.windows(2))
+            .enumerate()
+        {
+            self.fill_scratch.edges.push(ScanEdge {
+                start: edge[0],
+                end: edge[1],
+                min_y: edge[0].y.min(edge[1].y),
+                max_y: edge[0].y.max(edge[1].y),
+                ordinal,
+            });
+        }
+        self.fill_scratch.edges.sort_by(|left, right| {
+            left.min_y
+                .total_cmp(&right.min_y)
+                .then_with(|| left.ordinal.cmp(&right.ordinal))
+        });
+        self.fill_scratch.active_edges.clear();
+        self.fill_scratch.next_edge = 0;
+        let scale = self.scale;
+        let offset_x = self.offset_x;
+        let offset_y = self.offset_y;
+        {
+            let FillScratch {
+                edges,
+                active_edges,
+                next_edge,
+                crossings,
+                spans,
+                coverage,
+            } = &mut self.fill_scratch;
+            for y in y0..y1 {
+                for sample_y in [0.125, 0.375, 0.625, 0.875] {
+                    let scan_y = (y as f32 + sample_y) / scale + offset_y;
+                    while *next_edge < edges.len()
+                        && (edges[*next_edge].min_y.is_nan() || edges[*next_edge].min_y <= scan_y)
+                    {
+                        if !edges[*next_edge].min_y.is_nan() {
+                            active_edges.push(*next_edge);
                         }
-                        if span_index == spans.len() {
-                            break;
-                        }
-                        if point.x >= spans[span_index].0
-                            && clips.iter().all(|clip| clip_contains(clip, point))
-                        {
-                            let local_x = (x - x0) as usize;
-                            let local_y = (y - y0) as usize;
-                            let index = local_y * raster_width + local_x;
-                            coverage[index] = coverage[index].saturating_add(1);
+                        *next_edge += 1;
+                    }
+                    active_edges.retain(|index| edges[*index].max_y > scan_y);
+                    scanline_spans_into(edges, active_edges, scan_y, even_odd, crossings, spans);
+                    if spans.is_empty() {
+                        continue;
+                    }
+                    let mut span_index = 0usize;
+                    for x in x0..x1 {
+                        for sample_x in [0.125, 0.375, 0.625, 0.875] {
+                            let point = sample_point_values(
+                                x, y, sample_x, sample_y, scale, offset_x, offset_y,
+                            );
+                            while span_index < spans.len() && point.x >= spans[span_index].1 {
+                                span_index += 1;
+                            }
+                            if span_index == spans.len() {
+                                break;
+                            }
+                            if point.x >= spans[span_index].0
+                                && clips.iter().all(|clip| clip_contains(clip, point))
+                            {
+                                let local_x = (x - x0) as usize;
+                                let local_y = (y - y0) as usize;
+                                let index = local_y * raster_width + local_x;
+                                coverage[index] = coverage[index].saturating_add(1);
+                            }
                         }
                     }
                 }
             }
         }
-        for (local_y, row) in coverage.chunks_exact(raster_width).enumerate() {
+        let width = self.width;
+        let height = self.height;
+        let pixels = &mut self.pixels;
+        for (local_y, row) in self
+            .fill_scratch
+            .coverage
+            .chunks_exact(raster_width)
+            .enumerate()
+        {
             for (local_x, count) in row.iter().enumerate() {
                 if *count != 0 {
-                    self.blend_pixel(
+                    blend_pixel_at(
+                        pixels,
+                        width,
+                        height,
                         x0 + local_x as i32,
                         y0 + local_y as i32,
                         paint.color,
@@ -724,29 +803,66 @@ impl Canvas {
     }
 
     fn sample_point(&self, x: i32, y: i32, sample_x: f32, sample_y: f32) -> Point {
-        Point {
-            x: (x as f32 + sample_x) / self.scale + self.offset_x,
-            y: (y as f32 + sample_y) / self.scale + self.offset_y,
-        }
+        sample_point_values(
+            x,
+            y,
+            sample_x,
+            sample_y,
+            self.scale,
+            self.offset_x,
+            self.offset_y,
+        )
     }
 
     fn blend_pixel(&mut self, x: i32, y: i32, color: Color, coverage: f32) {
-        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
-            return;
-        }
-        let index = (y as usize * self.width as usize + x as usize) * 3;
-        let coverage = coverage.clamp(0.0, 1.0);
-        let inverse = 1.0 - coverage;
-        self.pixels[index] = (f32::from(color.red) * coverage
-            + f32::from(self.pixels[index]) * inverse)
-            .round() as u8;
-        self.pixels[index + 1] = (f32::from(color.green) * coverage
-            + f32::from(self.pixels[index + 1]) * inverse)
-            .round() as u8;
-        self.pixels[index + 2] = (f32::from(color.blue) * coverage
-            + f32::from(self.pixels[index + 2]) * inverse)
-            .round() as u8;
+        blend_pixel_at(
+            &mut self.pixels,
+            self.width,
+            self.height,
+            x,
+            y,
+            color,
+            coverage,
+        );
     }
+}
+
+fn sample_point_values(
+    x: i32,
+    y: i32,
+    sample_x: f32,
+    sample_y: f32,
+    scale: f32,
+    offset_x: f32,
+    offset_y: f32,
+) -> Point {
+    Point {
+        x: (x as f32 + sample_x) / scale + offset_x,
+        y: (y as f32 + sample_y) / scale + offset_y,
+    }
+}
+
+fn blend_pixel_at(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    color: Color,
+    coverage: f32,
+) {
+    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+        return;
+    }
+    let index = (y as usize * width as usize + x as usize) * 3;
+    let coverage = coverage.clamp(0.0, 1.0);
+    let inverse = 1.0 - coverage;
+    pixels[index] =
+        (f32::from(color.red) * coverage + f32::from(pixels[index]) * inverse).round() as u8;
+    pixels[index + 1] =
+        (f32::from(color.green) * coverage + f32::from(pixels[index + 1]) * inverse).round() as u8;
+    pixels[index + 2] =
+        (f32::from(color.blue) * coverage + f32::from(pixels[index + 2]) * inverse).round() as u8;
 }
 
 fn clip_contains(clip: &ClipRegion, point: Point) -> bool {
@@ -766,11 +882,19 @@ fn clip_contains(clip: &ClipRegion, point: Point) -> bool {
     }
 }
 
-fn scanline_spans(polygons: &[Vec<Point>], y: f32, even_odd: bool) -> Vec<(f32, f32)> {
-    let mut crossings = Vec::new();
-    for edge in polygons.iter().flat_map(|polygon| polygon.windows(2)) {
-        let start = edge[0];
-        let end = edge[1];
+fn scanline_spans_into(
+    edges: &[ScanEdge],
+    active_edges: &[usize],
+    y: f32,
+    even_odd: bool,
+    crossings: &mut Vec<(f32, i32, usize)>,
+    spans: &mut Vec<(f32, f32)>,
+) {
+    crossings.clear();
+    for &edge_index in active_edges {
+        let edge = &edges[edge_index];
+        let start = edge.start;
+        let end = edge.end;
         let delta = if start.y <= y && end.y > y {
             1
         } else if start.y > y && end.y <= y {
@@ -779,10 +903,15 @@ fn scanline_spans(polygons: &[Vec<Point>], y: f32, even_odd: bool) -> Vec<(f32, 
             continue;
         };
         let amount = (y - start.y) / (end.y - start.y);
-        crossings.push((start.x + amount * (end.x - start.x), delta));
+        crossings.push((start.x + amount * (end.x - start.x), delta, edge.ordinal));
     }
-    crossings.sort_by(|first, second| first.0.total_cmp(&second.0));
-    let mut spans = Vec::new();
+    crossings.sort_by(|first, second| {
+        first
+            .0
+            .total_cmp(&second.0)
+            .then_with(|| first.2.cmp(&second.2))
+    });
+    spans.clear();
     let mut winding = 0i32;
     let mut parity = false;
     let mut previous = None;
@@ -809,7 +938,6 @@ fn scanline_spans(polygons: &[Vec<Point>], y: f32, even_odd: bool) -> Vec<(f32, 
         }
         previous = Some(x);
     }
-    spans
 }
 
 #[derive(Clone, Debug)]
@@ -1587,6 +1715,7 @@ mod tests {
             scale: 1.75,
             offset_x: 3.3,
             offset_y: -2.1,
+            fill_scratch: FillScratch::default(),
         };
         let point = |x: f32, y: f32| Point { x, y };
         let zigzag = vec![
@@ -1656,6 +1785,7 @@ mod tests {
             scale: 1.0,
             offset_x: 0.0,
             offset_y: 0.0,
+            fill_scratch: FillScratch::default(),
         };
         let glyph = GlyphOutline {
             contours: vec![vec![
@@ -1695,6 +1825,7 @@ mod tests {
             scale: 1.0,
             offset_x: 0.0,
             offset_y: 0.0,
+            fill_scratch: FillScratch::default(),
         };
         canvas.fill_path(
             &[

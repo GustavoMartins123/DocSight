@@ -1,6 +1,6 @@
 use crate::entry::{
     EntryProducer, EntryRejection, decode_entry, decode_untrusted_entry, encode_entry,
-    probe_header, verify_entry, verify_entry_integrity,
+    probe_header, verify_and_decode_untrusted_entry, verify_entry, verify_entry_integrity,
 };
 use crate::key::{CacheKey, EngineIdentity};
 use docsight_core::{DocsightError, Document, DocumentSource};
@@ -219,15 +219,11 @@ impl DocumentCache {
     }
 
     pub fn get_entry(&self, key: &CacheKey) -> Result<EntryLookup, DocsightError> {
-        Ok(
-            match self.lookup(key, &|bytes| {
-                verify_entry(bytes, key).map(|_| bytes.to_vec())
-            })? {
-                Found::Hit(bytes) => EntryLookup::Hit(bytes),
-                Found::Miss => EntryLookup::Miss,
-                Found::Quarantined(record) => EntryLookup::Quarantined(record),
-            },
-        )
+        Ok(match self.lookup_entry(key)? {
+            Found::Hit(bytes) => EntryLookup::Hit(bytes),
+            Found::Miss => EntryLookup::Miss,
+            Found::Quarantined(record) => EntryLookup::Quarantined(record),
+        })
     }
 
     pub fn revalidate(&self, key: &CacheKey) -> Result<Option<QuarantineRecord>, DocsightError> {
@@ -423,6 +419,48 @@ impl DocumentCache {
         })
     }
 
+    fn lookup_entry(&self, key: &CacheKey) -> Result<Found<Vec<u8>>, DocsightError> {
+        self.require_engine(key)?;
+        let digest = key.digest()?;
+        let path = self.entry_path(&digest);
+        for _ in 0..MAX_LOOKUP_ATTEMPTS {
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(Found::Miss);
+                }
+                Err(source) => return Err(DocsightError::Io { path, source }),
+            };
+            let outcome = if !metadata.file_type().is_file() {
+                self.quarantine_file(&path, &digest, Evidence::NotRegularFile)?
+            } else if metadata.len() > self.max_bytes {
+                self.quarantine_file(&path, &digest, Evidence::Oversized)?
+            } else {
+                let Some(bytes) = read_bounded(&path, self.max_bytes)? else {
+                    return Ok(Found::Miss);
+                };
+                match verify_entry(&bytes, key) {
+                    Ok(_) => {
+                        touch(&path)?;
+                        return Ok(Found::Hit(bytes));
+                    }
+                    Err(rejection) => {
+                        self.quarantine_file(&path, &digest, Evidence::Bytes(&bytes, rejection))?
+                    }
+                }
+            };
+            if let Quarantine::Moved(record) = outcome {
+                return Ok(Found::Quarantined(record));
+            }
+        }
+        Err(DocsightError::BackendFailure {
+            backend: "docsight-cache".to_owned(),
+            message: format!(
+                "cache entry {digest} changed {MAX_LOOKUP_ATTEMPTS} times while it was being validated"
+            ),
+        })
+    }
+
     fn require_engine(&self, key: &CacheKey) -> Result<(), DocsightError> {
         if key.engine == self.engine && key.is_well_formed() {
             return Ok(());
@@ -453,7 +491,7 @@ impl DocumentCache {
             let rejection = match verify_entry_integrity(&bytes) {
                 Ok((key, _)) if key.digest()? != digest => Evidence::Mismatched(&bytes),
                 Ok((key, _)) if key.engine != self.engine => return Ok(Inspection::OtherEngine),
-                Ok((key, _)) => match decode_untrusted_entry(&bytes, &key) {
+                Ok((key, _)) => match verify_and_decode_untrusted_entry(&bytes, &key) {
                     Ok(_) => return Ok(Inspection::Current),
                     Err(rejection) => Evidence::Bytes(&bytes, rejection),
                 },
@@ -584,9 +622,12 @@ impl DocumentCache {
             .into_iter()
             .filter(|file| is_entry_name(&file.name))
             .collect();
-        sort_oldest_first(&mut files);
         let mut total_bytes: u64 = files.iter().map(|file| file.bytes).sum();
         let mut total_entries = files.len() as u64;
+        if total_bytes <= self.max_bytes && total_entries <= self.max_entries {
+            return Ok(0);
+        }
+        sort_oldest_first(&mut files);
         let mut evicted = 0;
         for file in files {
             if total_bytes <= self.max_bytes && total_entries <= self.max_entries {
