@@ -3,7 +3,7 @@ use docsight_core::{
     TableBlock, TableCell,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -186,15 +186,103 @@ pub fn detect_tables(
 
 const RULING_CONNECT_GAP_PT: f32 = 6.0;
 
+const TABLE_ROW_INDEX_CELL_SIZE: f32 = 32.0;
+const MAX_TABLE_ROW_INDEX_CELLS: usize = 4096;
+
+struct SpanRowIndex {
+    buckets: BTreeMap<i64, Vec<usize>>,
+    wide: Vec<usize>,
+    span_count: usize,
+}
+
+impl SpanRowIndex {
+    fn new(spans: &[TextSpanItem]) -> Self {
+        let mut buckets: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+        let mut wide = Vec::new();
+        for (index, span) in spans.iter().enumerate() {
+            let center_y = (span.bbox.y0 + span.bbox.y1) * 0.5;
+            if center_y.is_finite() {
+                let bucket = (center_y / TABLE_ROW_INDEX_CELL_SIZE).floor() as i64;
+                buckets.entry(bucket).or_default().push(index);
+            } else {
+                wide.push(index);
+            }
+        }
+        Self {
+            buckets,
+            wide,
+            span_count: spans.len(),
+        }
+    }
+
+    fn candidates(&self, top: f32, bottom: f32) -> Vec<usize> {
+        if !top.is_finite() || !bottom.is_finite() {
+            return (0..self.span_count).collect();
+        }
+        let minimum = (top / TABLE_ROW_INDEX_CELL_SIZE).floor() as i64;
+        let maximum = (bottom / TABLE_ROW_INDEX_CELL_SIZE).floor() as i64;
+        let width = maximum.saturating_sub(minimum).saturating_add(1);
+        if width > MAX_TABLE_ROW_INDEX_CELLS as i64 {
+            return (0..self.span_count).collect();
+        }
+        let mut candidates = self.wide.clone();
+        for bucket in minimum..=maximum {
+            if let Some(indices) = self.buckets.get(&bucket) {
+                candidates.extend(indices.iter().copied());
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+    }
+}
+
 fn detect_ruled_tables(
     page: u32,
     spans: &[TextSpanItem],
     rulings: &[RulingSegment],
 ) -> Vec<InferredTable> {
+    let span_index = SpanRowIndex::new(spans);
     segment_rulings(rulings)
         .into_iter()
-        .filter_map(|component| build_ruled_table(page, spans, &component))
+        .filter_map(|component| build_ruled_table(page, spans, &span_index, &component))
         .collect()
+}
+
+const RULING_INDEX_CELL_SIZE: f32 = 32.0;
+const MAX_RULING_INDEX_CELLS: usize = 4096;
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+struct RulingKey {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
+
+impl From<&RulingSegment> for RulingKey {
+    fn from(ruling: &RulingSegment) -> Self {
+        Self {
+            x0: ruling.x0.to_bits(),
+            y0: ruling.y0.to_bits(),
+            x1: ruling.x1.to_bits(),
+            y1: ruling.y1.to_bits(),
+        }
+    }
+}
+
+fn ruling_is_finite(ruling: &RulingSegment) -> bool {
+    [ruling.x0, ruling.y0, ruling.x1, ruling.y1]
+        .iter()
+        .all(|value| value.is_finite())
+}
+
+fn ruling_cell_coordinate(value: f32) -> i64 {
+    if value.is_finite() {
+        (value / RULING_INDEX_CELL_SIZE).floor() as i64
+    } else {
+        0
+    }
 }
 
 fn segment_rulings(rulings: &[RulingSegment]) -> Vec<Vec<RulingSegment>> {
@@ -215,13 +303,89 @@ fn segment_rulings(rulings: &[RulingSegment]) -> Vec<Vec<RulingSegment>> {
             parent[left_root] = right_root;
         }
     }
-    for left in 0..count {
-        for right in (left + 1)..count {
-            if rulings_near(&rulings[left], &rulings[right]) {
-                union(&mut parent, left, right);
+
+    let mut groups: BTreeMap<RulingKey, Vec<usize>> = BTreeMap::new();
+    let mut representatives = Vec::with_capacity(count);
+    for (index, ruling) in rulings.iter().enumerate() {
+        if ruling_is_finite(ruling) {
+            groups.entry(ruling.into()).or_default().push(index);
+        } else {
+            representatives.push(index);
+        }
+    }
+    for indices in groups.values_mut() {
+        indices.sort_unstable();
+        let representative = indices[0];
+        for &index in indices.iter().skip(1) {
+            union(&mut parent, representative, index);
+        }
+        representatives.push(representative);
+    }
+    representatives.sort_unstable();
+
+    let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+    let mut wide = Vec::new();
+    for &representative in &representatives {
+        let ruling = &rulings[representative];
+        if !ruling_is_finite(ruling) {
+            wide.push(representative);
+            continue;
+        }
+        let min_x = ruling.x0.min(ruling.x1) - RULING_CONNECT_GAP_PT;
+        let max_x = ruling.x0.max(ruling.x1) + RULING_CONNECT_GAP_PT;
+        let min_y = ruling.y0.min(ruling.y1) - RULING_CONNECT_GAP_PT;
+        let max_y = ruling.y0.max(ruling.y1) + RULING_CONNECT_GAP_PT;
+        let min_cell_x = ruling_cell_coordinate(min_x);
+        let max_cell_x = ruling_cell_coordinate(max_x);
+        let min_cell_y = ruling_cell_coordinate(min_y);
+        let max_cell_y = ruling_cell_coordinate(max_y);
+        let cell_width = max_cell_x.saturating_sub(min_cell_x).saturating_add(1);
+        let cell_height = max_cell_y.saturating_sub(min_cell_y).saturating_add(1);
+        let cell_count = cell_width.saturating_mul(cell_height);
+        if cell_count <= MAX_RULING_INDEX_CELLS as i64 {
+            for cell_x in min_cell_x..=max_cell_x {
+                for cell_y in min_cell_y..=max_cell_y {
+                    grid.entry((cell_x, cell_y))
+                        .or_default()
+                        .push(representative);
+                }
+            }
+        } else {
+            wide.push(representative);
+        }
+    }
+
+    let mut pairs = BTreeSet::new();
+    for indices in grid.values() {
+        for (offset, &left) in indices.iter().enumerate() {
+            for &right in indices.iter().skip(offset + 1) {
+                let (left, right) = if left < right {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                if left != right && rulings_near(&rulings[left], &rulings[right]) {
+                    pairs.insert((left, right));
+                }
             }
         }
     }
+    for &left in &wide {
+        for &right in &representatives {
+            if left != right && rulings_near(&rulings[left], &rulings[right]) {
+                let pair = if left < right {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                pairs.insert(pair);
+            }
+        }
+    }
+    for (left, right) in pairs {
+        union(&mut parent, left, right);
+    }
+
     let mut components: BTreeMap<usize, Vec<RulingSegment>> = BTreeMap::new();
     for (index, ruling) in rulings.iter().enumerate() {
         let root = find(&mut parent, index);
@@ -260,6 +424,7 @@ fn rulings_near(left: &RulingSegment, right: &RulingSegment) -> bool {
 fn build_ruled_table(
     page: u32,
     spans: &[TextSpanItem],
+    span_index: &SpanRowIndex,
     component: &[RulingSegment],
 ) -> Option<InferredTable> {
     let mut h_lines: Vec<(f32, f32, f32)> = Vec::new();
@@ -346,8 +511,10 @@ fn build_ruled_table(
 
             let cell_bbox = Rect::new(col_left, row_top, col_right, row_bot).ok();
 
-            let mut cell_spans: Vec<&TextSpanItem> = spans
-                .iter()
+            let mut cell_spans: Vec<&TextSpanItem> = span_index
+                .candidates(row_top, row_bot)
+                .into_iter()
+                .filter_map(|index| spans.get(index))
                 .filter(|s| {
                     let cx = (s.bbox.x0 + s.bbox.x1) * 0.5;
                     let cy = (s.bbox.y0 + s.bbox.y1) * 0.5;
@@ -562,20 +729,14 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
         };
 
         let mut cells = Vec::new();
+        let mut column_cells = vec![0_usize; col_lefts.len()];
+        let mut column_empty = vec![0_usize; col_lefts.len()];
         for (r_idx, line) in run.iter().enumerate() {
             let row_idx = r_idx as u32;
             let mut columns: Vec<Vec<&TextSpanItem>> =
                 col_lefts.iter().map(|_| Vec::new()).collect();
             for span in &line.spans {
-                let mut best = 0_usize;
-                let mut best_distance = f32::INFINITY;
-                for (c_idx, col_x) in col_lefts.iter().enumerate() {
-                    let distance = (span.bbox.x0 - *col_x).abs();
-                    if distance < best_distance {
-                        best_distance = distance;
-                        best = c_idx;
-                    }
-                }
+                let best = nearest_column_index(&col_lefts, span.bbox.x0);
                 columns[best].push(span);
             }
             for (c_idx, cell_spans) in columns.iter().enumerate() {
@@ -614,6 +775,7 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
                     None
                 };
 
+                let cell_empty = text.trim().is_empty();
                 cells.push(InferredTableCell {
                     row: row_idx,
                     column: col_idx,
@@ -622,6 +784,10 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
                     bbox: cell_bbox,
                     text,
                 });
+                column_cells[c_idx] += 1;
+                if cell_empty {
+                    column_empty[c_idx] += 1;
+                }
             }
         }
 
@@ -646,15 +812,11 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
         let total_cells = (num_rows * num_cols) as usize;
         let empty_fraction = 1.0 - non_empty as f32 / total_cells as f32;
         let mut max_column_empty_fraction = 0.0_f32;
-        for c_idx in 0..num_cols {
-            let column_cells = cells.iter().filter(|cell| cell.column == c_idx).count();
-            let column_empty = cells
-                .iter()
-                .filter(|cell| cell.column == c_idx && cell.text.trim().is_empty())
-                .count();
-            if column_cells > 0 {
+        for c_idx in 0..num_cols as usize {
+            let count = column_cells[c_idx];
+            if count > 0 {
                 max_column_empty_fraction =
-                    max_column_empty_fraction.max(column_empty as f32 / column_cells as f32);
+                    max_column_empty_fraction.max(column_empty[c_idx] as f32 / count as f32);
             }
         }
         let mut confidence = base_confidence;
@@ -682,6 +844,26 @@ fn detect_alignment_tables(page: u32, spans: &[(usize, TextSpanItem)]) -> Vec<In
     }
 
     tables
+}
+
+fn nearest_column_index(columns: &[f32], value: f32) -> usize {
+    let insertion = columns.partition_point(|column| *column < value);
+    let mut best = 0;
+    let mut best_distance = f32::INFINITY;
+    for index in [
+        insertion.checked_sub(1),
+        (insertion < columns.len()).then_some(insertion),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let distance = (value - columns[index]).abs();
+        if distance < best_distance {
+            best_distance = distance;
+            best = index;
+        }
+    }
+    best
 }
 
 fn merge_contiguous_line_spans(spans: &[TextSpanItem]) -> Vec<TextSpanItem> {

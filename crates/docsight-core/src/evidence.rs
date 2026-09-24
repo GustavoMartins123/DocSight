@@ -1,9 +1,9 @@
 use crate::{
-    Block, BlockKind, DocsightError, Document, DocumentFormat, DocumentObject, DocumentSource,
-    ObjectId, OverlayKind, Rect,
+    Block, BlockKind, Diagnostic, DocsightError, Document, DocumentFormat, DocumentObject,
+    DocumentSource, ObjectId, OverlayKind, Rect,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const TEXT_LOSS_CODES: &[&str] = &["DOCX_RUN_ELEMENT_UNSUPPORTED"];
 
@@ -162,7 +162,133 @@ pub struct FidelityInputs<'a> {
     pub single_block_confidence: Option<f32>,
 }
 
+struct WarningIndex<'a> {
+    warnings: Vec<&'a Diagnostic>,
+    by_object: BTreeMap<ObjectId, Vec<usize>>,
+    by_page: BTreeMap<u32, Vec<usize>>,
+    objectless: Vec<usize>,
+    text_loss_objects: BTreeSet<&'a ObjectId>,
+    geometry_warning_objects: BTreeSet<&'a ObjectId>,
+    resource_loss_objects: BTreeSet<&'a ObjectId>,
+    resource_reason_codes: BTreeSet<String>,
+}
+
+impl<'a> WarningIndex<'a> {
+    fn new(doc: &'a Document) -> Self {
+        let mut by_object: BTreeMap<ObjectId, Vec<usize>> = BTreeMap::new();
+        let mut by_page: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        let mut objectless = Vec::new();
+        let mut text_loss_objects = BTreeSet::new();
+        let mut geometry_warning_objects = BTreeSet::new();
+        let mut resource_loss_objects = BTreeSet::new();
+        let mut resource_reason_codes = BTreeSet::new();
+        for (index, warning) in doc.warnings.iter().enumerate() {
+            if let Some(object) = &warning.object {
+                by_object.entry(object.clone()).or_default().push(index);
+                if TEXT_LOSS_CODES.contains(&warning.code.as_str()) {
+                    text_loss_objects.insert(object);
+                }
+                if GEOMETRY_WARNING_CODES.contains(&warning.code.as_str()) {
+                    geometry_warning_objects.insert(object);
+                }
+                if RESOURCE_LOSS_CODES.contains(&warning.code.as_str()) {
+                    resource_loss_objects.insert(object);
+                }
+            } else {
+                objectless.push(index);
+            }
+            if let Some(page) = warning.page {
+                by_page.entry(page).or_default().push(index);
+            }
+            if RESOURCE_LOSS_CODES.contains(&warning.code.as_str()) {
+                resource_reason_codes.insert(warning.code.clone());
+            }
+        }
+        Self {
+            warnings: doc.warnings.iter().collect(),
+            by_object,
+            by_page,
+            objectless,
+            text_loss_objects,
+            geometry_warning_objects,
+            resource_loss_objects,
+            resource_reason_codes,
+        }
+    }
+
+    fn object_warnings(&self, object: &ObjectId) -> impl Iterator<Item = &Diagnostic> + '_ {
+        self.by_object
+            .get(object)
+            .into_iter()
+            .flatten()
+            .copied()
+            .map(|index| self.warnings[index])
+    }
+
+    fn relevant(
+        &self,
+        block_ids: &BTreeSet<&ObjectId>,
+        section_ids: &BTreeSet<&ObjectId>,
+        pages: &BTreeSet<u32>,
+    ) -> Vec<&Diagnostic> {
+        let mut indexes = BTreeSet::new();
+        indexes.extend(self.objectless.iter().copied());
+        for object in block_ids.iter().chain(section_ids.iter()) {
+            if let Some(entries) = self.by_object.get(*object) {
+                indexes.extend(entries.iter().copied());
+            }
+        }
+        for page in pages {
+            if let Some(entries) = self.by_page.get(page) {
+                indexes.extend(entries.iter().copied());
+            }
+        }
+        indexes
+            .into_iter()
+            .filter_map(|index| self.warnings.get(index).copied())
+            .collect()
+    }
+}
+
+struct FidelityContext<'a> {
+    warnings: WarningIndex<'a>,
+    section_by_block: BTreeMap<ObjectId, ObjectId>,
+}
+
+impl<'a> FidelityContext<'a> {
+    fn new(doc: &'a Document) -> Self {
+        let mut section_by_block = BTreeMap::new();
+        if let Ok(ranges) = doc.section_block_ranges() {
+            for (section, range) in doc.sections.iter().zip(ranges) {
+                for block in &doc.blocks[range] {
+                    section_by_block.insert(block.id.clone(), section.id.clone());
+                }
+            }
+        }
+        Self {
+            warnings: WarningIndex::new(doc),
+            section_by_block,
+        }
+    }
+
+    fn section_ids(&self, blocks: &[&Block]) -> BTreeSet<&ObjectId> {
+        blocks
+            .iter()
+            .filter_map(|block| self.section_by_block.get(&block.id))
+            .collect()
+    }
+}
+
 fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityProfile {
+    let context = FidelityContext::new(doc);
+    measured_fidelity_with_context(doc, inputs, &context)
+}
+
+fn measured_fidelity_with_context(
+    doc: &Document,
+    inputs: &FidelityInputs<'_>,
+    context: &FidelityContext<'_>,
+) -> FidelityProfile {
     let total = inputs.blocks.len();
     let block_ids: BTreeSet<&ObjectId> = inputs.blocks.iter().map(|block| &block.id).collect();
     let pages: BTreeSet<u32> = inputs
@@ -170,39 +296,11 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
         .iter()
         .flat_map(|block| block.fragments().map(|(page, _)| page))
         .collect();
-    let section_ids: BTreeSet<&ObjectId> = doc
-        .section_block_ranges()
-        .ok()
-        .into_iter()
-        .flatten()
-        .zip(&doc.sections)
-        .filter(|(range, _)| {
-            doc.blocks[range.clone()]
-                .iter()
-                .any(|block| block_ids.contains(&block.id))
-        })
-        .map(|(_, section)| &section.id)
-        .collect();
-    let relevant_warnings: Vec<_> = doc
-        .warnings
-        .iter()
-        .filter(|warning| {
-            warning
-                .object
-                .as_ref()
-                .is_none_or(|object| block_ids.contains(object) || section_ids.contains(object))
-                || warning.page.is_some_and(|page| pages.contains(&page))
-        })
-        .collect();
+    let section_ids = context.section_ids(inputs.blocks);
+    let relevant_warnings = context.warnings.relevant(&block_ids, &section_ids, &pages);
     let reasons: BTreeSet<String> = relevant_warnings
         .iter()
         .map(|warning| warning.code.clone())
-        .collect();
-    let text_loss_objects: BTreeSet<&ObjectId> = doc
-        .warnings
-        .iter()
-        .filter(|warning| TEXT_LOSS_CODES.contains(&warning.code.as_str()))
-        .filter_map(|warning| warning.object.as_ref())
         .collect();
     let text_blocks_total = inputs
         .blocks
@@ -221,7 +319,7 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
             matches!(
                 block.kind,
                 BlockKind::Paragraph | BlockKind::Heading | BlockKind::ListItem | BlockKind::Note
-            ) && text_loss_objects.contains(&block.id)
+            ) && context.warnings.text_loss_objects.contains(&block.id)
         })
         .count();
     let text = if GLOBAL_TEXT_LOSS_CODES
@@ -271,16 +369,15 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
     } else {
         placed as f32 / total as f32
     };
-    let geometry_warning_objects: BTreeSet<&ObjectId> = doc
-        .warnings
-        .iter()
-        .filter(|warning| GEOMETRY_WARNING_CODES.contains(&warning.code.as_str()))
-        .filter_map(|warning| warning.object.as_ref())
-        .collect();
     let geometry_affected = inputs
         .blocks
         .iter()
-        .filter(|block| geometry_warning_objects.contains(&block.id))
+        .filter(|block| {
+            context
+                .warnings
+                .geometry_warning_objects
+                .contains(&block.id)
+        })
         .count();
     let geometry_exact_ratio = if total == 0 {
         1.0
@@ -306,10 +403,10 @@ fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityPro
         .iter()
         .filter(|block| block.kind == BlockKind::Figure)
         .filter(|block| {
-            doc.warnings.iter().any(|warning| {
-                warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"
-                    && warning.object.as_ref() == Some(&block.id)
-            })
+            context
+                .warnings
+                .object_warnings(&block.id)
+                .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
         })
         .count();
     let placeholder_share = if figures_total == 0 {
@@ -598,24 +695,39 @@ struct CoverageAccumulator<'a> {
     reason_codes: &'a mut BTreeSet<String>,
 }
 
-fn page_coverage(
-    doc: &Document,
+struct PageCoverageInput<'a> {
+    doc: &'a Document,
+    context: &'a FidelityContext<'a>,
     page: u32,
-    page_blocks: &[&Block],
+    page_blocks: &'a [&'a Block],
     glyph_coverage: f32,
     include_regions: bool,
     is_global: bool,
+}
+
+fn page_coverage(
+    input: PageCoverageInput<'_>,
     accumulator: &mut CoverageAccumulator<'_>,
 ) -> PageCoverage {
+    let PageCoverageInput {
+        doc,
+        context,
+        page,
+        page_blocks,
+        glyph_coverage,
+        include_regions,
+        is_global,
+    } = input;
     let affected_ids = &mut *accumulator.affected_ids;
     let all_reason_codes = &mut *accumulator.reason_codes;
-    let fidelity = measured_fidelity(
+    let fidelity = measured_fidelity_with_context(
         doc,
         &FidelityInputs {
             blocks: page_blocks,
             glyph_coverage,
             single_block_confidence: None,
         },
+        context,
     );
     for reason in &fidelity.reasons {
         all_reason_codes.insert(reason.clone());
@@ -668,10 +780,10 @@ fn page_coverage(
             }
         }
         if block.kind == BlockKind::Figure
-            && doc.warnings.iter().any(|warning| {
-                warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"
-                    && warning.object.as_ref() == Some(&block.id)
-            })
+            && context
+                .warnings
+                .object_warnings(&block.id)
+                .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
         {
             affected_ids.insert(block.id.to_string());
             all_reason_codes.insert("DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned());
@@ -687,10 +799,11 @@ fn page_coverage(
                 });
             }
         }
-        if doc.warnings.iter().any(|warning| {
-            TEXT_LOSS_CODES.contains(&warning.code.as_str())
-                && warning.object.as_ref() == Some(&block.id)
-        }) {
+        if context
+            .warnings
+            .object_warnings(&block.id)
+            .any(|warning| TEXT_LOSS_CODES.contains(&warning.code.as_str()))
+        {
             affected_ids.insert(block.id.to_string());
             if include_regions {
                 regions.push(CoverageRegion {
@@ -705,10 +818,11 @@ fn page_coverage(
                 });
             }
         }
-        for warning in doc.warnings.iter().filter(|warning| {
-            GEOMETRY_WARNING_CODES.contains(&warning.code.as_str())
-                && warning.object.as_ref() == Some(&block.id)
-        }) {
+        for warning in context
+            .warnings
+            .object_warnings(&block.id)
+            .filter(|warning| GEOMETRY_WARNING_CODES.contains(&warning.code.as_str()))
+        {
             affected_ids.insert(block.id.to_string());
             all_reason_codes.insert(warning.code.clone());
             if include_regions {
@@ -820,22 +934,19 @@ fn page_coverage(
             visual_reasons,
             visual_unsupported,
         ),
-        resource: resource_coverage(doc, page_blocks, is_global),
+        resource: resource_coverage(doc, context, page_blocks, is_global),
         overall_fidelity: fidelity.overall(),
         regions,
     }
 }
 
-fn resource_loss_objects(doc: &Document) -> BTreeSet<&ObjectId> {
-    doc.warnings
-        .iter()
-        .filter(|warning| RESOURCE_LOSS_CODES.contains(&warning.code.as_str()))
-        .filter_map(|warning| warning.object.as_ref())
-        .collect()
-}
-
-fn resource_coverage(doc: &Document, page_blocks: &[&Block], is_global: bool) -> CoverageMetric {
-    let lost_objects = resource_loss_objects(doc);
+fn resource_coverage(
+    doc: &Document,
+    context: &FidelityContext<'_>,
+    page_blocks: &[&Block],
+    is_global: bool,
+) -> CoverageMetric {
+    let lost_objects = &context.warnings.resource_loss_objects;
     let mut total = 0usize;
     let mut lost = 0usize;
 
@@ -858,13 +969,11 @@ fn resource_coverage(doc: &Document, page_blocks: &[&Block], is_global: bool) ->
         }
     }
 
-    let reasons: Vec<String> = doc
+    let reasons: Vec<String> = context
         .warnings
+        .resource_reason_codes
         .iter()
-        .filter(|warning| RESOURCE_LOSS_CODES.contains(&warning.code.as_str()))
-        .map(|warning| warning.code.clone())
-        .collect::<BTreeSet<String>>()
-        .into_iter()
+        .cloned()
         .collect();
 
     if total == 0 {
@@ -911,6 +1020,16 @@ pub fn compute_coverage(
 ) -> Result<CoverageReport, DocsightError> {
     let mut affected_ids = BTreeSet::new();
     let mut all_reason_codes = BTreeSet::new();
+    let context = FidelityContext::new(doc);
+    let mut blocks_by_page: BTreeMap<u32, Vec<&Block>> = BTreeMap::new();
+    for block in &doc.blocks {
+        let mut occupied = BTreeSet::new();
+        for (page, _) in block.fragments() {
+            if occupied.insert(page) {
+                blocks_by_page.entry(page).or_default().push(block);
+            }
+        }
+    }
 
     let pages_to_process: Vec<u32> = match page_filter {
         Some(page) => vec![page],
@@ -919,18 +1038,20 @@ pub fn compute_coverage(
 
     let mut page_coverages = Vec::with_capacity(pages_to_process.len());
     for page in pages_to_process {
-        let page_blocks: Vec<&Block> = doc
-            .blocks
-            .iter()
-            .filter(|block| block.occupies_page(page))
-            .collect();
+        let page_blocks = blocks_by_page
+            .get(&page)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         page_coverages.push(page_coverage(
-            doc,
-            page,
-            &page_blocks,
-            glyph_coverage,
-            include_regions,
-            false,
+            PageCoverageInput {
+                doc,
+                context: &context,
+                page,
+                page_blocks,
+                glyph_coverage,
+                include_regions,
+                is_global: false,
+            },
             &mut CoverageAccumulator {
                 affected_ids: &mut affected_ids,
                 reason_codes: &mut all_reason_codes,
@@ -940,12 +1061,15 @@ pub fn compute_coverage(
 
     let all_blocks: Vec<&Block> = doc.blocks.iter().collect();
     let global = page_coverage(
-        doc,
-        0,
-        &all_blocks,
-        glyph_coverage,
-        false,
-        true,
+        PageCoverageInput {
+            doc,
+            context: &context,
+            page: 0,
+            page_blocks: &all_blocks,
+            glyph_coverage,
+            include_regions: false,
+            is_global: true,
+        },
         &mut CoverageAccumulator {
             affected_ids: &mut affected_ids,
             reason_codes: &mut all_reason_codes,
