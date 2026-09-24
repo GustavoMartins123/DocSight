@@ -105,10 +105,31 @@ pub struct PageFidelity {
     pub reason_codes: Vec<String>,
 }
 
-pub fn page_fidelity(document: &Document) -> PageFidelity {
+fn warning_applies_to_page(
+    document: &Document,
+    warning: &Diagnostic,
+    page_number: Option<u32>,
+) -> bool {
+    let Some(page_number) = page_number else {
+        return true;
+    };
+    if let Some(page) = warning.page {
+        return page == page_number;
+    }
+    if let Some(object) = &warning.object {
+        return document
+            .blocks
+            .iter()
+            .any(|block| &block.id == object && block.occupies_page(page_number));
+    }
+    true
+}
+
+pub fn page_fidelity(document: &Document, page_number: Option<u32>) -> PageFidelity {
     let codes: BTreeSet<&str> = document
         .warnings
         .iter()
+        .filter(|warning| warning_applies_to_page(document, warning, page_number))
         .map(|warning| warning.code.as_str())
         .collect();
     let pagination = if codes
@@ -160,6 +181,13 @@ pub struct FidelityInputs<'a> {
     pub blocks: &'a [&'a Block],
     pub glyph_coverage: f32,
     pub single_block_confidence: Option<f32>,
+}
+
+#[derive(Clone, Copy)]
+enum WarningScope {
+    Document,
+    Page(u32),
+    Object,
 }
 
 struct WarningIndex<'a> {
@@ -230,7 +258,11 @@ impl<'a> WarningIndex<'a> {
         block_ids: &BTreeSet<&ObjectId>,
         section_ids: &BTreeSet<&ObjectId>,
         pages: &BTreeSet<u32>,
+        scope: WarningScope,
     ) -> Vec<&Diagnostic> {
+        if matches!(scope, WarningScope::Document) {
+            return self.warnings.clone();
+        }
         let mut indexes = BTreeSet::new();
         indexes.extend(self.objectless.iter().copied());
         for object in block_ids.iter().chain(section_ids.iter()) {
@@ -245,6 +277,11 @@ impl<'a> WarningIndex<'a> {
         }
         indexes
             .into_iter()
+            .filter(|index| {
+                self.warnings[*index]
+                    .page
+                    .is_none_or(|page| pages.contains(&page))
+            })
             .filter_map(|index| self.warnings.get(index).copied())
             .collect()
     }
@@ -281,23 +318,29 @@ impl<'a> FidelityContext<'a> {
 
 fn measured_fidelity(doc: &Document, inputs: &FidelityInputs<'_>) -> FidelityProfile {
     let context = FidelityContext::new(doc);
-    measured_fidelity_with_context(doc, inputs, &context)
+    measured_fidelity_with_context(doc, inputs, &context, WarningScope::Object)
 }
 
 fn measured_fidelity_with_context(
     doc: &Document,
     inputs: &FidelityInputs<'_>,
     context: &FidelityContext<'_>,
+    scope: WarningScope,
 ) -> FidelityProfile {
     let total = inputs.blocks.len();
     let block_ids: BTreeSet<&ObjectId> = inputs.blocks.iter().map(|block| &block.id).collect();
-    let pages: BTreeSet<u32> = inputs
-        .blocks
-        .iter()
-        .flat_map(|block| block.fragments().map(|(page, _)| page))
-        .collect();
+    let pages: BTreeSet<u32> = match scope {
+        WarningScope::Page(page) => BTreeSet::from([page]),
+        WarningScope::Object | WarningScope::Document => inputs
+            .blocks
+            .iter()
+            .flat_map(|block| block.fragments().map(|(page, _)| page))
+            .collect(),
+    };
     let section_ids = context.section_ids(inputs.blocks);
-    let relevant_warnings = context.warnings.relevant(&block_ids, &section_ids, &pages);
+    let relevant_warnings = context
+        .warnings
+        .relevant(&block_ids, &section_ids, &pages, scope);
     let reasons: BTreeSet<String> = relevant_warnings
         .iter()
         .map(|warning| warning.code.clone())
@@ -728,6 +771,11 @@ fn page_coverage(
             single_block_confidence: None,
         },
         context,
+        if is_global {
+            WarningScope::Document
+        } else {
+            WarningScope::Page(page)
+        },
     );
     for reason in &fidelity.reasons {
         all_reason_codes.insert(reason.clone());
@@ -934,7 +982,7 @@ fn page_coverage(
             visual_reasons,
             visual_unsupported,
         ),
-        resource: resource_coverage(doc, context, page_blocks, is_global),
+        resource: resource_coverage(doc, context, page, page_blocks, is_global),
         overall_fidelity: fidelity.overall(),
         regions,
     }
@@ -943,6 +991,7 @@ fn page_coverage(
 fn resource_coverage(
     doc: &Document,
     context: &FidelityContext<'_>,
+    page: u32,
     page_blocks: &[&Block],
     is_global: bool,
 ) -> CoverageMetric {
@@ -969,12 +1018,27 @@ fn resource_coverage(
         }
     }
 
-    let reasons: Vec<String> = context
-        .warnings
-        .resource_reason_codes
-        .iter()
-        .cloned()
-        .collect();
+    let reasons: Vec<String> = if is_global {
+        context
+            .warnings
+            .resource_reason_codes
+            .iter()
+            .cloned()
+            .collect()
+    } else {
+        doc.warnings
+            .iter()
+            .filter(|warning| RESOURCE_LOSS_CODES.contains(&warning.code.as_str()))
+            .filter(|warning| match (warning.page, warning.object.as_ref()) {
+                (Some(affected_page), _) => affected_page == page,
+                (None, Some(object)) => page_blocks.iter().any(|block| &block.id == object),
+                (None, None) => true,
+            })
+            .map(|warning| warning.code.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
 
     if total == 0 {
         return CoverageMetric {
@@ -1029,6 +1093,19 @@ pub fn compute_coverage(
                 blocks_by_page.entry(page).or_default().push(block);
             }
         }
+    }
+
+    if page_filter == Some(0) {
+        return Err(DocsightError::InvalidArgument {
+            message: "page numbers are 1-based".to_owned(),
+        });
+    }
+    if let Some(page) = page_filter
+        && !doc.pages.iter().any(|candidate| candidate.number == page)
+    {
+        return Err(DocsightError::ObjectNotFound {
+            object: format!("page {page}"),
+        });
     }
 
     let pages_to_process: Vec<u32> = match page_filter {
@@ -1145,5 +1222,137 @@ fn region_bbox(block: &Block, page: u32, is_global: bool) -> Option<Rect> {
         block.bbox
     } else {
         block.bbox_on_page(page)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        BlockContent, DocumentMetadata, FigureBlock, IrVersion, LayoutFlags, ParagraphFormat,
+        SourceSpan, TrackedChanges,
+    };
+
+    #[test]
+    fn page_fidelity_excludes_warnings_owned_by_other_pages() {
+        let mut warning = Diagnostic::warning(
+            "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
+            "header overlaps page 2".to_owned(),
+            "page 2 geometry is approximate",
+        );
+        warning.page = Some(2);
+        let document = Document {
+            version: IrVersion::default(),
+            id: "doc_test".to_owned(),
+            sha256: "0".repeat(64),
+            format: DocumentFormat::Docx,
+            size_bytes: 1,
+            metadata: DocumentMetadata::default(),
+            styles: Vec::new(),
+            sections: Vec::new(),
+            pages: Vec::new(),
+            blocks: Vec::new(),
+            resources: Vec::new(),
+            links: Vec::new(),
+            comments: Vec::new(),
+            tracked_changes: TrackedChanges::default(),
+            warnings: vec![warning],
+        };
+
+        assert!(page_fidelity(&document, Some(1)).authoritative);
+        assert!(!page_fidelity(&document, Some(2)).authoritative);
+        assert!(!page_fidelity(&document, None).authoritative);
+    }
+
+    #[test]
+    fn resource_reasons_and_indexed_warnings_stay_on_their_page() {
+        let figure = |page| Block {
+            id: ObjectId::from_raw(format!("figure_{page}")),
+            kind: BlockKind::Figure,
+            page: Some(page),
+            bbox: Some(Rect {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 10.0,
+                y1: 10.0,
+            }),
+            z_index: 0,
+            reading_order: 0,
+            source: SourceSpan::new(format!("figure_{page}")),
+            confidence: 1.0,
+            flags: LayoutFlags::default(),
+            format: ParagraphFormat::default(),
+            continuations: Vec::new(),
+            content: BlockContent::Figure(FigureBlock {
+                alt_text: None,
+                caption: None,
+                resource_id: None,
+                width_pt: None,
+                height_pt: None,
+            }),
+        };
+        let mut warning = Diagnostic::warning(
+            "DOCX_FIGURE_RASTER_PLACEHOLDER",
+            "page 2 image is not decoded".to_owned(),
+            "page 2 visual evidence is incomplete",
+        );
+        warning.page = Some(2);
+        warning.object = Some(ObjectId::from_raw("figure_2"));
+        let document = Document {
+            version: IrVersion::default(),
+            id: "doc_test".to_owned(),
+            sha256: "0".repeat(64),
+            format: DocumentFormat::Docx,
+            size_bytes: 1,
+            metadata: DocumentMetadata::default(),
+            styles: Vec::new(),
+            sections: Vec::new(),
+            pages: Vec::new(),
+            blocks: vec![figure(1), figure(2)],
+            resources: Vec::new(),
+            links: Vec::new(),
+            comments: Vec::new(),
+            tracked_changes: TrackedChanges::default(),
+            warnings: vec![warning],
+        };
+        let context = FidelityContext::new(&document);
+        let page_one = resource_coverage(&document, &context, 1, &[&document.blocks[0]], false);
+        let page_two = resource_coverage(&document, &context, 2, &[&document.blocks[1]], false);
+        assert!(page_one.reason_codes.is_empty());
+        assert_eq!(page_one.score, 1.0);
+        assert_eq!(page_two.reason_codes, ["DOCX_FIGURE_RASTER_PLACEHOLDER"]);
+        assert_eq!(page_two.score, 0.0);
+        let ids = BTreeSet::from([&document.blocks[0].id]);
+        let indexed = context.warnings.relevant(
+            &ids,
+            &BTreeSet::new(),
+            &BTreeSet::from([1]),
+            WarningScope::Page(1),
+        );
+        assert!(indexed.is_empty());
+        let empty_blocks: [&Block; 0] = [];
+        let inputs = FidelityInputs {
+            blocks: &empty_blocks,
+            glyph_coverage: 1.0,
+            single_block_confidence: None,
+        };
+        let empty_page =
+            measured_fidelity_with_context(&document, &inputs, &context, WarningScope::Page(1));
+        assert!(empty_page.reasons.is_empty());
+        let shared_inputs = FidelityInputs {
+            blocks: &[&document.blocks[0], &document.blocks[1]],
+            glyph_coverage: 1.0,
+            single_block_confidence: None,
+        };
+        let scoped_page = measured_fidelity_with_context(
+            &document,
+            &shared_inputs,
+            &context,
+            WarningScope::Page(1),
+        );
+        assert!(scoped_page.reasons.is_empty());
+        let global =
+            measured_fidelity_with_context(&document, &inputs, &context, WarningScope::Document);
+        assert_eq!(global.reasons, ["DOCX_FIGURE_RASTER_PLACEHOLDER"]);
     }
 }

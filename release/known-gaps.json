@@ -4,6 +4,11 @@
     {"id": "docx-multi-section-geometry", "blocking": true, "status": "resolved", "source": "BACKLOG.md"},
     {"id": "docx-line-level-pagination", "blocking": true, "status": "resolved", "source": "BACKLOG.md"},
     {"id": "content-addressed-cache", "blocking": true, "status": "resolved", "source": "BACKLOG.md"},
-    {"id": "ingestion-limit-overrides", "blocking": false, "status": "resolved", "source": "BACKLOG.md"}
+    {"id": "ingestion-limit-overrides", "blocking": false, "status": "resolved", "source": "BACKLOG.md"},
+    {"id": "artifact-output-safety", "blocking": true, "status": "open", "source": "PLANO_CORRECOES_DOCSIGHT.md"},
+    {"id": "mcp-security-boundary", "blocking": true, "status": "open", "source": "PLANO_CORRECOES_DOCSIGHT.md"},
+    {"id": "diff-ndjson-continuation", "blocking": true, "status": "open", "source": "PLANO_CORRECOES_DOCSIGHT.md"},
+    {"id": "agent-contract-alignment", "blocking": true, "status": "open", "source": "PLANO_CORRECOES_DOCSIGHT.md"},
+    {"id": "docx-visual-fidelity", "blocking": true, "status": "open", "source": "PLANO_CORRECOES_DOCSIGHT.md"}
   ]
 }

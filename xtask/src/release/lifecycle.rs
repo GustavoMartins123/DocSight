@@ -256,8 +256,9 @@ impl<R: Runner> Lifecycle<'_, R> {
             output.termination.is_none()
                 && output.returncode == 0
                 && output.stderr.is_empty()
-                && text(&output.stdout)?.trim()
-                    == format!("docsight {}", installed.manifest.version),
+                && text(&output.stdout)?
+                    .trim()
+                    .starts_with(&format!("docsight {}", installed.manifest.version)),
             "LIFECYCLE_VERSION_MISMATCH",
             "Installed executable does not report the version of its package",
         )

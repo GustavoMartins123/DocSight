@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "docsight";
@@ -233,6 +233,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/inspect-result.json"
             }
         },
         {
@@ -264,6 +267,12 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "query"]
+            },
+            "outputSchema": {
+                "oneOf": [
+                    { "$ref": "https://docsight.dev/schemas/v2/find-result.json" },
+                    { "$ref": "https://docsight.dev/schemas/v2/spatial-query-result.json" }
+                ]
             }
         },
         {
@@ -282,6 +291,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "page"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/page-result.json"
             }
         },
         {
@@ -308,6 +320,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "page"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/hit-result.json"
             }
         },
         {
@@ -323,9 +338,20 @@ fn list_tools() -> Value {
                     "after": {
                         "type": "string",
                         "description": "Path to the modified/later document."
+                    },
+                    "password_before_file": {
+                        "type": "string",
+                        "description": "Path to a bounded password file for the before document."
+                    },
+                    "password_after_file": {
+                        "type": "string",
+                        "description": "Path to a bounded password file for the after document."
                     }
                 },
                 "required": ["before", "after"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/diff-result.json"
             }
         },
         {
@@ -344,6 +370,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/coverage-report.json"
             }
         },
         {
@@ -366,6 +395,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["path", "object_id"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/evidence-record.json"
             }
         },
         {
@@ -380,6 +412,9 @@ fn list_tools() -> Value {
                     }
                 },
                 "required": ["bundle_path"]
+            },
+            "outputSchema": {
+                "$ref": "https://docsight.dev/schemas/v2/verify-result.json"
             }
         }
     ])
@@ -410,9 +445,8 @@ fn execute_tool(
 
 fn tool_inspect(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, DocsightError> {
     let path_str = required_string(arguments, "path")?;
-    let request_password_value;
     let request_password = match arguments.get("password") {
-        None => loader.password(),
+        None => None,
         Some(Value::String(secret)) => {
             if !loader.password().is_empty() {
                 return Err(DocsightError::InvalidArgument {
@@ -421,8 +455,12 @@ fn tool_inspect(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value,
                             .to_owned(),
                 });
             }
-            request_password_value = crate::parse_direct_password(secret)?;
-            request_password_value.as_bytes()
+            if loader.has_cache() {
+                return Err(DocsightError::InvalidArgument {
+                    message: "request-scoped document loading cannot use a cache".to_owned(),
+                });
+            }
+            Some(crate::parse_direct_password(secret)?)
         }
         Some(_) => {
             return Err(DocsightError::InvalidArgument {
@@ -430,19 +468,20 @@ fn tool_inspect(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value,
             });
         }
     };
-    if loader.has_cache() {
-        return Err(DocsightError::InvalidArgument {
-            message: "request-scoped document loading cannot use a cache".to_owned(),
-        });
-    }
-    let request_loader = crate::cache::request_scoped_loader(
-        request_password,
-        loader.reporting(),
-        loader.max_document_bytes(),
-    );
+    let request_loader = request_password.as_ref().map(|password| {
+        crate::cache::request_scoped_loader(
+            password.as_bytes(),
+            loader.reporting(),
+            loader.max_document_bytes(),
+        )
+    });
+    let active_loader = match &request_loader {
+        Some(request_loader) => request_loader,
+        None => loader,
+    };
     let path = PathBuf::from(path_str);
-    let source = request_loader.open_source(&path)?;
-    let (result, _warnings) = crate::inspect_source(&source, &request_loader)?;
+    let source = active_loader.open_source(&path)?;
+    let (result, _warnings) = crate::inspect_source(&source, active_loader)?;
     serde_json::to_value(result).map_err(serialization_error)
 }
 
@@ -507,7 +546,7 @@ fn tool_get_page(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value
         .ok_or_else(|| DocsightError::ObjectNotFound {
             object: format!("page {page_num}"),
         })?;
-    let page_fidelity = docsight_core::page_fidelity(&document);
+    let page_fidelity = docsight_core::page_fidelity(&document, Some(page_num));
     let page_result = crate::PageResult {
         number: target_page.number,
         width_pt: target_page.width_pt,
@@ -574,19 +613,29 @@ fn tool_compare(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value,
 
     let before_source = loader.open_source(&before_path)?;
     let after_source = loader.open_source(&after_path)?;
+    let before_password = optional_password(arguments, "password_before_file")?;
+    let after_password = optional_password(arguments, "password_after_file")?;
+    let before_password = before_password
+        .as_ref()
+        .map(crate::PdfPassword::as_bytes)
+        .unwrap_or_else(|| loader.password());
+    let after_password = after_password
+        .as_ref()
+        .map(crate::PdfPassword::as_bytes)
+        .unwrap_or_else(|| loader.password());
 
     let options = docsight_diff::DiffOptions {
         visual: false,
         dpi: 144,
         threshold: 8,
-        out_dir: None,
+        emit_visual_artifacts: false,
     };
     let diff = docsight_diff::diff_documents_with_passwords(
         &before_source,
         &after_source,
         &options,
-        loader.password(),
-        loader.password(),
+        before_password,
+        after_password,
     )?;
     serde_json::to_value(diff).map_err(serialization_error)
 }
@@ -646,10 +695,35 @@ fn tool_replay_bundle(
             message: "Missing required string argument 'bundle_path'".to_owned(),
         })?;
     let bundle_path = PathBuf::from(bundle_path_str);
-    let bundle = docsight_render::trace::read_proof_bundle(&bundle_path)?;
-    let verification =
-        docsight_render::trace::verify_proof_bundle_with_password(&bundle, loader.password())?;
-    serde_json::to_value(verification).map_err(serialization_error)
+    let limits = docsight_render::trace::ArtifactLimits {
+        max_document_bytes: loader.max_document_bytes(),
+    };
+    let bundle = docsight_render::trace::read_proof_bundle_with_limits(&bundle_path, limits)?;
+    let verification = docsight_render::trace::verify_proof_bundle_with_password(
+        &bundle,
+        loader.password(),
+        limits,
+    )?;
+    let result = crate::VerifyResult {
+        bundle_name: crate::proof_bundle_name(&bundle_path)?,
+        verification,
+    };
+    serde_json::to_value(result).map_err(serialization_error)
+}
+
+fn optional_password(
+    arguments: &Value,
+    key: &str,
+) -> Result<Option<crate::PdfPassword>, DocsightError> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(None);
+    };
+    let path = value
+        .as_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: format!("Argument '{key}' must be a string path"),
+        })?;
+    crate::read_pdf_password(Path::new(path)).map(Some)
 }
 
 fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, DocsightError> {

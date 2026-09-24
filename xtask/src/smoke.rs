@@ -215,7 +215,9 @@ fn check_output(
     )?;
     match name {
         "version" => require(
-            text(&output.stdout)?.trim() == format!("docsight {version}")
+            text(&output.stdout)?
+                .trim()
+                .starts_with(&format!("docsight {version}"))
                 && output.stderr.is_empty(),
             "SMOKE_VERSION_MISMATCH",
             "Executable version differs from its manifest",

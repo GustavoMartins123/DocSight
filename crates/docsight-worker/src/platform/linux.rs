@@ -154,6 +154,7 @@ fn install_filesystem_filter() -> Result<(), DocsightError> {
             ruleset_fd,
             &directory,
             ACCESS_FS_EXECUTE
+                | ACCESS_FS_READ_FILE
                 | ACCESS_FS_READ_DIR
                 | ACCESS_FS_WRITE_FILE
                 | ACCESS_FS_REMOVE_FILE

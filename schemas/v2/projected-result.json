@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/projected-result.json",
+  "title": "ProjectedResult",
+  "description": "A non-empty result object produced by explicit --select projection.",
+  "type": "object",
+  "minProperties": 1,
+  "additionalProperties": true
+}

@@ -120,6 +120,16 @@ pub(crate) fn rasterize_docx_page(
     }
 
     let png = docsight_core::encode_png(width_px, height_px, &canvas.pixels)?;
+    let png_bytes = u64::try_from(png.len()).map_err(|_| DocsightError::ResourceLimit {
+        resource: "raster PNG bytes".to_owned(),
+        limit: docsight_core::MAX_RASTER_OUTPUT_BYTES,
+    })?;
+    if png_bytes > docsight_core::MAX_RASTER_OUTPUT_BYTES {
+        return Err(DocsightError::ResourceLimit {
+            resource: "raster PNG bytes".to_owned(),
+            limit: docsight_core::MAX_RASTER_OUTPUT_BYTES,
+        });
+    }
 
     Ok(RenderedImage {
         metadata: RenderMetadata {

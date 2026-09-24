@@ -133,7 +133,7 @@ pub fn render_contact_sheet_with_password(
             let document = PdfDocument::open_with_password(source, password)?;
             build_contact_sheet(pages, request.dpi, |page| {
                 let raster = document.rasterize(page, request.dpi, None)?;
-                Ok(crate::from_raster(raster))
+                crate::from_raster(raster)
             })
         }
         docsight_core::DocumentFormat::Docx if !password.is_empty() => {

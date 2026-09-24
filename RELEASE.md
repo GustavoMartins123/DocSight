@@ -234,9 +234,12 @@ for identical inputs. This does not claim reproducible compiler outputs across
 arbitrary hosts. Notices include resolved build/test dependencies as well as
 application dependencies; they are not a runtime-only SBOM or legal assessment.
 Metadata is filtered to the packaged target, so each archive lists the packages
-resolved for that platform. Unfiltered metadata also resolves packages for
-unrelated platforms, and a package without distributable license text fails
-with `MISSING_LICENSE_TEXT` instead of producing incomplete notices.
+resolved for that platform. The release manifest binds the version, Git revision,
+target, executable schema and main executable SHA-256; verification rejects a
+manifest whose executable identity does not match its recorded file. Unfiltered
+metadata also resolves packages for unrelated platforms, and a package without
+distributable license text fails with `MISSING_LICENSE_TEXT` instead of producing
+incomplete notices.
 
 Once all five archives, sidecars, smoke and signature receipts are in `dist`:
 

@@ -25,7 +25,7 @@ DocSight is designed as a local, headless evidence layer for inspecting DOCX and
 
 For password-protected PDFs:
 
-- `--password-file` is recommended over direct command-line arguments to prevent passwords from being exposed in shell history, process listings, or command line inspection. Direct `--password` is supported when invocation environments are safely isolated.
+- `--password-file` is the only CLI transport for a PDF password. The secret is read from a bounded file and is never accepted directly in argv or MCP JSON arguments.
 - Passwords are restricted to a maximum length of 127 bytes.
 - Passwords are held only in transient memory during processing, cleared immediately after use, and are never written to stdout, JSON/NDJSON records, proof bundles, or execution traces.
 - Password-protected documents cannot be cached.

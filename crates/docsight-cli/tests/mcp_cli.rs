@@ -1,9 +1,10 @@
+mod support;
+
+use support::encrypted_pdf;
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-#[path = "support/encrypted_pdf.rs"]
-mod encrypted_pdf;
 
 fn docsight() -> Command {
     Command::new(env!("CARGO_BIN_EXE_docsight"))
@@ -30,6 +31,22 @@ impl McpClient {
     fn start_with_args(args: &[&str]) -> Result<Self, Box<dyn std::error::Error>> {
         let mut child = docsight()
             .args(args)
+            .arg("mcp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stdout = child.stdout.take().ok_or("failed to take child stdout")?;
+        let reader = BufReader::new(stdout);
+        Ok(Self { child, reader })
+    }
+
+    fn start_with_password_file(
+        path: &std::path::Path,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut child = docsight()
+            .arg("--password-file")
+            .arg(path)
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -124,6 +141,29 @@ fn mcp_tools_list_declares_all_tools() -> Result<(), Box<dyn std::error::Error>>
     for expected in expected_tools {
         assert!(tool_names.contains(&expected), "missing tool: {expected}");
     }
+    let inspect = tools
+        .iter()
+        .find(|tool| tool["name"] == "inspect_document")
+        .ok_or("inspect_document missing")?;
+    assert!(
+        inspect["inputSchema"]["properties"]
+            .get("password")
+            .is_some()
+    );
+    let compare = tools
+        .iter()
+        .find(|tool| tool["name"] == "compare_documents")
+        .ok_or("compare_documents missing")?;
+    assert!(
+        compare["inputSchema"]["properties"]
+            .get("password_before_file")
+            .is_some()
+    );
+    assert!(
+        compare["inputSchema"]["properties"]
+            .get("password_after_file")
+            .is_some()
+    );
 
     Ok(())
 }
@@ -223,7 +263,9 @@ fn mcp_inspect_consumes_and_validates_pdf_passwords() -> Result<(), Box<dyn std:
         .ok_or("missing text")?;
     assert!(text.contains("USAGE"), "{text}");
 
-    let mut conflicting = McpClient::start_with_args(&["--password", "correct horse"])?;
+    let password_file = directory.path().join("password.txt");
+    std::fs::write(&password_file, b"correct horse")?;
+    let mut conflicting = McpClient::start_with_password_file(&password_file)?;
     let conflict = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 4,
@@ -432,6 +474,46 @@ fn mcp_tool_compare_documents() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn mcp_compare_accepts_distinct_password_files() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let before = directory.path().join("before.pdf");
+    let after = directory.path().join("after.pdf");
+    let before_password = directory.path().join("before-password.txt");
+    let after_password = directory.path().join("after-password.txt");
+    std::fs::write(&before, encrypted_pdf::build(b"before-password"))?;
+    std::fs::write(&after, encrypted_pdf::build(b"after-password"))?;
+    std::fs::write(&before_password, b"before-password")?;
+    std::fs::write(&after_password, b"after-password")?;
+
+    let mut client = McpClient::start()?;
+    let response = client.request(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 70,
+            "method": "tools/call",
+            "params": {
+                "name": "compare_documents",
+                "arguments": {
+                    "before": before.to_str().ok_or("invalid before path")?,
+                    "after": after.to_str().ok_or("invalid after path")?,
+                    "password_before_file": before_password.to_str().ok_or("invalid before password path")?,
+                    "password_after_file": after_password.to_str().ok_or("invalid after password path")?
+                }
+            }
+        })
+        .to_string(),
+    )?;
+    assert_eq!(response["result"]["isError"], false);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let diff: serde_json::Value = serde_json::from_str(text)?;
+    assert!(diff.get("summary").is_some());
+    assert!(!response.to_string().contains("before-password"));
+    Ok(())
+}
+
+#[test]
 fn mcp_tool_verify_document() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = McpClient::start()?;
     let path = sample_fixture();
@@ -530,7 +612,8 @@ fn mcp_artifact_routing_does_not_depend_on_extensions() -> Result<(), Box<dyn st
         .as_str()
         .ok_or("missing text")?;
     let verified: serde_json::Value = serde_json::from_str(text)?;
-    assert_eq!(verified["valid"], true);
+    assert_eq!(verified["bundle_name"], "proof.pdf");
+    assert_eq!(verified["verification"]["valid"], true);
 
     let undeclared_path = serde_json::json!({
         "jsonrpc": "2.0",
@@ -547,7 +630,63 @@ fn mcp_artifact_routing_does_not_depend_on_extensions() -> Result<(), Box<dyn st
         .as_str()
         .ok_or("missing text")?;
     assert!(text.contains("bundle_path"), "{text}");
+    Ok(())
+}
 
+#[test]
+fn mcp_replay_bundle_returns_the_public_verify_result() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let bundle = directory.path().join("evidence.dse");
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+    let bundle_str = bundle.to_str().ok_or("invalid bundle path")?;
+    let output = docsight()
+        .args([
+            "--agent", "bundle", path_str, "--page", "1", "--out", bundle_str,
+        ])
+        .output()?;
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let mut client = McpClient::start()?;
+    let list = client.request(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 60,
+            "method": "tools/list"
+        })
+        .to_string(),
+    )?;
+    let replay = list["result"]["tools"]
+        .as_array()
+        .ok_or("tools not array")?
+        .iter()
+        .find(|tool| tool["name"] == "replay_bundle")
+        .ok_or("replay_bundle missing")?;
+    assert_eq!(
+        replay["outputSchema"]["$ref"],
+        "https://docsight.dev/schemas/v2/verify-result.json"
+    );
+
+    let result = client.request(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 61,
+            "method": "tools/call",
+            "params": {
+                "name": "replay_bundle",
+                "arguments": { "bundle_path": bundle_str }
+            }
+        })
+        .to_string(),
+    )?;
+    assert_eq!(result["result"]["isError"], false);
+    let text = result["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let verify: serde_json::Value = serde_json::from_str(text)?;
+    assert_eq!(verify["bundle_name"], "evidence.dse");
+    assert_eq!(verify["verification"]["valid"], true);
     Ok(())
 }
 
