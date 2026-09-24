@@ -793,10 +793,13 @@ version = "0.1.4"
 dependencies = [
  "clap",
  "docsight-core",
+ "docsight-diff",
  "docsight-layout",
  "docsight-ooxml",
  "docsight-pdf",
  "docsight-render",
+ "docsight-search",
+ "docsight-tables",
  "regex",
  "serde",
  "serde_json",

@@ -9,10 +9,13 @@ publish = false
 [dependencies]
 clap.workspace = true
 docsight-core = { path = "../crates/docsight-core" }
+docsight-diff = { path = "../crates/docsight-diff" }
 docsight-layout = { path = "../crates/docsight-layout" }
 docsight-ooxml = { path = "../crates/docsight-ooxml" }
 docsight-pdf = { path = "../crates/docsight-pdf" }
 docsight-render = { path = "../crates/docsight-render" }
+docsight-search = { path = "../crates/docsight-search" }
+docsight-tables = { path = "../crates/docsight-tables" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

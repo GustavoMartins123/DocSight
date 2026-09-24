@@ -50,6 +50,29 @@ Ceilings live in [`benchmarks/ds18-operations.json`](benchmarks/ds18-operations.
 
 Measured baseline (Windows x64, release): every small-document operation completes in 30–110 ms with warm runs at or above cold runs, so process startup dominates and the cache pays off only once parsing or layout dominates. `diff_pair` is the heaviest entry at about 106 ms and 133 KB of JSON.
 
+## Adversarial hotspot harness
+
+`benchmark hotspots` measures deterministic large-scale workloads that the small operation matrix does not isolate:
+
+```bash
+cargo run --locked --release -p xtask --bin xtask -- benchmark hotspots --iterations 3 --output target/hotspots.json
+```
+
+The report uses schema `docsight.hotspot-report/v1`. Inputs are prepared before the measured function, every repetition must produce identical evidence bytes, and result hashes are the correctness oracle. Wall times are observational same-build comparisons; they are not portable budgets and do not fail on elapsed time.
+
+The fixed cases are:
+
+- `canonical_pages_10000` and `coverage_pages_10000` for page/block scans.
+- `docx_keep_next_1000` and `docx_keep_next_10000` for long keep-with-next chains.
+- `pdf_rulings_10000` and `pdf_unruled_10000` for dense table inference.
+- `pdf_shared_resources_1000` for repeated indirect PDF resources.
+- `pdf_vector_raster` for cubic paths, clipping and fallback glyph rasterization.
+- `pdf_trace_and_proof` for trace and proof generation with and without a crop.
+- `semantic_diff_1000` for rejected semantic alignment candidates.
+- `unicode_find_512` for long case-insensitive Unicode literal search.
+
+The first Windows x64 release baseline identifies `coverage_pages_10000` and `semantic_diff_1000` as the largest measured cases, followed by `pdf_vector_raster`; these values are stored only under ignored `target/` output and must be regenerated on the comparison host.
+
 ## Cost structure
 
 Process startup is the dominant cost for small documents. `docsight --version` alone takes about 26 ms on Windows x64 release, and `inspect` of a 1.2 KB PDF takes about 27 ms, so the engine work is noise on tiny inputs. A 20 KB DOCX inspects in about 34 ms with roughly 78% startup share.
