@@ -894,3 +894,40 @@ fn diff_schema_declares_cross_version_lineage_contract() -> Result<(), Box<dyn s
     }
     Ok(())
 }
+
+#[test]
+fn diff_max_items_or_continue_without_ndjson_fails_closed() -> Result<(), Box<dyn std::error::Error>>
+{
+    let before = fixture("sample_headings.docx");
+    let after = fixture("sample_features.docx");
+
+    let out1 = docsight()
+        .args([
+            "--agent",
+            "diff",
+            before.to_str().ok_or("before path")?,
+            after.to_str().ok_or("after path")?,
+            "--max-items",
+            "3",
+        ])
+        .output()?;
+    assert_eq!(out1.status.code(), Some(2));
+    let err1: serde_json::Value = serde_json::from_slice(&out1.stderr)?;
+    assert_eq!(err1["error"]["code"], "USAGE");
+
+    let out2 = docsight()
+        .args([
+            "--agent",
+            "diff",
+            before.to_str().ok_or("before path")?,
+            after.to_str().ok_or("after path")?,
+            "--continue",
+            "abc",
+        ])
+        .output()?;
+    assert_eq!(out2.status.code(), Some(2));
+    let err2: serde_json::Value = serde_json::from_slice(&out2.stderr)?;
+    assert_eq!(err2["error"]["code"], "USAGE");
+
+    Ok(())
+}

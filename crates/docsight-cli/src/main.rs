@@ -1613,6 +1613,15 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         });
     }
     let is_diff = matches!(cli.command, Command::Diff { .. });
+    if is_diff
+        && !cli.ndjson
+        && (cli.max_items.is_some() || cli.continue_token.is_some())
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: "diff pagination with --max-items or --continue requires --ndjson streaming"
+                .to_owned(),
+        });
+    }
     if is_diff && cli.password_file.is_some() {
         return Err(DocsightError::InvalidArgument {
             message: "diff requires --password-before-file and --password-after-file instead of --password-file"
