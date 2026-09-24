@@ -60,3 +60,24 @@ fn capabilities_marks_completions_as_human_only() -> Result<(), Box<dyn std::err
     assert_eq!(capability["formats"], serde_json::json!([]));
     Ok(())
 }
+
+#[test]
+fn docsight_agent_env_var_activates_agent_contract() -> Result<(), Box<dyn std::error::Error>> {
+    let output = docsight()
+        .env("DOCSIGHT_AGENT", "1")
+        .args(["capabilities"])
+        .output()?;
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(value["schema"], "docsight.agent/v2");
+
+    let disabled = docsight()
+        .env("DOCSIGHT_AGENT", "0")
+        .args(["capabilities"])
+        .output()?;
+    assert!(disabled.status.success());
+    let text = String::from_utf8(disabled.stdout)?;
+    assert!(text.contains("Profile: agent-first-v1"));
+
+    Ok(())
+}
