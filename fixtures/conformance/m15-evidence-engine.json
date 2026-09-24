@@ -648,7 +648,7 @@
     {
       "file": "agent-envelope.json",
       "id": "https://docsight.dev/schemas/v2/agent-envelope.json",
-      "sha256": "b5d1edcea8730b91aae5360a6eeedac9c8c2c25211b6d882b6bd4fffb19d2a10"
+      "sha256": "e659c9165bf53625b5d6f18671260ffcc9e0485091a4de1594605e50d8ff27b9"
     },
     {
       "file": "bundle-result.json",
@@ -663,12 +663,12 @@
     {
       "file": "capabilities-envelope.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-envelope.json",
-      "sha256": "8a605d948af768926821c8d0a7faf9db676195403a3a451d6785c4bde16c135c"
+      "sha256": "9731c9c6305748e4ba9894b674c4229c403797ef49140e22fcec04962f7d340f"
     },
     {
       "file": "capabilities-result.json",
       "id": "https://docsight.dev/schemas/v2/capabilities-result.json",
-      "sha256": "1869a0a91d3c3b3a62f43e6f1b38ceec10f8767a7e97baf544ca576d18ea5e86"
+      "sha256": "6f411eea83731535df5bdd2aa2e065718335b6583d12726952b30bba078a2d35"
     },
     {
       "file": "contact-sheet-result.json",
@@ -738,7 +738,7 @@
     {
       "file": "ndjson-event.json",
       "id": "https://docsight.dev/schemas/v2/ndjson-event.json",
-      "sha256": "370bd1d793309c601d69adb47b0dad414117cb813d56e757044615cd7b26d72d"
+      "sha256": "aba6733bbcca134df8ac618fb9824df40da7c2bdbd697ebf413b4b28ea09be8c"
     },
     {
       "file": "outline-result.json",
@@ -759,6 +759,11 @@
       "file": "peek-result.json",
       "id": "https://docsight.dev/schemas/v2/peek-result.json",
       "sha256": "9e8ebbdc7c9ccf27793d53cc7ad238f2d1bd98a797a91582e3b35825d61912a9"
+    },
+    {
+      "file": "projected-result.json",
+      "id": "https://docsight.dev/schemas/v2/projected-result.json",
+      "sha256": "3836725b69d295684338eb4342f7f3230c4bf98358161eaabc4f1b623a4089b1"
     },
     {
       "file": "projection-selection.json",

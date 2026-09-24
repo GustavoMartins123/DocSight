@@ -16,7 +16,15 @@ Classification:
 
 ### Operability
 
-No open blocking items.
+The 2026-09-23 architecture and real-use audit reopened the following v1-blocking families. Their reproductions, dependencies and acceptance gates are tracked in `PLANO_CORRECOES_DOCSIGHT.md` and `release/known-gaps.json`.
+
+| Item | Current state |
+| --- | --- |
+| Artifact output safety | `render` and `bundle` can overwrite the source document; grouped artifacts are not published atomically. |
+| MCP security boundary | Request/output limits, strict arguments, roots, warnings, structured errors and sandbox stdio are incomplete. |
+| Diff NDJSON continuation | A valid continuation token re-emits the same event sequence instead of advancing. |
+| Agent contract alignment | Password transports, output-limit discovery, projected schemas, page validation and cache handoff disagree across code, capabilities and docs. |
+| DOCX visual fidelity | The deterministic bitmap fallback is legible but does not meet the newly approved font, geometry and oracle gates. |
 
 ### Evidence that requires people
 
@@ -102,9 +110,9 @@ are recorded as resolved in `release/known-gaps.json`; the remaining layout
 limitations are listed under post-v1 above with their diagnostics.
 
 Release candidate tooling is described in RELEASE.md and beta observation tooling
-in BETA.md. The machine-readable `release/known-gaps.json` retains the open V1
-engine gap above. A completed tooling implementation is not completion of the
-native validation, real beta or V1 acceptance criteria.
+in BETA.md. The machine-readable `release/known-gaps.json` retains every open V1
+family above. A completed tooling implementation is not completion of the native
+validation, real beta or V1 acceptance criteria.
 
 Per-invocation overrides for ingestion limits (`--max-document-bytes`) are
 implemented in `crates/docsight-cli` and `crates/docsight-core`. Callers can

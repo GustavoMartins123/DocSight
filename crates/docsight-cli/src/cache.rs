@@ -128,10 +128,6 @@ impl<'a> DocumentLoader<'a> {
         self.reporting
     }
 
-    pub(crate) fn max_document_bytes(&self) -> u64 {
-        self.max_document_bytes
-    }
-
     pub(crate) fn open_source(
         &self,
         path: impl AsRef<Path>,
@@ -141,6 +137,10 @@ impl<'a> DocumentLoader<'a> {
 
     pub(crate) fn password(&self) -> &'a [u8] {
         self.password
+    }
+
+    pub(crate) fn max_document_bytes(&self) -> u64 {
+        self.max_document_bytes
     }
 
     pub(crate) fn load(&self, source: &DocumentSource) -> Result<Document, DocsightError> {
@@ -256,9 +256,7 @@ impl SandboxCacheHandoff {
         reporting: Reporting,
         max_document_bytes: u64,
     ) -> Result<Option<Self>, DocsightError> {
-        let Ok(source) = DocumentSource::open_with_limit(document, max_document_bytes) else {
-            return Ok(None);
-        };
+        let source = DocumentSource::open_with_limit(document, max_document_bytes)?;
         let cache = settings.open(executable)?;
         let key = cache.key_for(&source);
         let directory = tempfile::Builder::new()
@@ -597,6 +595,10 @@ pub(crate) fn running_executable() -> Result<PathBuf, DocsightError> {
             source,
         })
     }
+}
+
+pub(crate) fn running_executable_sha256() -> Result<String, DocsightError> {
+    Ok(engine_identity(&running_executable()?)?.executable_sha256)
 }
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, DocsightError> {

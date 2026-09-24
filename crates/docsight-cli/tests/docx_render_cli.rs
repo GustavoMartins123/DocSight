@@ -145,6 +145,24 @@ fn cli_writes_bounded_contact_sheet_with_agent_metadata() -> Result<(), Box<dyn 
     assert!(invalid.stdout.is_empty());
     assert!(!invalid_path.exists());
 
+    let limited_path = dir.path().join("limited.png");
+    let limited = docsight()
+        .args([
+            "--agent",
+            "--max-bytes",
+            "1",
+            "contact-sheet",
+            path_str,
+            "--pages",
+            "1",
+            "--out",
+            limited_path.to_str().ok_or("invalid limited output path")?,
+        ])
+        .output()?;
+    assert!(!limited.status.success());
+    assert!(limited.stdout.is_empty());
+    assert!(!limited_path.exists());
+
     let cache_dir = dir.path().join("cache");
     std::fs::create_dir(&cache_dir)?;
     let cached = docsight()

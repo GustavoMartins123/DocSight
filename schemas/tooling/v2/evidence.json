@@ -604,6 +604,13 @@
     "release-manifest": {
       "additionalProperties": false,
       "properties": {
+        "executable_schema": {
+          "const": "docsight.agent/v2"
+        },
+        "executable_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
         "files": {
           "items": {
             "additionalProperties": false,
@@ -666,6 +673,8 @@
         "revision",
         "target",
         "toolchain",
+        "executable_schema",
+        "executable_sha256",
         "files"
       ],
       "type": "object"

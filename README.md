@@ -69,13 +69,11 @@ unset PDF_PASSWORD
 docsight --agent --password-file pdf-password.txt inspect "$DOC"
 ```
 
-DocSight also accepts `--password PASSWORD` directly when command-line arguments are safely isolated.
-
-The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes accept `--password-file` or `--password`. A wrong or absent password fails with exit code 12; DocSight never guesses it.
+DocSight accepts PDF passwords only through `--password-file`. For `diff`, pass `--password-before-file` and `--password-after-file` when the two documents use different credentials. The password is limited to 127 bytes, cleared from the CLI's memory when the operation finishes and never written to JSON, traces or proof bundles. Replay and proof verification for encrypted source bytes use the same file transport. A wrong or absent password fails with exit code 12; DocSight never guesses it.
 
 ## Command surface
 
-`docsight --agent capabilities` is authoritative for invocation grammar, formats, output modes and result schemas. The commands are:
+`docsight --version` reports the package version, agent schema, target triple and executable SHA-256. `docsight --agent capabilities` is authoritative for invocation grammar, formats, output modes and result schemas. The commands are:
 
 | Area | Commands | Purpose |
 | --- | --- | --- |
@@ -93,6 +91,10 @@ The password is limited to 127 bytes, cleared from the CLI's memory when the ope
 
 Use `docsight <command> --help` for human-readable flags. Use the machine contract for integrations; command names, schemas, units, ordering and exit codes are public contracts.
 
+## Artifact publication
+
+`render`, `crop` and `bundle` atomically replace one explicit, writable regular-file path. The source, output and trace paths must be distinct filesystem identities; symbolic-link outputs and read-only files are rejected. `render --trace` stages its PNG and trace as one group and rolls both back when publication fails; rollback failures are reported as I/O errors. `diff --out-dir` uses no-clobber publication and rejects an existing destination. A failure before publication leaves existing artifacts unchanged.
+
 ## Reusing parsed documents
 
 An agent that runs several commands against the same document can keep the parsed IR in a private cache directory:
@@ -103,7 +105,7 @@ docsight --agent --cache-dir .docsight-cache find "$DOC" "termination"
 docsight --agent --cache-dir .docsight-cache cache stats
 ```
 
-The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; `--password-file` and `--password` cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
+The cache is off unless `--cache-dir` is passed. Entries are keyed by the document bytes and the exact DocSight executable, written atomically and fully validated before reuse; an invalid entry is quarantined and the document is parsed again. Results are byte-identical with and without the cache, including under `--sandbox`, where the parent process owns the directory. Only commands that read the document IR use it; password files cannot be combined with it. Entries contain document content, so keep the directory private and clear it with `cache clear` when it is no longer needed. Use separate cache directories for documents you trust and documents you do not.
 
 ## Bounded output
 
@@ -115,7 +117,7 @@ Agent calls support hard output controls:
 - `--continue` resumes a truncated collection with a deterministic token.
 - `--ndjson` streams records while preserving typed metadata and completion records.
 
-Truncation is explicit. DocSight never silently drops evidence to fit a limit.
+Truncation is explicit. DocSight never silently drops evidence to fit a limit. `--ndjson` implies the structured `docsight.agent/v2` error envelope on stderr, while successful stdout remains a sequence of JSON records. With `--sandbox --ndjson`, records are relayed as the worker emits them; consumers must require both exit code `0` and a final `done` record before accepting a stream. A failed sandbox stream can contain a valid prefix, but the non-zero exit invalidates the operation.
 
 ## Shell completion
 
@@ -147,7 +149,7 @@ DocSight does not edit documents, perform OCR, answer natural-language questions
 checks and the V1 evidence gate. [Beta procedures](BETA.md) cover local opt-in
 observations, consent and reproducing a failure before fixing it. Neither a
 passing automation unit test nor an empty issue register is release acceptance.
-The engine remains at version 0.1.4; no v1-blocking engine gaps remain open in the release registry, while the other readiness criteria still require native validation evidence.
+The engine remains at version 0.1.4. The 2026-09-23 architecture and real-use audit reopened v1-blocking artifact safety, MCP boundary, continuation, contract-alignment and DOCX visual-fidelity work in `PLANO_CORRECOES_DOCSIGHT.md`; the engine is not release-ready while those registry entries remain open.
 
 ## License
 

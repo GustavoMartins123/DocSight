@@ -1,3 +1,4 @@
+pub mod artifacts;
 pub mod canonical;
 pub mod evidence;
 mod glyph;
@@ -6,6 +7,7 @@ pub mod jpeg;
 pub mod object;
 pub mod png;
 
+pub use artifacts::*;
 pub use canonical::*;
 pub use evidence::*;
 pub use glyph::*;
@@ -17,11 +19,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const MAX_INSPECT_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_RASTER_OUTPUT_BYTES: u64 = 75_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -448,17 +451,6 @@ impl Rect {
     pub fn intersects(self, other: Self) -> bool {
         self.intersection(other).is_some()
     }
-}
-
-pub fn write_all(path: &Path, bytes: &[u8]) -> Result<(), DocsightError> {
-    let mut file = File::create(path).map_err(|source| DocsightError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    file.write_all(bytes).map_err(|source| DocsightError::Io {
-        path: path.to_path_buf(),
-        source,
-    })
 }
 
 /// Leading bytes a PDF header may follow. Readers accept a header within the first 1024 bytes;
