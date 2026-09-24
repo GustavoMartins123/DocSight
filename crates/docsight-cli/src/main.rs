@@ -19,7 +19,8 @@ use docsight_diff::{
 };
 use docsight_pdf::{ENGINE_NAME, PdfDocument};
 use docsight_render::{
-    HitQuery, RenderRequest, RenderTarget, render_document_with_password,
+    ContactSheetRequest, HitQuery, RenderRequest, RenderTarget, render_contact_sheet_with_password,
+    render_document_with_password,
     trace::{
         TraceDecisionCoverage, TraceTarget, create_proof_bundle_with_password, read_proof_bundle,
         read_trace, record_trace_with_password, reproduction_fingerprint,
@@ -285,6 +286,16 @@ enum Command {
         out: PathBuf,
         #[arg(long)]
         trace: Option<PathBuf>,
+    },
+    #[command(about = SUMMARY_CONTACT_SHEET)]
+    ContactSheet {
+        path: PathBuf,
+        #[arg(long, value_name = "PAGES")]
+        pages: String,
+        #[arg(long, default_value_t = docsight_render::CONTACT_SHEET_DEFAULT_DPI)]
+        dpi: u16,
+        #[arg(long)]
+        out: PathBuf,
     },
     #[command(about = SUMMARY_CROP)]
     Crop {
@@ -1394,6 +1405,7 @@ fn cached_document_path(command: &Command) -> Option<&Path> {
         Command::Capabilities { .. }
         | Command::Completions { .. }
         | Command::Render { .. }
+        | Command::ContactSheet { .. }
         | Command::Crop { .. }
         | Command::Diff { .. }
         | Command::Fingerprint { .. }
@@ -1646,6 +1658,25 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             out,
             trace: trace.as_deref(),
             command: "render",
+            json: cli.is_agent_json(false),
+            ndjson: cli.ndjson,
+            limits: &limits,
+            quiet,
+            json_errors,
+            max_document_bytes: cli.max_document_bytes(),
+        }),
+        Command::ContactSheet {
+            path,
+            pages,
+            dpi,
+            out,
+        } => contact_sheet(ContactSheetCommandArgs {
+            path,
+            password,
+            pages: parse_contact_sheet_pages(pages)
+                .map_err(|message| DocsightError::InvalidArgument { message })?,
+            dpi: *dpi,
+            out,
             json: cli.is_agent_json(false),
             ndjson: cli.ndjson,
             limits: &limits,
@@ -1987,6 +2018,8 @@ const SUMMARY_IMAGES: &str = "list figure resources and placements";
 const SUMMARY_LINKS: &str = "list link metadata without fetching targets";
 const SUMMARY_RENDER: &str =
     "write a PNG artifact with provenance metadata and optional deterministic trace";
+const SUMMARY_CONTACT_SHEET: &str =
+    "write a bounded deterministic PNG contact sheet for selected pages";
 const SUMMARY_CROP: &str = "write a page or object crop with provenance metadata";
 const SUMMARY_DIFF: &str = "compare changes with evidence-backed cross-version lineage";
 const SUMMARY_FINGERPRINT: &str = "return reproducibility inputs and result fingerprint";
@@ -2222,6 +2255,17 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
                 ndjson_events: &["render"],
                 bounded: true,
                 result_schema: Some("https://docsight.dev/schemas/v2/render-result.json"),
+                result_root: None,
+            },
+            CommandCapability {
+                name: "contact-sheet",
+                summary: SUMMARY_CONTACT_SHEET,
+                invocation: "contact-sheet <path> --pages <pages> --out <png> [--dpi <dpi>]",
+                formats: DOCX_PDF_FORMATS,
+                ndjson: true,
+                ndjson_events: &["contact-sheet"],
+                bounded: true,
+                result_schema: Some("https://docsight.dev/schemas/v2/contact-sheet-result.json"),
                 result_root: None,
             },
             CommandCapability {
@@ -3346,6 +3390,110 @@ fn render(args: RenderCommandArgs<'_>) -> Result<(), DocsightError> {
 }
 
 #[derive(Serialize)]
+struct ContactSheetResult {
+    pages: Vec<u32>,
+    labels: Vec<String>,
+    limits: docsight_render::ContactSheetLimits,
+    dpi: u16,
+    columns: usize,
+    rows: usize,
+    width_px: u32,
+    height_px: u32,
+    thumbnail_max_width_px: u32,
+    thumbnail_max_height_px: u32,
+    media_type: &'static str,
+    output_path: String,
+    output_sha256: String,
+    output_bytes: u64,
+}
+
+struct ContactSheetCommandArgs<'a> {
+    path: &'a PathBuf,
+    password: &'a [u8],
+    pages: Vec<u32>,
+    dpi: u16,
+    out: &'a Path,
+    json: bool,
+    ndjson: bool,
+    limits: &'a QueryLimits,
+    quiet: bool,
+    json_errors: bool,
+    max_document_bytes: u64,
+}
+
+fn contact_sheet(args: ContactSheetCommandArgs<'_>) -> Result<(), DocsightError> {
+    let source = DocumentSource::open_with_limit(args.path, args.max_document_bytes)?;
+    let sheet = render_contact_sheet_with_password(
+        &source,
+        &ContactSheetRequest {
+            pages: args.pages,
+            dpi: args.dpi,
+        },
+        args.password,
+    )?;
+    let output_path = args
+        .out
+        .to_str()
+        .ok_or_else(|| DocsightError::InvalidArgument {
+            message: "output path must be valid UTF-8 for agent output".to_owned(),
+        })?
+        .to_owned();
+    let output_bytes =
+        u64::try_from(sheet.png().len()).map_err(|_| DocsightError::ResourceLimit {
+            resource: "contact sheet artifact bytes".to_owned(),
+            limit: u64::MAX,
+        })?;
+    let result = ContactSheetResult {
+        pages: sheet.metadata.pages.clone(),
+        labels: sheet.metadata.labels.clone(),
+        limits: sheet.metadata.limits,
+        dpi: sheet.metadata.dpi,
+        columns: sheet.metadata.columns,
+        rows: sheet.metadata.rows,
+        width_px: sheet.metadata.width_px,
+        height_px: sheet.metadata.height_px,
+        thumbnail_max_width_px: sheet.metadata.thumbnail_max_width_px,
+        thumbnail_max_height_px: sheet.metadata.thumbnail_max_height_px,
+        media_type: sheet.metadata.media_type,
+        output_path,
+        output_sha256: digest_bytes(sheet.png()),
+        output_bytes,
+    };
+    sheet.write(args.out)?;
+    if !args.ndjson && !args.json {
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        writeln!(
+            writer,
+            "Rendered contact sheet for pages {} at {} DPI to {} ({}x{} px)",
+            result
+                .pages
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            result.dpi,
+            args.out.display(),
+            result.width_px,
+            result.height_px
+        )
+        .map_err(stdout_error)?;
+        return emit_warnings(&sheet.warnings, args.quiet, args.json_errors);
+    }
+    if args.ndjson {
+        return write_single_ndjson(
+            &source,
+            "contact-sheet",
+            "contact-sheet",
+            &result,
+            &sheet.warnings,
+            args.limits,
+        );
+    }
+    write_single_json(&source, &result, sheet.warnings, args.limits)
+}
+
+#[derive(Serialize)]
 struct TraceOutput {
     output_path: String,
     output_sha256: String,
@@ -3997,6 +4145,53 @@ pub(crate) fn parse_page_range(raw: &str) -> Result<PageRange, String> {
         .parse::<u32>()
         .map_err(|_| "page range end must be a positive integer".to_owned())?;
     PageRange::new(start, end).map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_contact_sheet_pages(raw: &str) -> Result<Vec<u32>, String> {
+    let mut pages = Vec::new();
+    for item in raw.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err("contact sheet page selection contains an empty item".to_owned());
+        }
+        let (start, end) = match item.split_once("..") {
+            Some((start, end)) => (start, end),
+            None => item
+                .split_once('-')
+                .map_or((item, item), |(start, end)| (start, end)),
+        };
+        let start = start
+            .parse::<u32>()
+            .map_err(|_| "contact sheet page range start must be a positive integer".to_owned())?;
+        let end = end
+            .parse::<u32>()
+            .map_err(|_| "contact sheet page range end must be a positive integer".to_owned())?;
+        if start == 0 || end == 0 || start > end {
+            return Err(
+                "contact sheet page ranges must use 1-based inclusive pages with start not after end"
+                    .to_owned(),
+            );
+        }
+        let count = u64::from(end) - u64::from(start) + 1;
+        let current_count = u64::try_from(pages.len())
+            .map_err(|_| "contact sheet page selection is too large".to_owned())?;
+        let next_count = current_count
+            .checked_add(count)
+            .ok_or_else(|| "contact sheet page selection is too large".to_owned())?;
+        if next_count > docsight_render::CONTACT_SHEET_MAX_PAGES as u64 {
+            return Err(format!(
+                "contact sheet accepts at most {} pages",
+                docsight_render::CONTACT_SHEET_MAX_PAGES
+            ));
+        }
+        for page in start..=end {
+            pages.push(page);
+        }
+    }
+    if pages.is_empty() {
+        return Err("contact sheet requires at least one page".to_owned());
+    }
+    Ok(pages)
 }
 
 fn continuation_scope(command: &str, parameter: &str) -> String {
