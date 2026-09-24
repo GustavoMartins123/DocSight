@@ -5,9 +5,10 @@ use docsight_ingest::ingest_with_password as load_doc;
 use docsight_render::{RenderRequest, RenderTarget, encode_png, render_document_with_password};
 use docsight_tables::table_to_tsv_string;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -555,9 +556,15 @@ const STRUCTURAL_SIMILARITY_THRESHOLD: f32 = 0.5;
 const AMBIGUITY_MARGIN: f32 = 0.05;
 
 #[derive(Clone, Default)]
+struct CachedText {
+    text: String,
+    tokens: BTreeSet<String>,
+}
+
+#[derive(Clone, Default)]
 struct Neighborhood {
-    previous: Option<String>,
-    next: Option<String>,
+    previous: Option<Arc<CachedText>>,
+    next: Option<Arc<CachedText>>,
 }
 
 #[derive(Clone)]
@@ -573,6 +580,7 @@ struct AlignItem {
     confidence: f32,
     neighborhood: Neighborhood,
     key: String,
+    key_tokens: BTreeSet<String>,
     display: String,
 }
 
@@ -621,6 +629,20 @@ struct AlignMetadata {
     image_digest: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct PairSignals {
+    exact: bool,
+    normalized_text: Option<f32>,
+    source_path: Option<f32>,
+    style: Option<f32>,
+    geometry: Option<f32>,
+    table_shape: Option<f32>,
+    image_digest: Option<f32>,
+    neighborhood: Option<f32>,
+    object_confidence: f32,
+    score: f32,
+}
+
 fn normalize_text(text: &str) -> String {
     text.split_whitespace()
         .map(str::to_lowercase)
@@ -628,26 +650,31 @@ fn normalize_text(text: &str) -> String {
         .join(" ")
 }
 
-fn token_set(text: &str) -> std::collections::BTreeSet<String> {
-    normalize_text(text)
+fn cached_text(text: &str) -> CachedText {
+    let text = normalize_text(text);
+    let tokens = text
         .split(' ')
         .filter(|token| !token.is_empty())
         .map(str::to_owned)
-        .collect()
+        .collect();
+    CachedText { text, tokens }
 }
 
-fn text_similarity(before: &str, after: &str) -> f32 {
-    let before_tokens = token_set(before);
-    let after_tokens = token_set(after);
-    if before_tokens.is_empty() && after_tokens.is_empty() {
+fn token_similarity(before: &BTreeSet<String>, after: &BTreeSet<String>) -> f32 {
+    if before.is_empty() && after.is_empty() {
         return 1.0;
     }
-    if before_tokens.is_empty() || after_tokens.is_empty() {
+    if before.is_empty() || after.is_empty() {
         return 0.0;
     }
-    let intersection = before_tokens.intersection(&after_tokens).count() as f32;
-    let union = before_tokens.union(&after_tokens).count() as f32;
+    let intersection = before.intersection(after).count() as f32;
+    let union = before.union(after).count() as f32;
     intersection / union
+}
+
+#[cfg(test)]
+fn text_similarity(before: &str, after: &str) -> f32 {
+    token_similarity(&cached_text(before).tokens, &cached_text(after).tokens)
 }
 
 /// Identical objects that occur the same number of times in both documents are paired in
@@ -835,122 +862,223 @@ fn competing_candidates(
         .collect()
 }
 
+fn add_weight(total: &mut f32, weighted: &mut f32, score: f32, weight: f32) {
+    *total += weight;
+    *weighted += score * weight;
+}
+
+fn neighborhood_score(before: &Neighborhood, after: &Neighborhood) -> Option<f32> {
+    let mut total = 0.0_f32;
+    let mut count = 0.0_f32;
+    if let (Some(before_previous), Some(after_previous)) = (&before.previous, &after.previous) {
+        total += token_similarity(&before_previous.tokens, &after_previous.tokens);
+        count += 1.0;
+    }
+    if let (Some(before_next), Some(after_next)) = (&before.next, &after.next) {
+        total += token_similarity(&before_next.tokens, &after_next.tokens);
+        count += 1.0;
+    }
+    (count > 0.0).then_some(total / count)
+}
+
+fn pair_signals(before: &AlignItem, after: &AlignItem) -> PairSignals {
+    let exact = before.key == after.key;
+    let mut total_weight = 0.0_f32;
+    let mut weighted_score = 0.0_f32;
+    let normalized_text = (!before.key.is_empty() || !after.key.is_empty()).then(|| {
+        let score = token_similarity(&before.key_tokens, &after.key_tokens);
+        add_weight(&mut total_weight, &mut weighted_score, score, 0.45);
+        score
+    });
+    let source_path =
+        (!before.source_path.is_empty() || !after.source_path.is_empty()).then(|| {
+            let score = if before.source_path == after.source_path {
+                1.0
+            } else {
+                0.0
+            };
+            add_weight(&mut total_weight, &mut weighted_score, score, 0.15);
+            score
+        });
+    let style =
+        before
+            .style_id
+            .as_ref()
+            .zip(after.style_id.as_ref())
+            .map(|(before_style, after_style)| {
+                let score = if before_style == after_style {
+                    1.0
+                } else {
+                    0.0
+                };
+                add_weight(&mut total_weight, &mut weighted_score, score, 0.08);
+                score
+            });
+    let geometry = before
+        .bbox
+        .zip(after.bbox)
+        .map(|(before_bbox, after_bbox)| {
+            let score = geometry_similarity(before.page, before_bbox, after.page, after_bbox);
+            add_weight(&mut total_weight, &mut weighted_score, score, 0.08);
+            score
+        });
+    let table_shape =
+        before
+            .table_shape
+            .zip(after.table_shape)
+            .map(|(before_shape, after_shape)| {
+                let score = table_shape_similarity(before_shape, after_shape);
+                add_weight(&mut total_weight, &mut weighted_score, score, 0.25);
+                score
+            });
+    let image_digest = before
+        .image_digest
+        .as_ref()
+        .zip(after.image_digest.as_ref())
+        .map(|(before_digest, after_digest)| {
+            let score = if before_digest == after_digest {
+                1.0
+            } else {
+                0.0
+            };
+            add_weight(&mut total_weight, &mut weighted_score, score, 0.40);
+            score
+        });
+    let neighborhood = neighborhood_score(&before.neighborhood, &after.neighborhood);
+    if let Some(score) = neighborhood {
+        add_weight(&mut total_weight, &mut weighted_score, score, 0.09);
+    }
+    let object_confidence = before.confidence.min(after.confidence).clamp(0.0, 1.0);
+    add_weight(
+        &mut total_weight,
+        &mut weighted_score,
+        object_confidence,
+        0.05,
+    );
+    PairSignals {
+        exact,
+        normalized_text,
+        source_path,
+        style,
+        geometry,
+        table_shape,
+        image_digest,
+        neighborhood,
+        object_confidence,
+        score: if total_weight <= 0.0 {
+            0.0
+        } else {
+            weighted_score / total_weight
+        },
+    }
+}
+
 fn candidate_pair(
     before_index: usize,
     after_index: usize,
     before: &AlignItem,
     after: &AlignItem,
 ) -> Option<CandidatePair> {
-    let exact = before.key == after.key;
-    let evidence = lineage_evidence(before, after);
-    let total_weight: f32 = evidence.iter().map(|entry| entry.weight).sum();
-    if total_weight <= 0.0 {
-        return None;
-    }
-    let score = evidence
-        .iter()
-        .map(|entry| entry.score * entry.weight)
-        .sum::<f32>()
-        / total_weight;
-    let threshold = if exact || before.table_shape.is_some() || before.image_digest.is_some() {
-        STRUCTURAL_SIMILARITY_THRESHOLD
-    } else {
-        TEXT_SIMILARITY_THRESHOLD
-    };
-    if score < threshold {
+    let signals = pair_signals(before, after);
+    let threshold =
+        if signals.exact || before.table_shape.is_some() || before.image_digest.is_some() {
+            STRUCTURAL_SIMILARITY_THRESHOLD
+        } else {
+            TEXT_SIMILARITY_THRESHOLD
+        };
+    if signals.score < threshold {
         return None;
     }
     Some(CandidatePair {
         before_index,
         after_index,
-        exact,
-        score,
-        evidence,
+        exact: signals.exact,
+        score: signals.score,
+        evidence: lineage_evidence(before, after, signals),
     })
 }
 
-fn lineage_evidence(before: &AlignItem, after: &AlignItem) -> Vec<LineageEvidence> {
+fn lineage_evidence(
+    before: &AlignItem,
+    after: &AlignItem,
+    signals: PairSignals,
+) -> Vec<LineageEvidence> {
     let mut evidence = Vec::new();
-    if !before.key.is_empty() || !after.key.is_empty() {
+    if let Some(score) = signals.normalized_text {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::NormalizedText,
-            score: text_similarity(&before.key, &after.key),
+            score,
             weight: 0.45,
             before: Some(fingerprint_label(&before.key)),
             after: Some(fingerprint_label(&after.key)),
         });
     }
-    if !before.source_path.is_empty() || !after.source_path.is_empty() {
+    if let Some(score) = signals.source_path {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::SourcePath,
-            score: if before.source_path == after.source_path {
-                1.0
-            } else {
-                0.0
-            },
+            score,
             weight: 0.15,
             before: Some(before.source_path.clone()),
             after: Some(after.source_path.clone()),
         });
     }
-    if let (Some(before_style), Some(after_style)) = (&before.style_id, &after.style_id) {
+    if let Some(score) = signals.style
+        && let (Some(before_style), Some(after_style)) = (&before.style_id, &after.style_id)
+    {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::Style,
-            score: if before_style == after_style {
-                1.0
-            } else {
-                0.0
-            },
+            score,
             weight: 0.08,
             before: Some(before_style.clone()),
             after: Some(after_style.clone()),
         });
     }
-    if let (Some(before_bbox), Some(after_bbox)) = (before.bbox, after.bbox) {
+    if let Some(score) = signals.geometry
+        && let (Some(before_bbox), Some(after_bbox)) = (before.bbox, after.bbox)
+    {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::Geometry,
-            score: geometry_similarity(before.page, before_bbox, after.page, after_bbox),
+            score,
             weight: 0.08,
             before: Some(geometry_label(before.page, before_bbox)),
             after: Some(geometry_label(after.page, after_bbox)),
         });
     }
-    if let (Some(before_shape), Some(after_shape)) = (before.table_shape, after.table_shape) {
+    if let Some(score) = signals.table_shape
+        && let (Some(before_shape), Some(after_shape)) = (before.table_shape, after.table_shape)
+    {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::TableShape,
-            score: table_shape_similarity(before_shape, after_shape),
+            score,
             weight: 0.25,
             before: Some(format!("{}x{}", before_shape.0, before_shape.1)),
             after: Some(format!("{}x{}", after_shape.0, after_shape.1)),
         });
     }
-    if let (Some(before_digest), Some(after_digest)) = (&before.image_digest, &after.image_digest) {
+    if let Some(score) = signals.image_digest
+        && let (Some(before_digest), Some(after_digest)) =
+            (&before.image_digest, &after.image_digest)
+    {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::ImageDigest,
-            score: if before_digest == after_digest {
-                1.0
-            } else {
-                0.0
-            },
+            score,
             weight: 0.40,
             before: Some(before_digest.clone()),
             after: Some(after_digest.clone()),
         });
     }
-    if let Some((score, before_value, after_value)) =
-        neighborhood_similarity(&before.neighborhood, &after.neighborhood)
-    {
+    if let Some(score) = signals.neighborhood {
         evidence.push(LineageEvidence {
             kind: LineageEvidenceKind::Neighborhood,
             score,
             weight: 0.09,
-            before: Some(before_value),
-            after: Some(after_value),
+            before: Some(neighborhood_label(&before.neighborhood)),
+            after: Some(neighborhood_label(&after.neighborhood)),
         });
     }
     evidence.push(LineageEvidence {
         kind: LineageEvidenceKind::ObjectConfidence,
-        score: before.confidence.min(after.confidence).clamp(0.0, 1.0),
+        score: signals.object_confidence,
         weight: 0.05,
         before: Some(format!("{:.3}", before.confidence)),
         after: Some(format!("{:.3}", after.confidence)),
@@ -992,33 +1120,15 @@ fn geometry_label(page: Option<u32>, bbox: Rect) -> String {
     )
 }
 
-fn neighborhood_similarity(
-    before: &Neighborhood,
-    after: &Neighborhood,
-) -> Option<(f32, String, String)> {
-    let mut scores = Vec::new();
-    if let (Some(before_previous), Some(after_previous)) = (&before.previous, &after.previous) {
-        scores.push(text_similarity(before_previous, after_previous));
-    }
-    if let (Some(before_next), Some(after_next)) = (&before.next, &after.next) {
-        scores.push(text_similarity(before_next, after_next));
-    }
-    if scores.is_empty() {
-        return None;
-    }
-    let score = scores.iter().sum::<f32>() / scores.len() as f32;
-    Some((score, neighborhood_label(before), neighborhood_label(after)))
-}
-
 fn neighborhood_label(neighborhood: &Neighborhood) -> String {
     let previous = neighborhood
         .previous
         .as_ref()
-        .map_or_else(|| "none".to_owned(), |value| fingerprint_label(value));
+        .map_or_else(|| "none".to_owned(), |value| fingerprint_label(&value.text));
     let next = neighborhood
         .next
         .as_ref()
-        .map_or_else(|| "none".to_owned(), |value| fingerprint_label(value));
+        .map_or_else(|| "none".to_owned(), |value| fingerprint_label(&value.text));
     format!("previous={previous};next={next}")
 }
 
@@ -1634,21 +1744,22 @@ fn align_item(
             .get(block.id.as_str())
             .cloned()
             .unwrap_or_default(),
+        key_tokens: cached_text(&key).tokens,
         key,
         display,
     }
 }
 
 fn document_neighborhoods(document: &Document) -> BTreeMap<String, Neighborhood> {
-    let text: Vec<Option<String>> = document
+    let text: Vec<Option<Arc<CachedText>>> = document
         .blocks
         .iter()
         .map(|block| {
-            let normalized = normalize_text(&block.text());
-            if normalized.is_empty() {
+            let cached = cached_text(&block.text());
+            if cached.text.is_empty() {
                 None
             } else {
-                Some(normalized)
+                Some(Arc::new(cached))
             }
         })
         .collect();
@@ -1785,49 +1896,43 @@ fn append_confidence_evidence(
 }
 
 fn calculate_largest_drift(before: &Document, after: &Document) -> (Option<f32>, Option<u32>) {
+    let mut after_ranges: BTreeMap<(String, u32), (f32, f32)> = BTreeMap::new();
+    for block in &after.blocks {
+        let text = block.text();
+        let (Some(page), Some(bbox)) = (block.page, block.bbox) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let y0 = bbox.y0;
+        after_ranges
+            .entry((text, page))
+            .and_modify(|(minimum, maximum)| {
+                *minimum = minimum.min(y0);
+                *maximum = maximum.max(y0);
+            })
+            .or_insert((y0, y0));
+    }
+
     let mut max_drift = 0.0_f32;
     let mut drift_page = None;
-
-    let b_blocks: Vec<_> = before
-        .blocks
-        .iter()
-        .filter_map(|b| {
-            let t = b.text();
-            if t.trim().is_empty() {
-                None
-            } else {
-                Some((t, b.page, b.bbox))
-            }
-        })
-        .collect();
-
-    let a_blocks: Vec<_> = after
-        .blocks
-        .iter()
-        .filter_map(|b| {
-            let t = b.text();
-            if t.trim().is_empty() {
-                None
-            } else {
-                Some((t, b.page, b.bbox))
-            }
-        })
-        .collect();
-
-    for (b_text, b_page, b_bbox) in &b_blocks {
-        if let (Some(b_p), Some(b_box)) = (b_page, b_bbox) {
-            for (a_text, a_page, a_bbox) in &a_blocks {
-                if b_text == a_text
-                    && let (Some(a_p), Some(a_box)) = (a_page, a_bbox)
-                    && b_p == a_p
-                {
-                    let drift = (a_box.y0 - b_box.y0).abs();
-                    if drift > max_drift {
-                        max_drift = drift;
-                        drift_page = Some(*b_p);
-                    }
-                }
-            }
+    for block in &before.blocks {
+        let text = block.text();
+        let (Some(page), Some(bbox)) = (block.page, block.bbox) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let y0 = bbox.y0;
+        let Some((minimum, maximum)) = after_ranges.get(&(text, page)) else {
+            continue;
+        };
+        let drift = (minimum - y0).abs().max((maximum - y0).abs());
+        if drift > max_drift {
+            max_drift = drift;
+            drift_page = Some(page);
         }
     }
 
@@ -2279,7 +2384,7 @@ mod tests {
 mod m13_lineage_tests {
     use super::{
         AlignItem, ChangeKind, LineageStatus, Neighborhood, align_items, ambiguous_lineage,
-        moved_exact_pairs, text_similarity,
+        cached_text, moved_exact_pairs, text_similarity,
     };
 
     fn item(key: &str) -> AlignItem {
@@ -2299,6 +2404,7 @@ mod m13_lineage_tests {
             confidence: 1.0,
             neighborhood: Neighborhood::default(),
             key: key.to_owned(),
+            key_tokens: cached_text(key).tokens,
             display: key.to_owned(),
         }
     }
