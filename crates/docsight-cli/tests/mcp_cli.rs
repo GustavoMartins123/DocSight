@@ -2,6 +2,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+#[path = "support/encrypted_pdf.rs"]
+mod encrypted_pdf;
+
 fn docsight() -> Command {
     Command::new(env!("CARGO_BIN_EXE_docsight"))
 }
@@ -21,7 +24,12 @@ struct McpClient {
 
 impl McpClient {
     fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_with_args(&[])
+    }
+
+    fn start_with_args(args: &[&str]) -> Result<Self, Box<dyn std::error::Error>> {
         let mut child = docsight()
+            .args(args)
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -153,6 +161,85 @@ fn mcp_tool_inspect_document() -> Result<(), Box<dyn std::error::Error>> {
         Some(true)
     );
     assert_eq!(inspect_val["capabilities"]["text"].as_bool(), Some(true));
+
+    Ok(())
+}
+
+#[test]
+fn mcp_inspect_consumes_and_validates_pdf_passwords() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("encrypted.pdf");
+    std::fs::write(&path, encrypted_pdf::build(b"correct horse"))?;
+    let path_str = path.to_str().ok_or("invalid path")?;
+    let mut client = McpClient::start()?;
+
+    let correct = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_document",
+            "arguments": { "path": path_str, "password": "correct horse" }
+        }
+    });
+    let response = client.request(&correct.to_string())?;
+    assert_eq!(response["result"]["isError"], false);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let inspected: serde_json::Value = serde_json::from_str(text)?;
+    assert_eq!(inspected["format"], "pdf");
+
+    let wrong = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_document",
+            "arguments": { "path": path_str, "password": "wrong secret" }
+        }
+    });
+    let response = client.request(&wrong.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("ENCRYPTED"), "{text}");
+    assert!(!text.contains("wrong secret"), "{text}");
+
+    let wrong_type = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_document",
+            "arguments": { "path": path_str, "password": 42 }
+        }
+    });
+    let response = client.request(&wrong_type.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("USAGE"), "{text}");
+
+    let mut conflicting = McpClient::start_with_args(&["--password", "correct horse"])?;
+    let conflict = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_document",
+            "arguments": { "path": path_str, "password": "correct horse" }
+        }
+    });
+    let response = conflicting.request(&conflict.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("cannot be combined"), "{text}");
+    assert!(!text.contains("correct horse"), "{text}");
 
     Ok(())
 }
@@ -376,6 +463,95 @@ fn mcp_tool_verify_document() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn mcp_artifact_routing_does_not_depend_on_extensions() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let document = sample_fixture();
+    let disguised_document = directory.path().join("document.dse");
+    std::fs::copy(&document, &disguised_document)?;
+    let disguised_document_str = disguised_document.to_str().ok_or("invalid path")?;
+
+    let mut client = McpClient::start()?;
+    let verify_document = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "verify_document",
+            "arguments": { "path": disguised_document_str }
+        }
+    });
+    let response = client.request(&verify_document.to_string())?;
+    assert_eq!(response["result"]["isError"], false);
+
+    let bundle = directory.path().join("proof.pdf");
+    let source = headings_fixture();
+    let output = docsight()
+        .arg("bundle")
+        .arg(source)
+        .args(["--page", "1", "--out"])
+        .arg(&bundle)
+        .arg("--json")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bundle_str = bundle.to_str().ok_or("invalid path")?;
+
+    let verify_bundle_as_document = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "verify_document",
+            "arguments": { "path": bundle_str }
+        }
+    });
+    let response = client.request(&verify_bundle_as_document.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("MALFORMED_DOCUMENT"), "{text}");
+
+    let verify_bundle = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "replay_bundle",
+            "arguments": { "bundle_path": bundle_str }
+        }
+    });
+    let response = client.request(&verify_bundle.to_string())?;
+    assert_eq!(response["result"]["isError"], false);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    let verified: serde_json::Value = serde_json::from_str(text)?;
+    assert_eq!(verified["valid"], true);
+
+    let undeclared_path = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "replay_bundle",
+            "arguments": { "path": bundle_str }
+        }
+    });
+    let response = client.request(&undeclared_path.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("bundle_path"), "{text}");
+
+    Ok(())
+}
+
+#[test]
 fn mcp_tool_get_evidence() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = McpClient::start()?;
     let path = sample_fixture();
@@ -424,6 +600,57 @@ fn mcp_tool_get_evidence() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("missing text")?;
     let evidence_val: serde_json::Value = serde_json::from_str(content_text)?;
     assert_eq!(evidence_val["object_id"], obj_id);
+
+    Ok(())
+}
+
+#[test]
+fn mcp_evidence_matches_cli_record_and_diagnostics() -> Result<(), Box<dyn std::error::Error>> {
+    let path = sample_fixture();
+    let path_str = path.to_str().ok_or("invalid path")?;
+    let object = "lnk_863f7882a9faf975dbbdda888b7adccc";
+
+    let output = docsight()
+        .args(["--agent", "evidence"])
+        .arg(&path)
+        .arg(object)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let cli: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let warnings = cli["warnings"].as_array().ok_or("warnings not array")?;
+    assert!(!warnings.is_empty());
+
+    let mut client = McpClient::start()?;
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_evidence",
+            "arguments": { "path": path_str, "object_id": object }
+        }
+    });
+    let response = client.request(&request.to_string())?;
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .ok_or("content not array")?;
+    assert_eq!(content.len(), warnings.len() + 1);
+    let text = content[0]["text"].as_str().ok_or("missing text")?;
+    let evidence: serde_json::Value = serde_json::from_str(text)?;
+    assert_eq!(evidence, cli["result"]);
+    assert!(evidence["render_fingerprint"].is_null());
+    for (index, warning) in warnings.iter().enumerate() {
+        let text = content[index + 1]["text"]
+            .as_str()
+            .ok_or("missing diagnostic text")?;
+        let diagnostic: serde_json::Value = serde_json::from_str(text)?;
+        assert_eq!(&diagnostic, warning);
+    }
 
     Ok(())
 }
@@ -567,9 +794,49 @@ fn mcp_handles_invalid_arguments_across_tools() -> Result<(), Box<dyn std::error
     let res_bbox = client.request(&bad_bbox_req.to_string())?;
     assert_eq!(res_bbox["result"]["isError"], true);
 
-    let nonexistent_file_req = serde_json::json!({
+    let malformed_point_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 43,
+        "method": "tools/call",
+        "params": {
+            "name": "get_region",
+            "arguments": {
+                "path": path_str,
+                "page": 1,
+                "point": "1"
+            }
+        }
+    });
+    let response = client.request(&malformed_point_req.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("point must be formatted as x,y"), "{text}");
+
+    let invalid_coordinate_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 44,
+        "method": "tools/call",
+        "params": {
+            "name": "get_region",
+            "arguments": {
+                "path": path_str,
+                "page": 1,
+                "point": "x,2"
+            }
+        }
+    });
+    let response = client.request(&invalid_coordinate_req.to_string())?;
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("missing text")?;
+    assert!(text.contains("invalid x coordinate: x"), "{text}");
+
+    let nonexistent_file_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 45,
         "method": "tools/call",
         "params": {
             "name": "inspect_document",

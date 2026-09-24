@@ -1,10 +1,28 @@
 use docsight_worker::{
-    SANDBOX_CHILD_ENV, SANDBOX_READ_PATHS_ENV, SANDBOX_WRITE_PATHS_ENV, SandboxPolicy,
-    run_in_sandbox_with_env,
+    SANDBOX_CHILD_ENV, SANDBOX_POLICY_ENV, SANDBOX_READ_PATHS_ENV, SANDBOX_WRITE_PATHS_ENV,
+    SandboxPolicy, run_in_sandbox_with_env,
 };
 use std::net::TcpListener;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
+
+#[test]
+fn a_sandboxed_worker_without_a_policy_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let worker = Path::new(env!("CARGO_BIN_EXE_docsight-worker"));
+    let output = Command::new(worker)
+        .arg("--help")
+        .env(SANDBOX_CHILD_ENV, "1")
+        .env_remove(SANDBOX_POLICY_ENV)
+        .output()?;
+    assert_eq!(output.status.code(), Some(30));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("BACKEND_FAILURE"), "{stderr}");
+    assert!(stderr.contains(SANDBOX_POLICY_ENV), "{stderr}");
+    assert!(stderr.contains("missing"), "{stderr}");
+    Ok(())
+}
 
 #[test]
 fn network_access_is_denied() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,6 +1,7 @@
 use docsight_core::DocumentSource;
 use docsight_ooxml::parse_docx;
 use docsight_pdf::PdfDocument;
+use docsight_render::trace::reproduction_fingerprint;
 use docsight_worker::{SandboxPolicy, find_worker_binary, run_in_sandbox};
 use std::io::Write;
 use std::path::PathBuf;
@@ -244,6 +245,15 @@ fn fingerprint_command_matches_specification_contract() -> Result<(), Box<dyn st
             .ok_or("missing")?
             .is_empty()
     );
+    let source = DocumentSource::open(&doc_path)?;
+    let expected = reproduction_fingerprint(&source);
+    assert_eq!(result["engine"], expected.engine);
+    assert_eq!(result["ooxml_engine"], expected.ooxml_engine);
+    assert_eq!(result["pdf_engine"], expected.pdf_engine);
+    assert_eq!(result["raster_engine"], expected.raster_engine);
+    assert_eq!(result["fonts"], expected.fonts);
+    assert_eq!(result["layout_profile"], expected.layout_profile);
+    assert_eq!(result["result_fingerprint"], expected.result_fingerprint);
 
     Ok(())
 }

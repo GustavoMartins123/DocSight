@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make MCP password inspection use the canonical encrypted-PDF path, expose the same evidence record and diagnostics as the CLI, and select document or proof-bundle verification from the named tool instead of a filename extension.
+- Use the trace reproduction fingerprint as the single canonical fingerprint implementation and make the `fingerprint` command report the same value; existing trace and proof-bundle fingerprints remain unchanged.
+- Make a sandbox child with the child marker but no explicit policy fail closed with `BACKEND_FAILURE`, and make `docsight-tables` the sole public owner of table format exporters.
 - Add five golden product workflows as executable task scenarios: inspect a DOCX from structure to fingerprint, compare two revisions with self-diff identity and render evidence, verify support and fidelity with coverage and evidence, investigate a PDF region from search to visual crop, and reproduce offline with proof bundles and verified traces.
 - Add `WORKFLOWS.md`, a public guide that runs each journey with the CLI surface only, in human and `--agent` forms, with budgets, typed errors and determinism rules, bound to the manifests that the test suite executes.
 

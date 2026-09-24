@@ -314,6 +314,7 @@ dependencies = [
  "docsight-core",
  "docsight-ingest",
  "docsight-render",
+ "docsight-tables",
  "serde",
  "serde_json",
  "sha2",

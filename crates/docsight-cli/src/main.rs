@@ -11,9 +11,8 @@ use docsight_agent::{
 };
 use docsight_core::{
     BlockContent, CoverageStatus, Diagnostic, DiagnosticSeverity, DocsightError, Document,
-    DocumentFormat, DocumentSource, ObjectId, PageFidelity, Rect, compute_coverage,
-    compute_evidence, document_capabilities, table_to_csv, table_to_html, table_to_markdown,
-    table_to_tsv, table_to_tsv_string,
+    DocumentFormat, DocumentSource, EvidenceRecord, ObjectId, PageFidelity, Rect, compute_coverage,
+    compute_evidence, document_capabilities,
 };
 use docsight_diff::{
     DiffDocumentIdentity, DiffOptions, DiffSummary, VisualDiff, diff_documents_with_passwords,
@@ -23,8 +22,8 @@ use docsight_render::{
     HitQuery, RenderRequest, RenderTarget, render_document_with_password,
     trace::{
         TraceDecisionCoverage, TraceTarget, create_proof_bundle_with_password, read_proof_bundle,
-        read_trace, record_trace_with_password, verify_proof_bundle_with_password,
-        verify_trace_with_password,
+        read_trace, record_trace_with_password, reproduction_fingerprint,
+        verify_proof_bundle_with_password, verify_trace_with_password,
     },
 };
 use docsight_search::{
@@ -34,6 +33,9 @@ use docsight_search::{
     execute_spatial_query, find as find_occurrences, focus_object, focus_pages,
     overview as document_overview, peek_object, peek_pages, peek_section,
     resolve as resolve_descriptor,
+};
+use docsight_tables::{
+    table_to_csv, table_to_html, table_to_markdown, table_to_tsv, table_to_tsv_string,
 };
 use serde::Serialize;
 use sha2::Digest;
@@ -337,7 +339,7 @@ enum Command {
     Evidence {
         path: PathBuf,
         object: String,
-        #[arg(long, default_value_t = 144)]
+        #[arg(long, default_value_t = DEFAULT_EVIDENCE_RENDER_DPI)]
         render_dpi: u16,
         #[arg(long)]
         json: bool,
@@ -1135,6 +1137,7 @@ struct ContextResult {
     candidates: Vec<ResolveCandidate>,
 }
 
+const DEFAULT_EVIDENCE_RENDER_DPI: u16 = 144;
 const MAX_PDF_PASSWORD_BYTES: usize = 127;
 
 struct PdfPassword(Vec<u8>);
@@ -1238,9 +1241,7 @@ fn main() -> ExitCode {
     let agent_mode = std::env::args().any(|argument| argument == "--agent");
     let sandbox_json_errors =
         agent_mode || std::env::args().any(|argument| argument == "--json-errors");
-    if let Err(error) =
-        docsight_worker::apply_sandbox_limits_if_child(&docsight_worker::SandboxPolicy::default())
-    {
+    if let Err(error) = docsight_worker::apply_sandbox_limits_if_child() {
         let exit_code = error.exit_code();
         return if emit_error(&error, sandbox_json_errors, agent_mode).is_ok() {
             ExitCode::from(exit_code)
@@ -5034,7 +5035,7 @@ fn build_context_package(
     let fidelity = if include.contains(&ContextInclude::Fidelity) {
         match resolved.anchor_block() {
             Some(_) => {
-                let glyph_coverage = document_glyph_coverage(document, source);
+                let glyph_coverage = docsight_render::document_glyph_coverage(document, source);
                 let evidence = compute_evidence(document, source, target_id, None, glyph_coverage)?;
                 Some(ContextFidelity {
                     available: true,
@@ -5367,47 +5368,16 @@ fn fingerprint(
     max_document_bytes: u64,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open_with_limit(path, max_document_bytes)?;
-    let file_sha256 = source.sha256().to_owned();
-    let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
-    let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
-    let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));
-    let raster_engine = format!("docsight-render {}", env!("CARGO_PKG_VERSION"));
-    let layout_font = docsight_layout::font_fingerprint();
-    let raster_font = docsight_render::raster_font_fingerprint();
-    let fonts = format!("layout:{layout_font}|raster:{raster_font}");
-    let layout_profile = "agent-fidelity-v1".to_owned();
-
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(file_sha256.as_bytes());
-    hasher.update(b"|");
-    hasher.update(engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(ooxml_engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(pdf_engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(raster_engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(fonts.as_bytes());
-    hasher.update(b"|");
-    hasher.update(layout_profile.as_bytes());
-    hasher.update(b"|");
-    let hash = hasher.finalize();
-    let mut result_fingerprint = String::with_capacity(64);
-    for byte in hash {
-        use std::fmt::Write as _;
-        let _ = write!(&mut result_fingerprint, "{byte:02x}");
-    }
-
+    let fingerprint = reproduction_fingerprint(&source);
     let record = FingerprintRecord {
-        file_sha256,
-        engine,
-        ooxml_engine,
-        pdf_engine,
-        raster_engine,
-        fonts,
-        layout_profile,
-        result_fingerprint,
+        file_sha256: source.sha256().to_owned(),
+        engine: fingerprint.engine,
+        ooxml_engine: fingerprint.ooxml_engine,
+        pdf_engine: fingerprint.pdf_engine,
+        raster_engine: fingerprint.raster_engine,
+        fonts: fingerprint.fonts,
+        layout_profile: fingerprint.layout_profile,
+        result_fingerprint: fingerprint.result_fingerprint,
     };
 
     if ndjson {
@@ -5436,6 +5406,62 @@ fn fingerprint(
     emit_warnings(&[], quiet, json_errors)
 }
 
+struct ObjectEvidence {
+    source: DocumentSource,
+    record: EvidenceRecord,
+    warnings: Vec<Diagnostic>,
+}
+
+fn object_evidence(
+    path: &Path,
+    loader: &DocumentLoader<'_>,
+    object: &str,
+    render_dpi: u16,
+) -> Result<ObjectEvidence, DocsightError> {
+    let source = loader.open_source(path)?;
+    let document = loader.load(&source)?;
+    let object_id = ObjectId::from_raw(object);
+    let mut warnings = document.warnings.clone();
+    let request = RenderRequest {
+        target: RenderTarget::Object {
+            id: object.to_owned(),
+        },
+        dpi: render_dpi,
+    };
+    let render_fingerprint =
+        match render_document_with_password(&source, &request, loader.password()) {
+            Ok(rendered) => {
+                warnings.extend(rendered.warnings.iter().cloned());
+                Some(digest_bytes(rendered.png()))
+            }
+            Err(error) => {
+                warnings.push(Diagnostic {
+                    code: "RENDER_FINGERPRINT_UNAVAILABLE".to_owned(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!("render fingerprint was not computed for {object}: {error}"),
+                    effect: "visual provenance for this object is missing".to_owned(),
+                    object: Some(object_id.clone()),
+                    page: None,
+                    occurrences: None,
+                });
+                None
+            }
+        };
+    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source);
+    let record = compute_evidence(
+        &document,
+        &source,
+        &object_id,
+        render_fingerprint,
+        glyph_coverage,
+    )?;
+    Ok(ObjectEvidence {
+        source,
+        record,
+        warnings: docsight_agent::consolidate_warnings(warnings),
+    })
+}
+
 struct EvidenceArgs<'a> {
     path: &'a Path,
     loader: &'a DocumentLoader<'a>,
@@ -5449,48 +5475,11 @@ struct EvidenceArgs<'a> {
 }
 
 fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
-    let source = args.loader.open_source(args.path)?;
-    let doc = args.loader.load(&source)?;
-    let obj_id = ObjectId::from_raw(args.object);
-    let mut extra_warnings = Vec::new();
-
-    let render_fingerprint = {
-        let req = RenderRequest {
-            target: RenderTarget::Object {
-                id: args.object.to_owned(),
-            },
-            dpi: args.render_dpi,
-        };
-        match render_document_with_password(&source, &req, args.loader.password()) {
-            Ok(rendered) => {
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(rendered.png());
-                let hash = hasher.finalize();
-                let s = hash.iter().map(|byte| format!("{byte:02x}")).collect();
-                Some(s)
-            }
-            Err(render_error) => {
-                extra_warnings.push(Diagnostic {
-                    code: "RENDER_FINGERPRINT_UNAVAILABLE".to_owned(),
-                    severity: DiagnosticSeverity::Warning,
-                    message: format!(
-                        "render fingerprint was not computed for {}: {render_error}",
-                        args.object
-                    ),
-                    effect: "visual provenance for this object is missing".to_owned(),
-                    object: Some(obj_id.clone()),
-                    page: None,
-                    occurrences: None,
-                });
-                None
-            }
-        }
-    };
-
-    let glyph_coverage = document_glyph_coverage(&doc, &source);
-    let record = compute_evidence(&doc, &source, &obj_id, render_fingerprint, glyph_coverage)?;
-    let mut warnings = doc.warnings.clone();
-    warnings.extend(extra_warnings);
+    let ObjectEvidence {
+        source,
+        record,
+        warnings,
+    } = object_evidence(args.path, args.loader, args.object, args.render_dpi)?;
 
     if args.ndjson {
         return write_single_ndjson(
@@ -5559,17 +5548,6 @@ fn evidence(args: EvidenceArgs<'_>) -> Result<(), DocsightError> {
     emit_warnings(&warnings, args.quiet, args.json_errors)
 }
 
-pub(crate) fn document_glyph_coverage(doc: &Document, source: &DocumentSource) -> f32 {
-    let mut text = String::new();
-    for block in &doc.blocks {
-        text.push_str(&block.text());
-    }
-    match source.format() {
-        DocumentFormat::Docx => docsight_render::glyph_coverage(&text),
-        DocumentFormat::Pdf => docsight_pdf::pdf_glyph_coverage(&text),
-    }
-}
-
 struct CoverageArgs<'a> {
     path: &'a Path,
     loader: &'a DocumentLoader<'a>,
@@ -5585,7 +5563,7 @@ struct CoverageArgs<'a> {
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let source = args.loader.open_source(args.path)?;
     let doc = args.loader.load(&source)?;
-    let glyph_coverage = document_glyph_coverage(&doc, &source);
+    let glyph_coverage = docsight_render::document_glyph_coverage(&doc, &source);
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
 
     if args.ndjson {
@@ -5702,7 +5680,7 @@ struct HitArgs<'a> {
     json_errors: bool,
 }
 
-fn parse_point(input: &str) -> Result<(f32, f32), DocsightError> {
+pub(crate) fn parse_point(input: &str) -> Result<(f32, f32), DocsightError> {
     let parts: Vec<&str> = input.split(',').map(|s| s.trim()).collect();
     if parts.len() != 2 {
         return Err(DocsightError::InvalidArgument {

@@ -3,7 +3,8 @@ use docsight_render::{
     RenderRequest, RenderTarget,
     trace::{
         ProofBundle, TraceArtifact, TraceDecisionStatus, TraceDisplayOperation, TraceResourceKind,
-        TraceTableSizing, create_proof_bundle, record_trace, verify_proof_bundle, verify_trace,
+        TraceTableSizing, create_proof_bundle, record_trace, reproduction_fingerprint,
+        verify_proof_bundle, verify_trace,
     },
 };
 use std::io::{Cursor, Write};
@@ -35,6 +36,10 @@ fn docx_trace_replays_from_its_embedded_source_deterministically()
     let repeated = record_trace(&source, &request)?.to_bytes()?;
 
     assert_eq!(bytes, repeated);
+    assert_eq!(
+        trace.manifest.fingerprint,
+        reproduction_fingerprint(&source)
+    );
     assert!(!trace.manifest.glyph_runs.is_empty());
     assert_eq!(
         trace.manifest.decision_coverage.display_list_operations,
