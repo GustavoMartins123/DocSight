@@ -1,5 +1,6 @@
 use docsight_core::{
-    BlockContent, BlockKind, DocsightError, Document, DocumentSource, ObjectId, OverlayKind, Rect,
+    Block, BlockContent, BlockKind, DocsightError, Document, DocumentSource, ObjectId, OverlayKind,
+    Rect,
 };
 use docsight_ingest::ingest;
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,43 @@ pub enum HitQuery {
     BBox(Rect),
 }
 
+struct HitBlock<'a> {
+    block: &'a Block,
+    bbox: Rect,
+    cells: Vec<&'a docsight_core::TableCell>,
+}
+
+struct HitPageIndex<'a> {
+    blocks: Vec<HitBlock<'a>>,
+    base_reading_order: u32,
+}
+
+impl<'a> HitPageIndex<'a> {
+    fn new(document: &'a Document, page_number: u32) -> Self {
+        let blocks = document
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                let bbox = block.bbox_on_page(page_number)?;
+                let cells = match &block.content {
+                    BlockContent::Table(table) => table.cells.iter().collect(),
+                    _ => Vec::new(),
+                };
+                Some(HitBlock { block, bbox, cells })
+            })
+            .collect();
+        let base_reading_order = document
+            .blocks
+            .iter()
+            .map(|block| block.reading_order)
+            .fold(0, u32::max);
+        Self {
+            blocks,
+            base_reading_order,
+        }
+    }
+}
+
 pub fn hit_test_document(
     source: &DocumentSource,
     page_number: u32,
@@ -119,12 +157,11 @@ pub fn hit_test(
     };
 
     let mut hits = Vec::new();
+    let index = HitPageIndex::new(document, page_number);
 
-    for block in &document.blocks {
-        let Some(bbox) = block.bbox_on_page(page_number) else {
-            continue;
-        };
-
+    for entry in &index.blocks {
+        let block = entry.block;
+        let bbox = entry.bbox;
         let intersects = match query {
             HitQuery::Point(x, y) => bbox.contains_point(*x, *y),
             HitQuery::BBox(rect) => bbox.intersects(*rect),
@@ -145,24 +182,22 @@ pub fn hit_test(
                     ),
                 })?;
 
-        if let BlockContent::Table(table) = &block.content {
-            for cell in &table.cells {
-                if let Some(cell_box) = cell.bbox {
-                    let cell_hit = match query {
-                        HitQuery::Point(x, y) => cell_box.contains_point(*x, *y),
-                        HitQuery::BBox(rect) => cell_box.intersects(*rect),
-                    };
-                    if cell_hit {
-                        hit_cell = Some(HitCell {
-                            row: cell.row,
-                            column: cell.column,
-                            row_span: cell.row_span,
-                            column_span: cell.column_span,
-                            bbox: Some(cell_box),
-                        });
-                        snippet = cell.text.clone();
-                        break;
-                    }
+        for cell in &entry.cells {
+            if let Some(cell_box) = cell.bbox {
+                let cell_hit = match query {
+                    HitQuery::Point(x, y) => cell_box.contains_point(*x, *y),
+                    HitQuery::BBox(rect) => cell_box.intersects(*rect),
+                };
+                if cell_hit {
+                    hit_cell = Some(HitCell {
+                        row: cell.row,
+                        column: cell.column,
+                        row_span: cell.row_span,
+                        column_span: cell.column_span,
+                        bbox: Some(cell_box),
+                    });
+                    snippet = cell.text.clone();
+                    break;
                 }
             }
         }
@@ -187,11 +222,7 @@ pub fn hit_test(
         });
     }
 
-    let base_reading_order = document
-        .blocks
-        .iter()
-        .map(|block| block.reading_order)
-        .fold(0, u32::max);
+    let base_reading_order = index.base_reading_order;
     for (index, overlay) in page.overlays.iter().enumerate() {
         let Some(bbox) = overlay.bbox else {
             continue;

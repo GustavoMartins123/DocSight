@@ -4,6 +4,58 @@ use docsight_core::{
     SourceSpan,
 };
 use docsight_tables::{RulingSegment, TextSpanItem, detect_tables};
+use std::collections::{BTreeMap, BTreeSet};
+
+const RUN_ROW_INDEX_CELL_SIZE: f32 = 32.0;
+const MAX_RUN_ROW_INDEX_CELLS: usize = 4096;
+
+struct TextRunRowIndex {
+    buckets: BTreeMap<i64, Vec<usize>>,
+    wide: Vec<usize>,
+    run_count: usize,
+}
+
+impl TextRunRowIndex {
+    fn new(runs: &[TextRun]) -> Self {
+        let mut buckets: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+        let mut wide = Vec::new();
+        for (index, run) in runs.iter().enumerate() {
+            let center_y = (run.bbox.y0 + run.bbox.y1) * 0.5;
+            if center_y.is_finite() {
+                let bucket = (center_y / RUN_ROW_INDEX_CELL_SIZE).floor() as i64;
+                buckets.entry(bucket).or_default().push(index);
+            } else {
+                wide.push(index);
+            }
+        }
+        Self {
+            buckets,
+            wide,
+            run_count: runs.len(),
+        }
+    }
+
+    fn candidates(&self, top: f32, bottom: f32) -> Vec<usize> {
+        if !top.is_finite() || !bottom.is_finite() {
+            return (0..self.run_count).collect();
+        }
+        let minimum = (top / RUN_ROW_INDEX_CELL_SIZE).floor() as i64;
+        let maximum = (bottom / RUN_ROW_INDEX_CELL_SIZE).floor() as i64;
+        let width = maximum.saturating_sub(minimum).saturating_add(1);
+        if width > MAX_RUN_ROW_INDEX_CELLS as i64 {
+            return (0..self.run_count).collect();
+        }
+        let mut candidates = self.wide.clone();
+        for bucket in minimum..=maximum {
+            if let Some(indices) = self.buckets.get(&bucket) {
+                candidates.extend(indices.iter().copied());
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+    }
+}
 
 pub(crate) struct ReconstructedPage {
     pub blocks: Vec<Block>,
@@ -48,9 +100,11 @@ pub(crate) fn reconstruct_page_semantics(
 
     let tables = detect_tables(page, &span_items, &rulings, page_width, page_height);
 
-    let mut covered_span_indices = std::collections::BTreeSet::new();
+    let run_index = TextRunRowIndex::new(text_runs);
+    let mut covered_span_indices = BTreeSet::new();
     for table in &tables {
-        for (idx, span) in text_runs.iter().enumerate() {
+        for idx in run_index.candidates(table.bbox.y0 - 2.0, table.bbox.y1 + 2.0) {
+            let span = &text_runs[idx];
             let cx = (span.bbox.x0 + span.bbox.x1) * 0.5;
             let cy = (span.bbox.y0 + span.bbox.y1) * 0.5;
             if cx >= table.bbox.x0 - 2.0

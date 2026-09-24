@@ -275,6 +275,12 @@ fn collect_page_index(document: &Document, violations: &mut Vec<CanonicalViolati
         .iter()
         .map(|block| (&block.id, block))
         .collect();
+    let mut blocks_by_page: BTreeMap<u32, Vec<&Block>> = BTreeMap::new();
+    for block in &document.blocks {
+        if let Some(page) = block.page {
+            blocks_by_page.entry(page).or_default().push(block);
+        }
+    }
     for page in &document.pages {
         let mut indexed: BTreeSet<&ObjectId> = BTreeSet::new();
         let mut previous: Option<&Block> = None;
@@ -305,11 +311,7 @@ fn collect_page_index(document: &Document, violations: &mut Vec<CanonicalViolati
             }
             previous = Some(block);
         }
-        for block in document
-            .blocks
-            .iter()
-            .filter(|block| block.page == Some(page.number))
-        {
+        for block in blocks_by_page.get(&page.number).into_iter().flatten() {
             if !indexed.contains(&block.id) {
                 violations.push(CanonicalViolation::PageIndexMissingBlock {
                     page: page.number,

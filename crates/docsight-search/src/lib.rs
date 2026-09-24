@@ -145,6 +145,80 @@ impl Candidate {
     }
 }
 
+struct LexicalProjection {
+    normalized: String,
+    tokens: BTreeSet<String>,
+    casefolded: Vec<char>,
+    casefold_map: Vec<usize>,
+    normalized_chars: Vec<char>,
+    normalized_map: Vec<usize>,
+}
+
+impl LexicalProjection {
+    fn new(text: &str) -> Self {
+        let (casefolded, casefold_map) = casefold_chars(text);
+        let (normalized_chars, normalized_map) = normalized_chars_with_map(text);
+        let normalized = normalize_lexical(text);
+        let tokens = normalized.split_whitespace().map(str::to_owned).collect();
+        Self {
+            normalized,
+            tokens,
+            casefolded,
+            casefold_map,
+            normalized_chars,
+            normalized_map,
+        }
+    }
+}
+
+struct CandidateIndex {
+    candidates: Vec<Candidate>,
+    lexical: Vec<LexicalProjection>,
+    geometries: Vec<Vec<(u32, Rect)>>,
+    captions: Vec<usize>,
+    previous_heading: Vec<Option<usize>>,
+    by_page: BTreeMap<u32, BTreeSet<usize>>,
+}
+
+impl CandidateIndex {
+    fn new(candidates: Vec<Candidate>) -> Self {
+        let mut lexical = Vec::with_capacity(candidates.len());
+        let mut geometries = Vec::with_capacity(candidates.len());
+        let mut captions = Vec::new();
+        let mut previous_heading = Vec::with_capacity(candidates.len());
+        let mut by_page: BTreeMap<u32, BTreeSet<usize>> = BTreeMap::new();
+        let mut last_heading = None;
+        for (index, candidate) in candidates.iter().enumerate() {
+            lexical.push(LexicalProjection::new(&candidate.search_text));
+            geometries.push(candidate.geometries(None));
+            if selector_kind_matches(candidate, SelectorKind::Caption) {
+                captions.push(index);
+            }
+            previous_heading.push(last_heading);
+            if candidate.object.kind == SemanticKind::Heading {
+                last_heading = Some(index);
+            }
+            for (page, _) in candidate.object.fragments() {
+                by_page.entry(page).or_default().insert(index);
+            }
+        }
+        Self {
+            candidates,
+            lexical,
+            geometries,
+            captions,
+            previous_heading,
+            by_page,
+        }
+    }
+
+    fn occupies_page(&self, candidate: usize, pages: PageRange) -> bool {
+        self.by_page
+            .range(pages.start..=pages.end)
+            .any(|(_, indices)| indices.contains(&candidate))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectorKind {
     Object,
@@ -1981,21 +2055,22 @@ pub fn resolve(
             message: "resolve --text must contain letters or numbers".to_owned(),
         });
     }
-    let candidates = candidates(document)?;
-    let mut ranked = candidates
+    let candidate_index = CandidateIndex::new(candidates(document)?);
+    let query_projection = LexicalProjection::new(text);
+    let mut ranked = candidate_index
+        .candidates
         .iter()
         .enumerate()
-        .filter(|(_, candidate)| {
+        .filter(|(index, candidate)| {
             kind.is_none_or(|kind| candidate.object.kind == kind)
-                && pages.is_none_or(|pages| candidate.object.occupies(pages))
+                && pages.is_none_or(|pages| candidate_index.occupies_page(*index, pages))
         })
         .filter_map(|(index, candidate)| {
             score_candidate(
-                &candidates,
+                &candidate_index,
                 index,
                 candidate,
-                text,
-                &normalized_query,
+                &query_projection,
                 kind,
                 pages,
             )
@@ -2034,29 +2109,42 @@ pub fn resolve(
 }
 
 fn score_candidate(
-    candidates: &[Candidate],
+    candidates: &CandidateIndex,
     index: usize,
     candidate: &Candidate,
-    query: &str,
-    normalized_query: &str,
+    query_projection: &LexicalProjection,
     kind: Option<SemanticKind>,
     pages: Option<PageRange>,
 ) -> Option<ResolveCandidate> {
-    let normalized_text = normalize_lexical(&candidate.search_text);
-    let matched_range = find_casefold_range(&candidate.search_text, query)
-        .or_else(|| find_normalized_range(&candidate.search_text, query));
-    let direct_score = if normalized_text == normalized_query {
+    let candidate_projection = &candidates.lexical[index];
+    let matched_range = find_casefold_projection(
+        &candidate.search_text,
+        candidate_projection,
+        query_projection,
+    )
+    .or_else(|| {
+        find_normalized_projection(
+            &candidate.search_text,
+            candidate_projection,
+            query_projection,
+        )
+    });
+    let direct_score = if candidate_projection.normalized == query_projection.normalized {
         1.0
-    } else if normalized_text.contains(normalized_query) || matched_range.is_some() {
+    } else if candidate_projection
+        .normalized
+        .contains(&query_projection.normalized)
+        || matched_range.is_some()
+    {
         0.9
     } else {
         0.0
     };
-    let token_score = token_overlap(normalized_query, &normalized_text);
+    let token_score = token_overlap_projected(query_projection, candidate_projection);
     let (caption_score, caption_evidence) =
-        related_caption_score(candidates, candidate, normalized_query);
+        related_caption_score(candidates, index, query_projection);
     let (heading_score, heading_evidence) =
-        related_heading_score(candidates, index, normalized_query);
+        related_heading_score(candidates, index, query_projection);
     if direct_score == 0.0 && token_score == 0.0 && caption_score == 0.0 && heading_score == 0.0 {
         return None;
     }
@@ -2140,74 +2228,82 @@ fn resolve_reason(
 }
 
 fn related_caption_score(
-    candidates: &[Candidate],
-    candidate: &Candidate,
-    query: &str,
+    candidates: &CandidateIndex,
+    candidate_index: usize,
+    query: &LexicalProjection,
 ) -> (f64, Option<String>) {
-    let candidate_geometries = candidate.geometries(None);
+    let candidate_geometries = &candidates.geometries[candidate_index];
     if candidate_geometries.is_empty() {
         return (0.0, None);
     }
+    let candidate_id = &candidates.candidates[candidate_index].object.id;
     candidates
+        .captions
         .iter()
-        .filter(|other| {
-            other.object.id != candidate.object.id
-                && selector_kind_matches(other, SelectorKind::Caption)
-        })
-        .filter_map(|caption| {
-            let lexical = lexical_relation_score(query, &caption.search_text);
+        .filter_map(|caption_index| {
+            let caption = &candidates.candidates[*caption_index];
+            if &caption.object.id == candidate_id {
+                return None;
+            }
+            let lexical = lexical_relation_projected(query, &candidates.lexical[*caption_index]);
             if lexical == 0.0 {
                 return None;
             }
             let distance = candidate_geometries
                 .iter()
                 .flat_map(|(page, candidate_bbox)| {
-                    caption
-                        .geometries(None)
-                        .into_iter()
+                    candidates.geometries[*caption_index]
+                        .iter()
                         .filter(move |(caption_page, _)| page == caption_page)
-                        .map(move |(_, caption_bbox)| rect_distance(*candidate_bbox, caption_bbox))
+                        .map(move |(_, caption_bbox)| rect_distance(*candidate_bbox, *caption_bbox))
                 })
                 .min_by(f64::total_cmp);
             let proximity = distance.map_or(0.5, |distance| 1.0 / (1.0 + distance / 72.0));
-            Some((lexical * proximity, caption))
+            Some((lexical * proximity, *caption_index))
         })
         .max_by(|(left_score, left), (right_score, right)| {
-            left_score
-                .total_cmp(right_score)
-                .then_with(|| canonical_candidate_cmp(right, left))
+            left_score.total_cmp(right_score).then_with(|| {
+                canonical_candidate_cmp(
+                    &candidates.candidates[*right],
+                    &candidates.candidates[*left],
+                )
+            })
         })
-        .map(|(score, caption)| (score, Some(caption.object.id.to_string())))
+        .map(|(score, caption_index)| {
+            (
+                score,
+                Some(candidates.candidates[caption_index].object.id.to_string()),
+            )
+        })
         .unwrap_or((0.0, None))
 }
 
 fn related_heading_score(
-    candidates: &[Candidate],
+    candidates: &CandidateIndex,
     index: usize,
-    query: &str,
+    query: &LexicalProjection,
 ) -> (f64, Option<String>) {
-    candidates[..index]
-        .iter()
-        .rev()
-        .find(|candidate| candidate.object.kind == SemanticKind::Heading)
-        .map(|heading| {
-            let score = lexical_relation_score(query, &heading.search_text);
+    candidates.previous_heading[index]
+        .map(|heading_index| {
+            let heading = &candidates.candidates[heading_index];
+            let score = lexical_relation_projected(query, &candidates.lexical[heading_index]);
             (score, (score > 0.0).then(|| heading.object.id.to_string()))
         })
         .unwrap_or((0.0, None))
 }
 
-fn lexical_relation_score(query: &str, text: &str) -> f64 {
-    let text = normalize_lexical(text);
-    if query.is_empty() || text.is_empty() {
+fn lexical_relation_projected(query: &LexicalProjection, text: &LexicalProjection) -> f64 {
+    if query.normalized.is_empty() || text.normalized.is_empty() {
         return 0.0;
     }
-    if text == query {
+    if text.normalized == query.normalized {
         1.0
-    } else if text.contains(query) || query.contains(&text) {
+    } else if text.normalized.contains(&query.normalized)
+        || query.normalized.contains(&text.normalized)
+    {
         0.9
     } else {
-        token_overlap(query, &text)
+        token_overlap_projected(query, text)
     }
 }
 
@@ -2260,28 +2356,32 @@ fn normalize_lexical(value: &str) -> String {
     normalized
 }
 
-fn token_overlap(query: &str, text: &str) -> f64 {
-    let query_tokens = query.split_whitespace().collect::<BTreeSet<_>>();
-    if query_tokens.is_empty() {
+fn token_overlap_projected(query: &LexicalProjection, text: &LexicalProjection) -> f64 {
+    if query.tokens.is_empty() {
         return 0.0;
     }
-    let text_tokens = text.split_whitespace().collect::<BTreeSet<_>>();
-    let matches = query_tokens.intersection(&text_tokens).count();
-    matches as f64 / query_tokens.len() as f64
+    let matches = query.tokens.intersection(&text.tokens).count();
+    matches as f64 / query.tokens.len() as f64
 }
 
-fn find_casefold_range(text: &str, query: &str) -> Option<TextMatch> {
-    let (text_folded, text_map) = casefold_chars(text);
-    let (query_folded, _) = casefold_chars(query);
-    if query_folded.is_empty() || query_folded.len() > text_folded.len() {
+fn find_casefold_projection(
+    text: &str,
+    text_projection: &LexicalProjection,
+    query_projection: &LexicalProjection,
+) -> Option<TextMatch> {
+    if query_projection.casefolded.is_empty()
+        || query_projection.casefolded.len() > text_projection.casefolded.len()
+    {
         return None;
     }
-    let start = text_folded
-        .windows(query_folded.len())
-        .position(|window| window == query_folded.as_slice())?;
-    let start_char = *text_map.get(start)?;
-    let end_char = text_map
-        .get(start + query_folded.len() - 1)?
+    let start = text_projection
+        .casefolded
+        .windows(query_projection.casefolded.len())
+        .position(|window| window == query_projection.casefolded.as_slice())?;
+    let start_char = *text_projection.casefold_map.get(start)?;
+    let end_char = text_projection
+        .casefold_map
+        .get(start + query_projection.casefolded.len() - 1)?
         .checked_add(1)?;
     let matched = text
         .chars()
@@ -2295,18 +2395,24 @@ fn find_casefold_range(text: &str, query: &str) -> Option<TextMatch> {
     })
 }
 
-fn find_normalized_range(text: &str, query: &str) -> Option<TextMatch> {
-    let (text_normalized, text_map) = normalized_chars_with_map(text);
-    let (query_normalized, _) = normalized_chars_with_map(query);
-    if query_normalized.is_empty() || query_normalized.len() > text_normalized.len() {
+fn find_normalized_projection(
+    text: &str,
+    text_projection: &LexicalProjection,
+    query_projection: &LexicalProjection,
+) -> Option<TextMatch> {
+    if query_projection.normalized_chars.is_empty()
+        || query_projection.normalized_chars.len() > text_projection.normalized_chars.len()
+    {
         return None;
     }
-    let start = text_normalized
-        .windows(query_normalized.len())
-        .position(|window| window == query_normalized.as_slice())?;
-    let start_char = *text_map.get(start)?;
-    let end_char = text_map
-        .get(start + query_normalized.len() - 1)?
+    let start = text_projection
+        .normalized_chars
+        .windows(query_projection.normalized_chars.len())
+        .position(|window| window == query_projection.normalized_chars.as_slice())?;
+    let start_char = *text_projection.normalized_map.get(start)?;
+    let end_char = text_projection
+        .normalized_map
+        .get(start + query_projection.normalized_chars.len() - 1)?
         .checked_add(1)?;
     let matched = text
         .chars()

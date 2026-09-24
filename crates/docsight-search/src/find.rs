@@ -1,10 +1,11 @@
 use crate::TextMatch;
 use docsight_core::{
-    Block, BlockContent, DocsightError, Document, DocumentObject, ObjectId, Rect, TableCell,
+    Block, BlockContent, Diagnostic, DocsightError, Document, DocumentObject, ObjectId, Rect,
+    TableCell,
 };
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_FIND_PATTERN_BYTES: usize = 4_096;
 pub const MAX_FIND_REGEX_BYTES: usize = 1 << 20;
@@ -78,6 +79,59 @@ pub struct FindResult {
     pub matches: Vec<FindMatch>,
 }
 
+struct FindWarningIndex<'a> {
+    by_object: BTreeMap<ObjectId, Vec<&'a str>>,
+    by_page: BTreeMap<u32, Vec<&'a str>>,
+    global: Vec<&'a str>,
+}
+
+impl<'a> FindWarningIndex<'a> {
+    fn new(warnings: &'a [Diagnostic]) -> Self {
+        let mut by_object: BTreeMap<ObjectId, Vec<&str>> = BTreeMap::new();
+        let mut by_page: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
+        let mut global = Vec::new();
+        for warning in warnings {
+            if let Some(object) = &warning.object {
+                by_object
+                    .entry(object.clone())
+                    .or_default()
+                    .push(warning.code.as_str());
+            } else {
+                if warning.page.is_none() {
+                    global.push(warning.code.as_str());
+                }
+                if let Some(page) = warning.page {
+                    by_page.entry(page).or_default().push(warning.code.as_str());
+                }
+            }
+        }
+        Self {
+            by_object,
+            by_page,
+            global,
+        }
+    }
+
+    fn codes(&self, object: &DocumentObject<'_>) -> BTreeSet<&'a str> {
+        let mut codes = BTreeSet::new();
+        if let Some(entries) = self.by_object.get(object.id()) {
+            codes.extend(entries.iter().copied());
+        }
+        if let Some(container) = object.container()
+            && let Some(entries) = self.by_object.get(&container.id)
+        {
+            codes.extend(entries.iter().copied());
+        }
+        codes.extend(self.global.iter().copied());
+        if let Some(page) = object.page()
+            && let Some(entries) = self.by_page.get(&page)
+        {
+            codes.extend(entries.iter().copied());
+        }
+        codes
+    }
+}
+
 pub fn find(document: &Document, request: &FindRequest) -> Result<FindResult, DocsightError> {
     if request.pattern.is_empty() {
         return Err(DocsightError::InvalidArgument {
@@ -106,6 +160,7 @@ pub fn find(document: &Document, request: &FindRequest) -> Result<FindResult, Do
     }
 
     let matcher = build_matcher(request)?;
+    let warning_index = FindWarningIndex::new(&document.warnings);
     let mut objects = Vec::new();
     for block in &document.blocks {
         collect_objects(block, None, &mut objects, 0);
@@ -132,7 +187,7 @@ pub fn find(document: &Document, request: &FindRequest) -> Result<FindResult, Do
         }
         searched_objects += 1;
         let text = object.text();
-        let diagnostics = object_diagnostics(document, object);
+        let diagnostics = object_diagnostics(&warning_index, object);
         for (start_byte, end_byte) in matcher.ranges(&text) {
             if matches.len() >= MAX_FIND_MATCHES {
                 return Err(DocsightError::ResourceLimit {
@@ -245,23 +300,34 @@ fn casefold_ranges(text: &str, needle: &str) -> Vec<(usize, usize)> {
         return Vec::new();
     }
     let characters: Vec<(usize, char)> = text.char_indices().collect();
+    let mut folded = Vec::new();
+    let mut starts = vec![0_usize; characters.len()];
+    for (source_index, (_, character)) in characters.iter().enumerate() {
+        starts[source_index] = folded.len();
+        folded.extend(character.to_lowercase().map(|value| (value, source_index)));
+    }
     let mut ranges = Vec::new();
-    let mut index = 0usize;
+    let mut index = 0_usize;
     while index < characters.len() {
-        let mut folded = Vec::with_capacity(folded_needle.len());
-        let mut cursor = index;
-        while cursor < characters.len() && folded.len() < folded_needle.len() {
-            folded.extend(characters[cursor].1.to_lowercase());
-            cursor += 1;
-        }
-        if folded == folded_needle {
-            let start = characters[index].0;
-            let end = characters
-                .get(cursor)
+        let start = starts[index];
+        let Some(end) = start.checked_add(folded_needle.len()) else {
+            break;
+        };
+        if end <= folded.len()
+            && folded[start..end]
+                .iter()
+                .map(|(value, _)| *value)
+                .eq(folded_needle.iter().copied())
+        {
+            let last_source = folded[end - 1].1;
+            let source_end = last_source.saturating_add(1).min(characters.len());
+            let start_byte = characters[index].0;
+            let end_byte = characters
+                .get(source_end)
                 .map(|(offset, _)| *offset)
                 .unwrap_or(text.len());
-            ranges.push((start, end));
-            index = cursor;
+            ranges.push((start_byte, end_byte));
+            index = source_end;
         } else {
             index += 1;
         }
@@ -339,20 +405,15 @@ fn find_kind(object: &DocumentObject<'_>) -> FindObjectKind {
     }
 }
 
-fn object_diagnostics(document: &Document, object: &DocumentObject<'_>) -> Vec<String> {
-    let object_id = object.id();
-    let container_id = object.container().map(|container| &container.id);
-    let page = object.page();
-    let codes: BTreeSet<&str> = document
-        .warnings
-        .iter()
-        .filter(|warning| match &warning.object {
-            Some(target) => target == object_id || Some(target) == container_id,
-            None => warning.page.is_none() || warning.page == page,
-        })
-        .map(|warning| warning.code.as_str())
-        .collect();
-    codes.into_iter().map(str::to_owned).collect()
+fn object_diagnostics(
+    warning_index: &FindWarningIndex<'_>,
+    object: &DocumentObject<'_>,
+) -> Vec<String> {
+    warning_index
+        .codes(object)
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 fn tail_chars(text: &str, count: usize) -> String {
