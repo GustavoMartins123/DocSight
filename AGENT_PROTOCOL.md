@@ -127,6 +127,8 @@ Output limits are explicit. `limits.truncated` describes omitted result items, w
 
 Render and crop results include the requested output path, PNG media type, byte count, SHA-256 digest, page bounding box, and pixel dimensions. The digest verifies the artifact; fidelity still comes from the warnings and coverage records.
 
+`contact-sheet` is the bounded multi-page visual index. It requires an explicit `--pages` list or range, accepts at most 64 unique pages, orders them by page number, and writes one deterministic PNG with page labels. The renderer also enforces a maximum of 16,000,000 output pixels and 100,000,000 accumulated source pixels. It fails closed if any selected page cannot be rendered; it does not perform OCR, text extraction, caching, or an unbounded render-all operation. Its result contract is `schemas/v2/contact-sheet-result.json`.
+
 Record deterministic evidence for a rendered page, then replay it without the original document path:
 
 ```text

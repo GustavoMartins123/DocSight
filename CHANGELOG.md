@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add the bounded `contact-sheet` command for deterministic, labeled PNG indexes over explicitly selected DOCX or PDF pages, with page-count and pixel limits, fail-closed rendering and agent metadata.
 - Make MCP password inspection use the canonical encrypted-PDF path, expose the same evidence record and diagnostics as the CLI, and select document or proof-bundle verification from the named tool instead of a filename extension.
 - Use the trace reproduction fingerprint as the single canonical fingerprint implementation and make the `fingerprint` command report the same value; existing trace and proof-bundle fingerprints remain unchanged.
 - Make a sandbox child with the child marker but no explicit policy fail closed with `BACKEND_FAILURE`, and make `docsight-tables` the sole public owner of table format exporters.

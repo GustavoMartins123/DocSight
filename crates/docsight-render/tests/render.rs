@@ -1,6 +1,8 @@
 use docsight_core::{DocsightError, DocumentSource, Rect};
 use docsight_pdf::PdfDocument;
-use docsight_render::{RenderRequest, RenderTarget, render_pdf};
+use docsight_render::{
+    ContactSheetRequest, RenderRequest, RenderTarget, render_contact_sheet, render_pdf,
+};
 
 #[path = "../../../fixtures/pdf_fixture.rs"]
 mod pdf_fixture;
@@ -45,5 +47,21 @@ fn renders_page_region_and_object_through_one_pipeline() -> Result<(), DocsightE
     )?;
     assert_eq!(object.metadata.bbox, span.bbox);
     assert_eq!(&object.png()[..8], b"\x89PNG\r\n\x1a\n");
+    Ok(())
+}
+
+#[test]
+fn renders_pdf_contact_sheet_through_the_canonical_page_renderer() -> Result<(), DocsightError> {
+    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
+    let sheet = render_contact_sheet(
+        &source,
+        &ContactSheetRequest {
+            pages: vec![1],
+            dpi: 36,
+        },
+    )?;
+    assert_eq!(sheet.metadata.pages, vec![1]);
+    assert_eq!(sheet.metadata.media_type, "image/png");
+    assert!(sheet.png().starts_with(b"\x89PNG\r\n\x1a\n"));
     Ok(())
 }

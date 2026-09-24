@@ -1,0 +1,9 @@
+{
+  "fixture": "sample_features.docx",
+  "pages": [1],
+  "dpi": 72,
+  "width_px": 280,
+  "height_px": 360,
+  "media_type": "image/png",
+  "output_sha256": "810c2e5250bc05a9a0313082f339f853f1f9be30e991cddd471d91743c4de6f8"
+}

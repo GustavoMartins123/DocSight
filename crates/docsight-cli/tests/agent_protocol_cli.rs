@@ -138,6 +138,24 @@ fn ndjson_is_honored_by_single_result_commands() -> Result<(), Box<dyn std::erro
         docsight()
             .args([
                 "--ndjson",
+                "contact-sheet",
+                headings_str,
+                "--pages",
+                "1",
+                "--out",
+                temp_dir
+                    .path()
+                    .join("contact-sheet.png")
+                    .to_str()
+                    .ok_or("contact sheet path")?,
+            ])
+            .output()?,
+        "contact-sheet",
+    )?;
+    assert_ndjson_event(
+        docsight()
+            .args([
+                "--ndjson",
                 "crop",
                 headings_str,
                 "--object",

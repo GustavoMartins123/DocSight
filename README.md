@@ -84,7 +84,7 @@ The password is limited to 127 bytes, cleared from the CLI's memory when the ope
 | Content | `outline`, `text`, `page`, `images`, `links` | Read normalized structure, text, page geometry and resources. |
 | Tables | `tables`, `table` | List tables or export one as JSON, Markdown, CSV, TSV or HTML. |
 | Retrieval | `find`, `query`, `hit` | Locate literal or regex matches, run spatial DQL and resolve coordinates. |
-| Visual evidence | `render`, `crop`, `evidence` | Produce deterministic PNG evidence and its provenance record. |
+| Visual evidence | `render`, `contact-sheet`, `crop`, `evidence` | Produce deterministic PNG evidence, bounded page indexes and provenance records. |
 | Portable evidence | `bundle`, `verify`, `replay` | Create and verify proof bundles or deterministic render traces offline. |
 | Comparison | `diff` | Compare package, semantic and visual changes with lineage. |
 | Caching | `cache` | Report, verify, prune or clear the opt-in document IR cache. |

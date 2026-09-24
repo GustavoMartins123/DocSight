@@ -1,7 +1,9 @@
+mod contact_sheet;
 mod docx_raster;
 pub mod hit;
 pub mod trace;
 
+pub use contact_sheet::*;
 use docsight_core::{
     Diagnostic, DocsightError, Document, DocumentFormat, DocumentSource, Rect, write_all,
 };

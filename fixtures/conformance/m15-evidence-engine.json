@@ -671,6 +671,11 @@
       "sha256": "1869a0a91d3c3b3a62f43e6f1b38ceec10f8767a7e97baf544ca576d18ea5e86"
     },
     {
+      "file": "contact-sheet-result.json",
+      "id": "https://docsight.dev/schemas/v2/contact-sheet-result.json",
+      "sha256": "ce7e4b49551d6c1bc2f7733dfb453b25b7e2156a40c215bdd1a2efa40d09cc55"
+    },
+    {
       "file": "context-result.json",
       "id": "https://docsight.dev/schemas/v2/context-result.json",
       "sha256": "357f403e15f0812c6be839439f8d9c7e41d23653da2eb410814f70565d475b8c"

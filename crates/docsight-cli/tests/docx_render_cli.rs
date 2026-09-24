@@ -75,3 +75,92 @@ fn cli_renders_docx_page_and_crops_object_to_png() -> Result<(), Box<dyn std::er
 
     Ok(())
 }
+
+#[test]
+fn cli_writes_bounded_contact_sheet_with_agent_metadata() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = tempdir()?;
+    let path = fixture("sample_features.docx");
+    let path_str = path.to_str().ok_or("invalid path")?;
+    let first_path = dir.path().join("contact-first.png");
+    let second_path = dir.path().join("contact-second.png");
+    let first = docsight()
+        .args([
+            "--agent",
+            "contact-sheet",
+            path_str,
+            "--pages",
+            "1-1",
+            "--out",
+            first_path.to_str().ok_or("invalid first output path")?,
+        ])
+        .output()?;
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_json: serde_json::Value = serde_json::from_slice(&first.stdout)?;
+    assert_eq!(first_json["result"]["pages"], serde_json::json!([1]));
+    assert_eq!(first_json["result"]["labels"], serde_json::json!(["p. 1"]));
+    assert_eq!(first_json["result"]["limits"]["max_pages"], 64);
+    assert_eq!(
+        first_json["result"]["limits"]["max_output_pixels"],
+        16_000_000
+    );
+    assert_eq!(first_json["result"]["media_type"], "image/png");
+    assert!(first_json["result"]["output_bytes"].as_u64().unwrap_or(0) > 0);
+    let second = docsight()
+        .args([
+            "--agent",
+            "contact-sheet",
+            path_str,
+            "--pages",
+            "1",
+            "--out",
+            second_path.to_str().ok_or("invalid second output path")?,
+        ])
+        .output()?;
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(std::fs::read(&first_path)?, std::fs::read(&second_path)?);
+    assert!(std::fs::read(&first_path)?.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    let invalid_path = dir.path().join("invalid.png");
+    let invalid = docsight()
+        .args([
+            "--agent",
+            "contact-sheet",
+            path_str,
+            "--pages",
+            "1,1",
+            "--out",
+            invalid_path.to_str().ok_or("invalid output path")?,
+        ])
+        .output()?;
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(invalid.stdout.is_empty());
+    assert!(!invalid_path.exists());
+
+    let cache_dir = dir.path().join("cache");
+    std::fs::create_dir(&cache_dir)?;
+    let cached = docsight()
+        .args([
+            "--agent",
+            "--cache-dir",
+            cache_dir.to_str().ok_or("invalid cache path")?,
+            "contact-sheet",
+            path_str,
+            "--pages",
+            "1",
+            "--out",
+            first_path.to_str().ok_or("invalid cached output path")?,
+        ])
+        .output()?;
+    assert_eq!(cached.status.code(), Some(2));
+    assert!(cached.stdout.is_empty());
+    Ok(())
+}
