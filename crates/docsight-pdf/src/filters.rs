@@ -10,6 +10,51 @@ pub(crate) fn decode_stream(stream: &StreamValue) -> Result<Vec<u8>, DocsightErr
     decode_filtered(&stream.dict, &stream.data, &indirect_unsupported)
 }
 
+pub(crate) fn decode_stream_without_final_filter(
+    stream: &StreamValue,
+) -> Result<Vec<u8>, DocsightError> {
+    let mut dict = stream.dict.clone();
+    let filter_value = dict.get("Filter").cloned();
+    match filter_value {
+        None | Some(Value::Null) => {}
+        Some(Value::Name(_)) => {
+            dict.insert("Filter".to_owned(), Value::Null);
+            dict.insert("DecodeParms".to_owned(), Value::Null);
+        }
+        Some(Value::Array(values)) if !values.is_empty() => {
+            let filter_count = values.len();
+            let parms_value = dict.get("DecodeParms").cloned();
+            let mut kept = values;
+            kept.pop();
+            if kept.is_empty() {
+                dict.insert("Filter".to_owned(), Value::Null);
+            } else {
+                dict.insert("Filter".to_owned(), Value::Array(kept));
+            }
+            match parms_value {
+                Some(Value::Array(mut parms)) if parms.len() == filter_count => {
+                    parms.pop();
+                    dict.insert("DecodeParms".to_owned(), Value::Array(parms));
+                }
+                _ => {
+                    dict.insert("DecodeParms".to_owned(), Value::Null);
+                }
+            }
+        }
+        Some(Value::Ref(_)) => {
+            return Err(DocsightError::UnsupportedFeature {
+                feature: "PDF stream Filter given indirectly".to_owned(),
+            });
+        }
+        _ => {
+            return Err(crate::syntax::malformed(
+                "stream Filter must be a name or an array",
+            ));
+        }
+    }
+    decode_filtered(&dict, &stream.data, &indirect_unsupported)
+}
+
 fn indirect_unsupported(_: &Value) -> Result<Value, DocsightError> {
     Err(DocsightError::UnsupportedFeature {
         feature: "PDF stream Filter or DecodeParms given indirectly".to_owned(),
