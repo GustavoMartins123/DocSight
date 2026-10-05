@@ -507,3 +507,131 @@ fn test_10_supported_image_does_not_produce_placeholder() -> Result<(), Docsight
     );
     Ok(())
 }
+
+fn ascii85_encode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for chunk in data.chunks(4) {
+        let mut group = [0_u8; 4];
+        group[..chunk.len()].copy_from_slice(chunk);
+        let value = u32::from_be_bytes(group);
+        if chunk.len() == 4 && value == 0 {
+            out.push(b'z');
+            continue;
+        }
+        let mut symbols = [0_u8; 5];
+        let mut remaining = value;
+        for slot in symbols.iter_mut().rev() {
+            *slot = (remaining % 85) as u8 + b'!';
+            remaining /= 85;
+        }
+        out.extend_from_slice(&symbols[..chunk.len() + 1]);
+    }
+    out.extend_from_slice(b"~>");
+    out
+}
+
+#[test]
+fn test_11_ascii85_flate_filter_array_decodes() -> Result<(), DocsightError> {
+    let raw_rgb = vec![200, 10, 10, 200, 10, 10, 200, 10, 10, 200, 10, 10];
+    let compressed = zlib_compress(&raw_rgb)?;
+    let mut wrapped = ascii85_encode(&compressed);
+    let content = "q 60 0 0 40 20 30 cm /Im0 Do Q".as_bytes().to_vec();
+    let objects = vec![
+        ("<< /Type /Catalog /Pages 2 0 R >>".to_owned(), None),
+        ("<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(), None),
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+            None,
+        ),
+        (
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter [/ASCII85Decode /FlateDecode] /Length {} >>",
+                wrapped.len()
+            ),
+            Some(std::mem::take(&mut wrapped)),
+        ),
+        (
+            format!("<< /Length {} >>", content.len()),
+            Some(content),
+        ),
+    ];
+    let pdf_bytes = build_pdf_with_raw_objects(&objects);
+    let source = DocumentSource::from_bytes(pdf_bytes)?;
+    let document = PdfDocument::open(&source)?;
+    let raster = document.rasterize(1, 72, None)?;
+
+    assert!(
+        !raster
+            .warnings
+            .iter()
+            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
+        "ASCII85+Flate filter array must decode without placeholder"
+    );
+    let sample_x = 40_usize;
+    let sample_y = 50_usize;
+    let index = (sample_y * raster.width_px as usize + sample_x) * 3;
+    assert!(
+        raster.pixels[index] > 150 && raster.pixels[index + 1] < 60,
+        "sampled pixel should decode to the red image"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_12_smask_alpha_composites_over_page() -> Result<(), DocsightError> {
+    let raw_rgb = vec![255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0];
+    let compressed = zlib_compress(&raw_rgb)?;
+    let mask_raw = vec![128_u8, 128, 128, 128];
+    let mask_compressed = zlib_compress(&mask_raw)?;
+    let mut wrapped = ascii85_encode(&compressed);
+    let mut wrapped_mask = ascii85_encode(&mask_compressed);
+    let content = "q 60 0 0 40 20 30 cm /Im0 Do Q".as_bytes().to_vec();
+    let objects = vec![
+        ("<< /Type /Catalog /Pages 2 0 R >>".to_owned(), None),
+        ("<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(), None),
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 6 0 R >>".to_owned(),
+            None,
+        ),
+        (
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter [/ASCII85Decode /FlateDecode] /SMask 5 0 R /Length {} >>",
+                wrapped.len()
+            ),
+            Some(std::mem::take(&mut wrapped)),
+        ),
+        (
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter [/ASCII85Decode /FlateDecode] /Length {} >>",
+                wrapped_mask.len()
+            ),
+            Some(std::mem::take(&mut wrapped_mask)),
+        ),
+        (
+            format!("<< /Length {} >>", content.len()),
+            Some(content),
+        ),
+    ];
+    let pdf_bytes = build_pdf_with_raw_objects(&objects);
+    let source = DocumentSource::from_bytes(pdf_bytes)?;
+    let document = PdfDocument::open(&source)?;
+    let raster = document.rasterize(1, 72, None)?;
+
+    assert!(
+        !raster
+            .warnings
+            .iter()
+            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
+        "image with decodable SMask must not produce placeholder"
+    );
+    let sample_x = 40_usize;
+    let sample_y = 50_usize;
+    let index = (sample_y * raster.width_px as usize + sample_x) * 3;
+    let r = raster.pixels[index];
+    let g = raster.pixels[index + 1];
+    assert!(
+        r > 240 && g > 90 && g < 170,
+        "SMask alpha must blend red image over white page: r={r} g={g}"
+    );
+    Ok(())
+}

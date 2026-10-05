@@ -638,6 +638,113 @@ impl<'a> PdfDocument<'a> {
         Ok(entries)
     }
 
+    fn decode_soft_mask_alpha(
+        &self,
+        mask: &StreamValue,
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
+        let mask_width = match mask.dict.get("Width") {
+            Some(value) => match self.store.resolve(value) {
+                Ok(Value::Int(w)) if w > 0 && w as u32 == width => w as u32,
+                _ => return None,
+            },
+            None => return None,
+        };
+        let mask_height = match mask.dict.get("Height") {
+            Some(value) => match self.store.resolve(value) {
+                Ok(Value::Int(h)) if h > 0 && h as u32 == height => h as u32,
+                _ => return None,
+            },
+            None => return None,
+        };
+        let invert = match mask.dict.get("Decode") {
+            None | Some(Value::Null) => false,
+            Some(value) => match self.store.resolve(value) {
+                Ok(Value::Array(items)) if items.len() == 2 => {
+                    let values = items
+                        .iter()
+                        .map(pdf_number)
+                        .collect::<Result<Vec<_>, _>>()
+                        .ok()?;
+                    if values == [0.0, 1.0] {
+                        false
+                    } else if values == [1.0, 0.0] {
+                        true
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            },
+        };
+        let filter_val = match mask.dict.get("Filter") {
+            Some(value) => match self.store.resolve(value) {
+                Ok(v) => v,
+                Err(_) => return None,
+            },
+            None => Value::Null,
+        };
+        let filter_name = match &filter_val {
+            Value::Name(name) => name.as_str(),
+            Value::Null => "",
+            Value::Array(items) => match items.last() {
+                Some(Value::Name(name)) => name.as_str(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let mut gray = match filter_name {
+            "DCTDecode" | "DCT" => {
+                let jpeg = filters::decode_stream_without_final_filter(mask).ok()?;
+                let decoded = docsight_core::decode_jpeg(&jpeg).ok()?;
+                if decoded.width != mask_width || decoded.height != mask_height {
+                    return None;
+                }
+                decoded
+                    .rgba
+                    .chunks_exact(4)
+                    .map(|px| px[0])
+                    .collect::<Vec<u8>>()
+            }
+            "FlateDecode" | "Fl" | "" => {
+                match mask.dict.get("ColorSpace") {
+                    Some(value) => match self.store.resolve(value) {
+                        Ok(Value::Name(ref name))
+                            if matches!(name.as_str(), "DeviceGray" | "G") => {}
+                        Ok(Value::Array(ref items)) if items.len() == 1 => match &items[0] {
+                            Value::Name(name) if matches!(name.as_str(), "DeviceGray" | "G") => {}
+                            _ => return None,
+                        },
+                        _ => return None,
+                    },
+                    None => return None,
+                }
+                match mask
+                    .dict
+                    .get("BitsPerComponent")
+                    .map(|value| self.store.resolve(value))
+                {
+                    Some(Ok(Value::Int(8))) => {}
+                    _ => return None,
+                }
+                let decompressed = decode_stream(mask).ok()?;
+                let count = (mask_width as usize).checked_mul(mask_height as usize)?;
+                if decompressed.len() != count {
+                    return None;
+                }
+                decompressed
+            }
+            _ => return None,
+        };
+        if invert {
+            for byte in &mut gray {
+                *byte = 255 - *byte;
+            }
+        }
+        Some(gray)
+    }
+
     fn decode_image_xobject(&self, stream: &StreamValue) -> XObjectEntry {
         let subtype = match stream.dict.get("Subtype") {
             Some(Value::Name(subtype)) => subtype.as_str(),
@@ -646,13 +753,15 @@ impl<'a> PdfDocument<'a> {
         if subtype != "Image" && !subtype.is_empty() {
             return XObjectEntry::ImagePlaceholder;
         }
-        if stream
-            .dict
-            .get("SMask")
-            .is_some_and(|v| !matches!(v, Value::Null))
-        {
-            return XObjectEntry::ImagePlaceholder;
-        }
+        let smask_value = match stream.dict.get("SMask") {
+            None | Some(Value::Null) => None,
+            Some(value) => match self.store.resolve(value) {
+                Ok(Value::Null) => None,
+                Ok(Value::Name(ref name)) if name == "None" => None,
+                Ok(resolved) => Some(resolved),
+                Err(_) => return XObjectEntry::ImagePlaceholder,
+            },
+        };
         if stream
             .dict
             .get("Mask")
@@ -698,7 +807,21 @@ impl<'a> PdfDocument<'a> {
         let filter_name = match &filter_val {
             Value::Name(name) => name.as_str(),
             Value::Null => "",
+            Value::Array(items) => match items.last() {
+                Some(Value::Name(name)) => name.as_str(),
+                _ => return XObjectEntry::ImagePlaceholder,
+            },
             _ => return XObjectEntry::ImagePlaceholder,
+        };
+        let mask_alpha = match &smask_value {
+            None => None,
+            Some(Value::Stream(mask)) => match self.decode_soft_mask_alpha(mask, width, height) {
+                Some(alpha) => Some(alpha),
+                None => {
+                    return XObjectEntry::ImagePlaceholder;
+                }
+            },
+            Some(_) => return XObjectEntry::ImagePlaceholder,
         };
         match filter_name {
             "DCTDecode" | "DCT" => {
@@ -723,11 +846,19 @@ impl<'a> PdfDocument<'a> {
                         _ => return XObjectEntry::ImagePlaceholder,
                     }
                 }
-                let Ok(decoded) = docsight_core::decode_jpeg(&stream.data) else {
+                let Ok(jpeg_bytes) = filters::decode_stream_without_final_filter(stream) else {
+                    return XObjectEntry::ImagePlaceholder;
+                };
+                let Ok(mut decoded) = docsight_core::decode_jpeg(&jpeg_bytes) else {
                     return XObjectEntry::ImagePlaceholder;
                 };
                 if decoded.width != width || decoded.height != height {
                     return XObjectEntry::ImagePlaceholder;
+                }
+                if let Some(alpha) = &mask_alpha {
+                    for (pixel, &a) in decoded.rgba.chunks_exact_mut(4).zip(alpha.iter()) {
+                        pixel[3] = a;
+                    }
                 }
                 XObjectEntry::Image(std::sync::Arc::new(decoded))
             }
@@ -826,6 +957,11 @@ impl<'a> PdfDocument<'a> {
                         let b = if invert { 255 - chunk[2] } else { chunk[2] };
                         rgba.extend_from_slice(&[r, g, b, 255]);
                     }
+                    if let Some(alpha) = &mask_alpha {
+                        for (pixel, &a) in rgba.chunks_exact_mut(4).zip(alpha.iter()) {
+                            pixel[3] = a;
+                        }
+                    }
                     XObjectEntry::Image(std::sync::Arc::new(docsight_core::DecodedImage {
                         width,
                         height,
@@ -843,6 +979,11 @@ impl<'a> PdfDocument<'a> {
                     for &byte in &decompressed {
                         let g = if invert { 255 - byte } else { byte };
                         rgba.extend_from_slice(&[g, g, g, 255]);
+                    }
+                    if let Some(alpha) = &mask_alpha {
+                        for (pixel, &a) in rgba.chunks_exact_mut(4).zip(alpha.iter()) {
+                            pixel[3] = a;
+                        }
                     }
                     XObjectEntry::Image(std::sync::Arc::new(docsight_core::DecodedImage {
                         width,
