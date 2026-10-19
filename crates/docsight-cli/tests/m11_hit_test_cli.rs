@@ -26,8 +26,13 @@ fn hit_docx_point_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Hit Test on Page 1 at point (100.0, 80.0):"));
     assert!(stdout.contains("Hits: 1"));
-    assert!(stdout.contains("[h_515ad605791c12fc496c1c18d79f6526] Heading"));
-    assert!(stdout.contains("BBox:     [90.0, 72.0, 522.0, 100.7]"));
+    assert!(stdout.contains("[h_11ff36836ef204cec23ee89837654132] Heading"));
+    let document = docsight_ingest::ingest(&docsight_core::DocumentSource::open(&doc_path)?)?;
+    let bbox = document.blocks[0].bbox.ok_or("heading bbox")?;
+    assert!(stdout.contains(&format!(
+        "BBox:     [{:.1}, {:.1}, {:.1}, {:.1}]",
+        bbox.x0, bbox.y0, bbox.x1, bbox.y1
+    )));
 
     let json_out = docsight()
         .args(["hit", doc_str, "--page", "1", "--point", "100,80", "--json"])
@@ -39,7 +44,7 @@ fn hit_docx_point_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(result["query_page"], 1);
     assert_eq!(result["total_hits"], 1);
     let target = &result["targets"][0];
-    assert_eq!(target["object_id"], "h_515ad605791c12fc496c1c18d79f6526");
+    assert_eq!(target["object_id"], "h_11ff36836ef204cec23ee89837654132");
     assert_eq!(target["kind"], "heading");
 
     Ok(())
@@ -138,10 +143,18 @@ fn hit_table_cell_exposes_cell_text() -> Result<(), Box<dyn std::error::Error>> 
     let doc_path = fixture("sample_tables.docx");
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
 
+    let document = docsight_ingest::ingest(&docsight_core::DocumentSource::open(&doc_path)?)?;
+    let (_, table) = document.tables().next().ok_or("table")?;
+    let cell = table.cells.first().ok_or("cell")?;
+    let bbox = cell.bbox.ok_or("cell bbox")?;
+    let point = format!(
+        "{},{}",
+        (bbox.x0 + bbox.x1) / 2.0,
+        (bbox.y0 + bbox.y1) / 2.0
+    );
+    let page = cell.page.ok_or("cell page")?.to_string();
     let output = docsight()
-        .args([
-            "hit", doc_str, "--page", "1", "--point", "100,385", "--json",
-        ])
+        .args(["hit", doc_str, "--page", &page, "--point", &point, "--json"])
         .output()?;
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;

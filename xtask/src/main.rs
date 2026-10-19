@@ -33,7 +33,7 @@ enum FixtureKind {
     SampleTablesDocx,
     SyntheticTablePdf,
     UnsupportedBin,
-    SpecificationDocx,
+    ReportDocx,
     GeneratedDocx { blocks: usize },
     GeneratedPdf { pages: usize },
     LargeImagePdf { width: u32, height: u32 },
@@ -58,7 +58,7 @@ const SCENARIOS: &[ScenarioDefinition] = &[
         name: "docx_medium",
         document_class: "medium",
         workload: "parse_layout_render",
-        fixture: FixtureKind::SpecificationDocx,
+        fixture: FixtureKind::ReportDocx,
     },
     ScenarioDefinition {
         name: "docx_5000_blocks",
@@ -397,7 +397,7 @@ fn prepare_fixtures() -> TaskResult<PreparedFixtures> {
             FixtureKind::SampleTablesDocx => root.join("fixtures/validation/sample_tables.docx"),
             FixtureKind::SyntheticTablePdf => root.join("fixtures/validation/synthetic_table.pdf"),
             FixtureKind::UnsupportedBin => root.join("fixtures/validation/unsupported.bin"),
-            FixtureKind::SpecificationDocx => root.join("Projeto_DOCSIGHT_Especificacao.docx"),
+            FixtureKind::ReportDocx => root.join("fixtures/validation/sample_report.docx"),
             FixtureKind::GeneratedDocx { blocks } => {
                 let path = directory.path().join(format!("{blocks}-blocks.docx"));
                 std::fs::write(&path, build_docx(blocks)?)?;
@@ -863,7 +863,7 @@ const OPERATIONS: &[OperationDefinition] = &[
         template: &[
             "context",
             "{DOC}",
-            "tbl_6c22c8dd17adf7e32604b29241d9ab99",
+            "tbl_6fde9f50d14887bd230e213c487c1941",
             "--include",
             "content",
         ],
@@ -875,7 +875,7 @@ const OPERATIONS: &[OperationDefinition] = &[
         cacheable: true,
         artifact: false,
         expectation: OpExpectation::Success,
-        template: &["evidence", "{DOC}", "tbl_6c22c8dd17adf7e32604b29241d9ab99"],
+        template: &["evidence", "{DOC}", "tbl_6fde9f50d14887bd230e213c487c1941"],
     },
     OperationDefinition {
         name: "peek_headings",
@@ -965,11 +965,11 @@ const OPERATIONS: &[OperationDefinition] = &[
         cacheable: true,
         artifact: false,
         expectation: OpExpectation::Success,
-        template: &["evidence", "{DOC}", "cell_a1932a3e62fdc00c3e9528c5b008b5bc"],
+        template: &["evidence", "{DOC}", "cell_40ec85c90d3f0d6fac41ad1db44c74c0"],
     },
     OperationDefinition {
         name: "inspect_medium",
-        fixture: FixtureKind::SpecificationDocx,
+        fixture: FixtureKind::ReportDocx,
         reference: None,
         cacheable: true,
         artifact: false,
@@ -1094,7 +1094,7 @@ fn operation_fixture_path(root: &Path, kind: FixtureKind) -> TaskResult<PathBuf>
         FixtureKind::SampleTablesDocx => root.join("fixtures/validation/sample_tables.docx"),
         FixtureKind::SyntheticTablePdf => root.join("fixtures/validation/synthetic_table.pdf"),
         FixtureKind::UnsupportedBin => root.join("fixtures/validation/unsupported.bin"),
-        FixtureKind::SpecificationDocx => root.join("Projeto_DOCSIGHT_Especificacao.docx"),
+        FixtureKind::ReportDocx => root.join("fixtures/validation/sample_report.docx"),
         FixtureKind::GeneratedDocx { .. }
         | FixtureKind::GeneratedPdf { .. }
         | FixtureKind::LargeImagePdf { .. } => {

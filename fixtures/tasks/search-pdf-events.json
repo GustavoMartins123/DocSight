@@ -29,7 +29,7 @@
       "args": ["evidence", "{primary}", "{find./result/matches/0/object_id}"],
       "expect_exit": 0,
       "require": ["/result/object_id", "/result/fidelity"],
-      "values": {"/result/object_id": "cell_a1932a3e62fdc00c3e9528c5b008b5bc"}
+      "values": {"/result/object_id": "cell_40ec85c90d3f0d6fac41ad1db44c74c0"}
     }
   ]
 }

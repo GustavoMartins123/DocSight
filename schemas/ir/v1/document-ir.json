@@ -3,7 +3,7 @@
   "$id": "https://docsight.dev/schemas/ir/v1/document-ir.json",
   "title": "DocSight Document IR",
   "description": "Normalized, format-independent representation produced by DOCX and PDF ingestion. Every high-level operation reads this contract instead of parser-specific structures.",
-  "x-ir-schema-version": "1.3",
+  "x-ir-schema-version": "1.4",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -138,7 +138,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "1.3"
+          "const": "1.4"
         },
         "engine_version": {
           "type": "string",
@@ -291,7 +291,9 @@
         "page_number_start",
         "page_number_format",
         "headers_footers",
-        "last_block_id"
+        "last_block_id",
+        "column_spacing_pt",
+        "gutter_pt"
       ],
       "properties": {
         "id": {
@@ -348,7 +350,8 @@
         },
         "columns": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 64
         },
         "page_number_start": {
           "type": [
@@ -368,6 +371,13 @@
         },
         "last_block_id": {
           "$ref": "#/$defs/nullableObjectId"
+        },
+        "column_spacing_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "gutter_pt": {
+          "type": "number",
+          "minimum": 0
         }
       }
     },
@@ -543,6 +553,12 @@
         },
         "content": {
           "$ref": "#/$defs/blockContent"
+        },
+        "inline_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inlineRun"
+          }
         }
       }
     },
@@ -658,6 +674,12 @@
         },
         "style_id": {
           "$ref": "#/$defs/nullableString"
+        },
+        "numbering_id": {
+          "type": "string"
+        },
+        "marker_format": {
+          "$ref": "#/$defs/runFormat"
         }
       }
     },
@@ -716,7 +738,9 @@
         "bbox",
         "text",
         "blocks",
-        "source"
+        "source",
+        "page",
+        "format"
       ],
       "properties": {
         "id": {
@@ -752,6 +776,18 @@
         },
         "source": {
           "$ref": "#/$defs/sourceSpan"
+        },
+        "page": {
+          "$ref": "#/$defs/nullablePage"
+        },
+        "continuations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/blockContinuation"
+          }
+        },
+        "format": {
+          "$ref": "#/$defs/cellFormat"
         }
       }
     },
@@ -1058,6 +1094,16 @@
         },
         "indent_first_line_pt": {
           "type": "number"
+        },
+        "contextual_spacing": {
+          "type": "boolean"
+        },
+        "line_height_pt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "exact_line_height": {
+          "type": "boolean"
         }
       }
     },
@@ -1133,6 +1179,131 @@
         },
         "inherited": {
           "type": "boolean"
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/block"
+          }
+        }
+      }
+    },
+    "runFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "font_family",
+        "font_size_pt",
+        "bold",
+        "italic",
+        "color_argb",
+        "underline"
+      ],
+      "properties": {
+        "font_family": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "font_size_pt": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "bold": {
+          "$ref": "#/$defs/nullableBoolean"
+        },
+        "italic": {
+          "$ref": "#/$defs/nullableBoolean"
+        },
+        "color_argb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "underline": {
+          "$ref": "#/$defs/nullableBoolean"
+        }
+      }
+    },
+    "inlineRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "format",
+        "source"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/$defs/runFormat"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceSpan"
+        }
+      }
+    },
+    "cellBorder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width_pt",
+        "color_argb"
+      ],
+      "properties": {
+        "width_pt": {
+          "type": "number",
+          "minimum": 0
+        },
+        "color_argb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "cellFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "padding_pt",
+        "fill_argb",
+        "borders"
+      ],
+      "properties": {
+        "padding_pt": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "fill_argb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "borders": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/cellBorder"
+              }
+            ]
+          }
         }
       }
     }

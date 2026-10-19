@@ -120,30 +120,29 @@ fn decodes_an_embedded_jpeg_deterministically() -> Result<(), Box<dyn std::error
         !first
             .warnings
             .iter()
-            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+            .any(|warning| warning.code == "DOCX_IMAGE_RASTER_UNAVAILABLE")
     );
     assert_eq!(first.png(), second.png());
     Ok(())
 }
 
 #[test]
-fn a_malformed_jpeg_is_reported_as_a_placeholder() -> Result<(), Box<dyn std::error::Error>> {
+fn a_malformed_jpeg_fails_without_replacement_pixels() -> Result<(), Box<dyn std::error::Error>> {
     let source =
         DocumentSource::from_bytes(package_with_image("broken.jpg", &[0xff, 0xd8, 0xff, 0xe0])?)?;
-    let rendered = render_document(
+    let result = render_document(
         &source,
         &RenderRequest {
             target: RenderTarget::Page { page: 1 },
             dpi: 72,
         },
-    )?;
+    );
 
     assert!(
-        rendered
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+        result.is_err(),
+        "invalid image data must not produce a rendered artifact"
     );
+
     Ok(())
 }
 
@@ -164,27 +163,25 @@ fn rendering_the_same_image_twice_is_byte_identical() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn an_undecodable_image_falls_back_to_a_reported_placeholder()
--> Result<(), Box<dyn std::error::Error>> {
+fn an_undecodable_image_fails_without_replacement_pixels() -> Result<(), Box<dyn std::error::Error>>
+{
     let mut broken = encode_png(2, 2, &[7_u8; 12])?;
     let length = broken.len();
     broken[length - 20] ^= 0xFF;
     let source = DocumentSource::from_bytes(package_with_image("broken.png", &broken)?)?;
-    let rendered = render_document(
+    let result = render_document(
         &source,
         &RenderRequest {
             target: RenderTarget::Page { page: 1 },
             dpi: 72,
         },
-    )?;
+    );
 
     assert!(
-        rendered
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"),
-        "an undecodable image must be reported, not silently skipped"
+        result.is_err(),
+        "invalid image data must not produce a rendered artifact"
     );
+
     Ok(())
 }
 

@@ -4,6 +4,7 @@ mod headers;
 pub mod layout;
 mod measure;
 mod paginate;
+mod tables;
 
 pub use font::{
     WrappedLine, char_width, font_fingerprint, text_width, wrap_text, wrap_text_indexed,

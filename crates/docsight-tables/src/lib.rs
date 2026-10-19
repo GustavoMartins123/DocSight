@@ -88,6 +88,9 @@ impl InferredTable {
                     row_span: cell.row_span,
                     column_span: cell.column_span,
                     bbox: cell.bbox,
+                    page: None,
+                    continuations: Vec::new(),
+                    format: Default::default(),
                     text: cell.text.clone(),
                     blocks: Vec::new(),
                     source: SourceSpan::new(format!(
@@ -133,6 +136,7 @@ impl InferredTable {
             flags: LayoutFlags::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Table(table_block),
         }
     }

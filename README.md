@@ -159,3 +159,15 @@ DocSight is dual-licensed under either of:
 - MIT License ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
+
+## Local DOCX fonts
+
+DOCX layout resolves the requested family, bold weight and italic slant exactly. The binary bundles the twelve regular/bold/italic/bold-italic Liberation Sans, Serif and Mono faces under SIL OFL 1.1; this does not authorize substituting them for a different requested family.
+
+Place licensed TTF/OTF files in a dedicated directory and set `DOCSIGHT_FONT_DIR` to its absolute path. If unset, the dedicated `$HOME/.local/share/fonts/docsight` directory is used when present (`USERPROFILE` on Windows). The directory is flat and bounded to 128 files, 16 MiB per file. Conflicting faces for the same family/style fail explicitly. Missing fonts return `FONT_UNAVAILABLE` (exit 30) with `required_font` and affected object; no artifact is published.
+
+Aptos is available separately from Microsoft's official [Aptos font package](https://www.microsoft.com/en-us/download/details.aspx?id=106087), subject to its EULA; DocSight does not redistribute it. Symbol/Courier must likewise be supplied as licensed faces. Font bytes and rendering backend versions participate in reproduction fingerprints. All inspection and rendering remain offline; DocSight never installs or downloads fonts at runtime.
+
+The normalized IR is version 1.4 and preserves inline run formatting, cell formatting and continuation geometry, structured header/footer content, contextual/line spacing and section columns/gutters. DOCX pagination remains computed evidence, not a claim of Word-identical rendering.
+
+Validation documents contain generic fictional data only, never project specifications, implementation phases, milestone records or internal plans. The long-form regression/benchmark document `fixtures/validation/sample_report.docx` describes a fictional facilities survey with tables, lists, headings and page fields, using only bundled Liberation fonts. It is authored independently of the project specification and needs no proprietary fonts or network access in CI.

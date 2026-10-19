@@ -16,7 +16,7 @@ fn reconstructs_all_synthetic_measurements() -> Result<(), Box<dyn std::error::E
     let tables = document.tables().collect::<Vec<_>>();
     assert_eq!(tables.len(), 1);
     let (block, table) = tables[0];
-    assert_eq!(block.id.as_str(), "tbl_b54dbb45da2a78dec493d24c309ea8c0");
+    assert_eq!(block.id.as_str(), "tbl_4a65916a4d36e2ccc570158c5302585f");
     assert_eq!((table.rows, table.columns), (25, 12));
     assert_eq!(table.detector.as_deref(), Some("ruled"));
     let expected = [

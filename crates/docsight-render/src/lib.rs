@@ -40,14 +40,34 @@ pub struct RenderMetadata {
 pub use docsight_core::encode_png;
 pub use docx_raster::{glyph_coverage, raster_font_fingerprint};
 
-pub fn document_glyph_coverage(document: &Document, source: &DocumentSource) -> f32 {
+pub fn document_glyph_coverage(
+    document: &Document,
+    source: &DocumentSource,
+) -> Result<f32, DocsightError> {
     let mut text = String::new();
     for block in &document.blocks {
         text.push_str(&block.text());
     }
     match source.format() {
-        DocumentFormat::Docx => glyph_coverage(&text),
-        DocumentFormat::Pdf => docsight_pdf::pdf_glyph_coverage(&text),
+        DocumentFormat::Docx => {
+            let laid = ingest_docx(source)?;
+            let mut total = 0_u64;
+            let mut covered = 0_u64;
+            for page in &laid.pages {
+                for run in &page.runs {
+                    let face = laid.fonts.resolve(&run.font_family, run.bold, run.italic)?;
+                    let (run_covered, run_total) = face.glyph_coverage(&run.text)?;
+                    total += run_total;
+                    covered += run_covered;
+                }
+            }
+            Ok(if total == 0 {
+                1.0
+            } else {
+                covered as f32 / total as f32
+            })
+        }
+        DocumentFormat::Pdf => Ok(docsight_pdf::pdf_glyph_coverage(&text)),
     }
 }
 
@@ -135,62 +155,50 @@ pub fn render_docx(
             });
         }
     };
-    let images = decode_page_images(source, &page, &mut warnings);
-    rasterize_docx_page(&page, request.dpi, crop_box, warnings, &images)
+    let images = decode_page_images(source, &page)?;
+    rasterize_docx_page(
+        &page,
+        request.dpi,
+        crop_box,
+        warnings,
+        &images,
+        &laid_out.fonts,
+    )
 }
 
 fn decode_page_images(
     source: &DocumentSource,
     page: &docsight_layout::LaidOutPage,
-    warnings: &mut Vec<Diagnostic>,
-) -> std::collections::BTreeMap<String, docsight_core::DecodedImage> {
+) -> Result<std::collections::BTreeMap<String, docsight_core::DecodedImage>, DocsightError> {
     let mut decoded = std::collections::BTreeMap::new();
     for image in &page.images {
         if decoded.contains_key(&image.target) {
             continue;
         }
-        let bytes = match docsight_ooxml::read_media_part(source.bytes(), &image.target) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => continue,
-            Err(error) => {
-                warnings.push(image_warning(&image.object_id, &image.target, &error));
-                continue;
-            }
-        };
-        let decoded_image = if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
-            docsight_core::decode_png(&bytes)
+        let bytes =
+            docsight_ooxml::read_media_part(source.bytes(), &image.target)?.ok_or_else(|| {
+                DocsightError::MalformedDocument {
+                    message: format!(
+                        "image resource {} for object {} is absent",
+                        image.target, image.object_id
+                    ),
+                }
+            })?;
+        let data = if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
+            docsight_core::decode_png(&bytes)?
         } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-            docsight_core::decode_jpeg(&bytes)
+            docsight_core::decode_jpeg(&bytes)?
         } else {
-            Err(DocsightError::UnsupportedFeature {
-                feature: "embedded image format is not rasterizable".to_owned(),
-            })
+            return Err(DocsightError::UnsupportedFeature {
+                feature: format!(
+                    "embedded image {} for object {} is not a supported PNG or JPEG",
+                    image.target, image.object_id
+                ),
+            });
         };
-        match decoded_image {
-            Ok(image_data) => {
-                decoded.insert(image.target.clone(), image_data);
-            }
-            Err(error) => warnings.push(image_warning(&image.object_id, &image.target, &error)),
-        }
+        decoded.insert(image.target.clone(), data);
     }
-    decoded
-}
-
-fn image_warning(
-    object: &docsight_core::ObjectId,
-    target: &str,
-    error: &DocsightError,
-) -> Diagnostic {
-    Diagnostic {
-        code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
-        severity: docsight_core::DiagnosticSeverity::Warning,
-        message: format!("embedded image {target} could not be decoded: {error}"),
-        effect: "visual evidence for this figure does not include the original image pixels"
-            .to_owned(),
-        object: Some(object.clone()),
-        page: None,
-        occurrences: None,
-    }
+    Ok(decoded)
 }
 
 fn clip_object_crop(

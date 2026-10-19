@@ -1,32 +1,29 @@
-use crate::font::text_width;
-use crate::layout::{LaidOutPage, TextRunLayout};
+use crate::geometry::SectionGeometry;
+use crate::layout::LaidOutPage;
+use crate::measure::{EmittedBlock, Measured, emit_atomic, measure_block};
 use crate::paginate::PageRecord;
 use docsight_core::{
-    Diagnostic, DiagnosticSeverity, DocsightError, HeaderFooterKind, HeaderFooterVariant, ObjectId,
-    Overlay, OverlayKind, Page, Rect, Section, SectionHeaderFooter, SourceSpan,
+    DocsightError, HeaderFooterKind, HeaderFooterVariant, ObjectId, Overlay, OverlayKind, Page,
+    Rect, Section, SectionHeaderFooter, SourceSpan,
 };
-use std::collections::BTreeSet;
 
-const HEADER_FOOTER_FONT_SIZE: f32 = 9.0;
-const HEADER_FOOTER_LINE_HEIGHT: f32 = 12.0;
-const HEADER_FOOTER_COLOR: u32 = 0xFF606060;
 const PAGE_PLACEHOLDER: &str = "[PAGE]";
 const NUMPAGES_PLACEHOLDER: &str = "[NUMPAGES]";
 const SECTIONPAGES_PLACEHOLDER: &str = "[SECTIONPAGES]";
-const MAX_ROMAN_PAGE_NUMBER: u32 = 3_999;
-const MAX_LETTER_PAGE_NUMBER: u32 = 780;
 
 pub(crate) struct HeaderFooterContext<'a> {
     pub document_digest: &'a str,
     pub sections: &'a [Section],
     pub records: &'a [PageRecord],
+    pub styles: &'a [docsight_core::Style],
+    pub resources: &'a [docsight_core::Resource],
+    pub fonts: &'a docsight_fonts::FontBook,
 }
 
 pub(crate) fn project_headers_footers(
     context: &HeaderFooterContext<'_>,
     doc_pages: &mut [Page],
     laid_pages: &mut [LaidOutPage],
-    warnings: &mut Vec<Diagnostic>,
 ) -> Result<(), DocsightError> {
     let total_pages =
         u32::try_from(context.records.len()).map_err(|_| DocsightError::ResourceLimit {
@@ -51,8 +48,7 @@ pub(crate) fn project_headers_footers(
                 })?;
         }
     }
-    let mut unsupported_formats = BTreeSet::new();
-    let mut approximated_entries = BTreeSet::new();
+
     for ((record, doc_page), laid_page) in context
         .records
         .iter()
@@ -65,20 +61,10 @@ pub(crate) fn project_headers_footers(
             let Some(entry) = select_entry(section, record, kind) else {
                 continue;
             };
-            let display = match format_page_number(
+            let display = docsight_core::format_ooxml_number(
                 record.display_number,
                 section.page_number_format.as_deref(),
-            ) {
-                Some(display) => display,
-                None => {
-                    if entry.text.contains(PAGE_PLACEHOLDER)
-                        && unsupported_formats.insert(record.section)
-                    {
-                        warnings.push(unsupported_format_warning(section));
-                    }
-                    record.display_number.to_string()
-                }
-            };
+            )?;
             let text = entry
                 .text
                 .replace(PAGE_PLACEHOLDER, &display)
@@ -86,9 +72,6 @@ pub(crate) fn project_headers_footers(
                 .replace(SECTIONPAGES_PLACEHOLDER, &section_pages.to_string());
             if text.trim().is_empty() {
                 continue;
-            }
-            if approximated_entries.insert((record.section, entry.part.clone())) {
-                warnings.push(approximated_layout_warning(section, entry));
             }
             project_entry(
                 context.document_digest,
@@ -98,7 +81,9 @@ pub(crate) fn project_headers_footers(
                 text,
                 doc_page,
                 laid_page,
-                warnings,
+                context,
+                total_pages,
+                section_pages,
             )?;
         }
     }
@@ -120,6 +105,155 @@ fn select_entry<'a>(
     section.header_footer(kind, variant)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LayoutHints {
+    pub total: u32,
+    pub sections: Vec<u32>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn entry_layout(
+    entry: &SectionHeaderFooter,
+    record: &PageRecord,
+    section: &Section,
+    total: u32,
+    section_pages: u32,
+    styles: &[docsight_core::Style],
+    resources: &[docsight_core::Resource],
+    fonts: &docsight_fonts::FontBook,
+) -> Result<EmittedBlock, DocsightError> {
+    let display = docsight_core::format_ooxml_number(
+        record.display_number,
+        section.page_number_format.as_deref(),
+    )?;
+    if entry.blocks.is_empty() && !entry.text.is_empty() {
+        return Err(DocsightError::MalformedDocument {
+            message: format!(
+                "header or footer {} has text without structural blocks",
+                entry.part
+            ),
+        });
+    }
+    let replace = |text: &str| {
+        text.replace(PAGE_PLACEHOLDER, &display)
+            .replace(NUMPAGES_PLACEHOLDER, &total.to_string())
+            .replace(SECTIONPAGES_PLACEHOLDER, &section_pages.to_string())
+    };
+    let mut output = EmittedBlock {
+        height: 0.0,
+        runs: Vec::new(),
+        borders: Vec::new(),
+        images: Vec::new(),
+        fills: Vec::new(),
+    };
+    let geometry = SectionGeometry {
+        columns: 1,
+        column_gap: 0.0,
+        ..record.geometry
+    };
+    for block in &entry.blocks {
+        let mut block = block.clone();
+        replace_fields(&mut block, &replace);
+        let measured = measure_block(&block, &geometry, styles, resources, fonts)?;
+        let emitted = match measured {
+            Measured::Text(text) => EmittedBlock {
+                height: text.full_height(),
+                runs: text.emit(&(0..text.line_count()), output.height, fonts)?,
+                borders: Vec::new(),
+                images: Vec::new(),
+                fills: Vec::new(),
+            },
+            Measured::Table(table) => {
+                let mut emitted = table.emitted;
+                for run in &mut emitted.runs {
+                    crate::tables::translate_run(run, 0.0, output.height);
+                }
+                for border in &mut emitted.borders {
+                    border.rect = crate::tables::translate(border.rect, 0.0, output.height)?;
+                }
+                for fill in &mut emitted.fills {
+                    fill.rect = crate::tables::translate(fill.rect, 0.0, output.height)?;
+                }
+                for image in &mut emitted.images {
+                    image.rect = crate::tables::translate(image.rect, 0.0, output.height)?;
+                }
+                emitted
+            }
+            Measured::Atomic { .. } => {
+                emit_atomic(&mut block, &geometry, output.height, resources)?
+            }
+        };
+        output.height += emitted.height;
+        output.runs.extend(emitted.runs);
+        output.borders.extend(emitted.borders);
+        output.images.extend(emitted.images);
+        output.fills.extend(emitted.fills);
+    }
+    Ok(output)
+}
+
+fn replace_fields(block: &mut docsight_core::Block, replace: &impl Fn(&str) -> String) {
+    match &mut block.content {
+        docsight_core::BlockContent::Paragraph(paragraph) => {
+            paragraph.text = replace(&paragraph.text)
+        }
+        docsight_core::BlockContent::Table(table) => {
+            for cell in &mut table.cells {
+                cell.text = replace(&cell.text);
+                for child in &mut cell.blocks {
+                    replace_fields(child, replace);
+                }
+            }
+        }
+        _ => {}
+    }
+    for run in &mut block.inline_runs {
+        run.text = replace(&run.text);
+    }
+}
+
+pub(crate) fn content_geometry(
+    section: &Section,
+    record: &PageRecord,
+    document: &docsight_core::Document,
+    fonts: &docsight_fonts::FontBook,
+    hints: &LayoutHints,
+) -> Result<SectionGeometry, DocsightError> {
+    let mut geometry = record.geometry;
+    for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+        if let Some(entry) = select_entry(section, record, kind) {
+            let measured = entry_layout(
+                entry,
+                record,
+                section,
+                hints.total,
+                hints.sections[record.section],
+                &document.styles,
+                &document.resources,
+                fonts,
+            )?;
+            if kind == HeaderFooterKind::Header {
+                geometry.margin_top = geometry
+                    .margin_top
+                    .max(geometry.header_distance + measured.height);
+            } else {
+                geometry.margin_bottom = geometry
+                    .margin_bottom
+                    .max(geometry.footer_distance + measured.height);
+            }
+        }
+    }
+    if geometry.content_height() <= 0.0 {
+        return Err(DocsightError::MalformedDocument {
+            message: format!(
+                "headers and footers leave no body area in section {}",
+                section.section_index
+            ),
+        });
+    }
+    Ok(geometry)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_entry(
     document_digest: &str,
@@ -129,11 +263,22 @@ fn project_entry(
     text: String,
     doc_page: &mut Page,
     laid_page: &mut LaidOutPage,
-    warnings: &mut Vec<Diagnostic>,
+    context: &HeaderFooterContext<'_>,
+    total_pages: u32,
+    section_pages: u32,
 ) -> Result<(), DocsightError> {
+    let measured = entry_layout(
+        entry,
+        record,
+        &context.sections[record.section],
+        total_pages,
+        section_pages,
+        context.styles,
+        context.resources,
+        context.fonts,
+    )?;
     let geometry = record.geometry;
-    let lines: Vec<&str> = text.split('\n').collect();
-    let height = lines.len() as f32 * HEADER_FOOTER_LINE_HEIGHT;
+    let height = measured.height;
     let (top, overlay_kind, label) = match kind {
         HeaderFooterKind::Header => (geometry.header_distance, OverlayKind::Header, "header"),
         HeaderFooterKind::Footer => (
@@ -142,70 +287,43 @@ fn project_entry(
             "footer",
         ),
     };
-    let left = geometry.margin_left;
-    let bbox = Rect::new(left, top, left + geometry.content_width(), top + height)?;
-    let id = ObjectId::new(
-        if kind == HeaderFooterKind::Header {
-            "hdr"
-        } else {
-            "ftr"
-        },
-        document_digest,
-        &format!("page[{}]/{label}", record.number),
-    );
-    let overlaps_body = match kind {
-        HeaderFooterKind::Header => bbox.y1 > geometry.margin_top,
-        HeaderFooterKind::Footer => bbox.y0 < geometry.content_bottom(),
-    };
-    if overlaps_body {
-        warnings.push(Diagnostic {
-            code: "DOCX_HEADER_FOOTER_OVERLAPS_BODY".to_owned(),
-            severity: DiagnosticSeverity::Warning,
-            message: format!(
-                "the {label} on page {} extends into the body text area",
-                record.number
-            ),
-            effect: "body text is not moved to make room, so the header or footer overlaps content that Word would push away".to_owned(),
-            object: Some(id.clone()),
-            page: Some(record.number),
-            occurrences: None,
+    let bbox = Rect::new(
+        geometry.margin_left,
+        top,
+        geometry.margin_left + geometry.full_content_width(),
+        top + height,
+    )?;
+    if top < 0.0 || top + height > geometry.page_height {
+        return Err(DocsightError::MalformedDocument {
+            message: format!("{label} on page {} extends outside its page", record.number),
         });
     }
-    if bbox.y0 < 0.0 || bbox.y1 > geometry.page_height {
-        warnings.push(Diagnostic {
-            code: "DOCX_HEADER_FOOTER_OUTSIDE_PAGE".to_owned(),
-            severity: DiagnosticSeverity::Warning,
-            message: format!(
-                "the {label} on page {} extends outside the physical page",
-                record.number
-            ),
-            effect: "content outside the page boundary is clipped from rendered evidence"
-                .to_owned(),
-            object: Some(id.clone()),
-            page: Some(record.number),
-            occurrences: None,
-        });
+    for mut run in measured.runs {
+        crate::tables::translate_run(&mut run, 0.0, top);
+        laid_page.runs.push(run);
     }
-    for (index, line) in lines.iter().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let line_top = top + index as f32 * HEADER_FOOTER_LINE_HEIGHT;
-        laid_page.runs.push(TextRunLayout {
-            text: (*line).to_owned(),
-            font_size: HEADER_FOOTER_FONT_SIZE,
-            bold: false,
-            bbox: Rect::new(
-                left,
-                line_top,
-                left + text_width(line, HEADER_FOOTER_FONT_SIZE).max(1.0),
-                line_top + HEADER_FOOTER_LINE_HEIGHT,
-            )?,
-            color_argb: HEADER_FOOTER_COLOR,
-        });
+    for mut border in measured.borders {
+        border.rect = crate::tables::translate(border.rect, 0.0, top)?;
+        laid_page.borders.push(border);
+    }
+    for mut image in measured.images {
+        image.rect = crate::tables::translate(image.rect, 0.0, top)?;
+        laid_page.images.push(image);
+    }
+    for mut fill in measured.fills {
+        fill.rect = crate::tables::translate(fill.rect, 0.0, top)?;
+        laid_page.fills.push(fill);
     }
     doc_page.overlays.push(Overlay {
-        id,
+        id: ObjectId::new(
+            if kind == HeaderFooterKind::Header {
+                "hdr"
+            } else {
+                "ftr"
+            },
+            document_digest,
+            &format!("page[{}]/{label}", record.number),
+        ),
         kind: overlay_kind,
         page: record.number,
         bbox: Some(bbox),
@@ -213,86 +331,4 @@ fn project_entry(
         source: SourceSpan::new(entry.part.clone()),
     });
     Ok(())
-}
-
-fn format_page_number(number: u32, format: Option<&str>) -> Option<String> {
-    match format {
-        None | Some("decimal") => Some(number.to_string()),
-        Some("lowerRoman") => roman(number).map(|value| value.to_lowercase()),
-        Some("upperRoman") => roman(number),
-        Some("lowerLetter") => letters(number).map(|value| value.to_lowercase()),
-        Some("upperLetter") => letters(number),
-        Some(_) => None,
-    }
-}
-
-fn roman(mut number: u32) -> Option<String> {
-    const NUMERALS: [(u32, &str); 13] = [
-        (1000, "M"),
-        (900, "CM"),
-        (500, "D"),
-        (400, "CD"),
-        (100, "C"),
-        (90, "XC"),
-        (50, "L"),
-        (40, "XL"),
-        (10, "X"),
-        (9, "IX"),
-        (5, "V"),
-        (4, "IV"),
-        (1, "I"),
-    ];
-    if !(1..=MAX_ROMAN_PAGE_NUMBER).contains(&number) {
-        return None;
-    }
-    let mut output = String::new();
-    for (value, numeral) in NUMERALS {
-        while number >= value {
-            output.push_str(numeral);
-            number -= value;
-        }
-    }
-    Some(output)
-}
-
-fn letters(number: u32) -> Option<String> {
-    if number > MAX_LETTER_PAGE_NUMBER {
-        return None;
-    }
-    let index = number.checked_sub(1)?;
-    let letter = char::from_u32(u32::from(b'A') + index % 26)?;
-    let repeat = usize::try_from(index / 26 + 1).ok()?;
-    Some(std::iter::repeat_n(letter, repeat).collect())
-}
-
-fn unsupported_format_warning(section: &Section) -> Diagnostic {
-    Diagnostic {
-        code: "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "section {} numbers pages with format {}",
-            section.section_index,
-            section.page_number_format.as_deref().unwrap_or_default()
-        ),
-        effect: "page number fields in this section are shown as decimal numbers where the format or number is unsupported".to_owned(),
-        object: Some(section.id.clone()),
-        page: None,
-        occurrences: None,
-    }
-}
-
-fn approximated_layout_warning(section: &Section, entry: &SectionHeaderFooter) -> Diagnostic {
-    Diagnostic {
-        code: "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!(
-            "header or footer part {} is projected as plain text",
-            entry.part
-        ),
-        effect: "source paragraph and run formatting, tab stops, tables, drawings, and positioned content are not reproduced; projected evidence uses deterministic 9 pt text lines"
-            .to_owned(),
-        object: Some(section.id.clone()),
-        page: None,
-        occurrences: None,
-    }
 }

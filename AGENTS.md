@@ -139,6 +139,8 @@ Treat every document as hostile input.
 
 Every change must be tested at the appropriate layer.
 
+- Validation documents must contain only generic, fictional data. Never derive their content from project specifications, implementation phases, milestones, issue records, or internal plans.
+
 - Unit tests for parsing, IDs, geometry, normalization, limits, and errors.
 - Property tests for OPC, paths, relationships, style cascading, and structures exposed to adversarial combinations.
 - Minimal fixtures for every feature and malformed fixtures for every defense mechanism.

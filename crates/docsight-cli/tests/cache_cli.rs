@@ -867,8 +867,8 @@ fn a_cache_that_cannot_be_written_fails_explicitly() -> TestResult {
 fn killing_the_process_never_publishes_a_partial_entry() -> TestResult {
     let directory = tempfile::tempdir()?;
     let cache_dir = directory.path().join("cache");
-    let document =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Projeto_DOCSIGHT_Especificacao.docx");
+    let document = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/validation/sample_report.docx");
     let plain = docsight()
         .args(["--agent", "text"])
         .arg(&document)

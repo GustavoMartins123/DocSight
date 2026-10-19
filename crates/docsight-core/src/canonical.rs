@@ -338,32 +338,79 @@ fn collect_overlay_pages(document: &Document, violations: &mut Vec<CanonicalViol
 
 fn collect_continuations(document: &Document, violations: &mut Vec<CanonicalViolation>) {
     let page_numbers: BTreeSet<u32> = document.pages.iter().map(|page| page.number).collect();
-    for block in document
-        .blocks
-        .iter()
-        .filter(|block| !block.continuations.is_empty())
-    {
-        let Some(primary_page) = block.page.filter(|_| block.bbox.is_some()) else {
-            violations.push(CanonicalViolation::ContinuationWithoutPlacement {
-                id: block.id.clone(),
-            });
-            continue;
-        };
-        let mut previous_page = primary_page;
-        let mut previous_char = 0usize;
-        for continuation in &block.continuations {
-            if continuation.page <= previous_page
-                || continuation.text_start_char <= previous_char
-                || !page_numbers.contains(&continuation.page)
-            {
-                violations.push(CanonicalViolation::ContinuationOutOfOrder {
-                    id: block.id.clone(),
-                    page: continuation.page,
-                });
+    for block in &document.blocks {
+        collect_block_fragments(block, &page_numbers, violations);
+    }
+}
+
+fn collect_block_fragments(
+    block: &Block,
+    pages: &BTreeSet<u32>,
+    violations: &mut Vec<CanonicalViolation>,
+) {
+    collect_fragment_violations(
+        &block.id,
+        (block.page, block.bbox),
+        &block.continuations,
+        (
+            block.text().chars().count(),
+            matches!(block.content, BlockContent::Table(_)),
+        ),
+        pages,
+        violations,
+    );
+    if let BlockContent::Table(table) = &block.content {
+        for cell in &table.cells {
+            collect_fragment_violations(
+                &cell.id,
+                (cell.page, cell.bbox),
+                &cell.continuations,
+                (cell.text.chars().count(), true),
+                pages,
+                violations,
+            );
+            for child in &cell.blocks {
+                collect_block_fragments(child, pages, violations);
             }
-            previous_page = continuation.page;
-            previous_char = continuation.text_start_char;
         }
+    }
+}
+
+fn collect_fragment_violations(
+    id: &ObjectId,
+    placement: (Option<u32>, Option<crate::Rect>),
+    continuations: &[crate::BlockContinuation],
+    text: (usize, bool),
+    pages: &BTreeSet<u32>,
+    violations: &mut Vec<CanonicalViolation>,
+) {
+    if continuations.is_empty() {
+        return;
+    }
+    let Some(primary) = placement.0.filter(|_| placement.1.is_some()) else {
+        violations.push(CanonicalViolation::ContinuationWithoutPlacement { id: id.clone() });
+        return;
+    };
+    let mut previous_page = primary;
+    let mut previous_char = 0;
+    for continuation in continuations {
+        let invalid_offset = if text.1 {
+            continuation.text_start_char < previous_char
+        } else {
+            continuation.text_start_char <= previous_char
+        };
+        if continuation.page <= previous_page
+            || invalid_offset
+            || continuation.text_start_char > text.0
+            || !pages.contains(&continuation.page)
+        {
+            violations.push(CanonicalViolation::ContinuationOutOfOrder {
+                id: id.clone(),
+                page: continuation.page,
+            });
+        }
+        previous_page = continuation.page;
+        previous_char = continuation.text_start_char;
     }
 }
 

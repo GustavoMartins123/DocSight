@@ -2504,6 +2504,7 @@ mod tests {
             flags: LayoutFlags::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content,
         }
     }
@@ -2899,6 +2900,9 @@ mod tests {
                     row_span: 1,
                     column_span: 1,
                     bbox: None,
+                    page: None,
+                    continuations: Vec::new(),
+                    format: Default::default(),
                     text: "Amount due".to_owned(),
                     blocks: Vec::new(),
                     source: source("pdf::page[1]::table::cell[0,0]"),

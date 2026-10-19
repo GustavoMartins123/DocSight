@@ -427,7 +427,12 @@ fn sandbox_render_can_publish_output_and_trace() -> Result<(), Box<dyn std::erro
             trace.to_str().ok_or("trace path")?,
         ])
         .output()?;
-    assert_eq!(result.status.code(), Some(0));
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "sandbox render failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(result.stderr.is_empty());
     assert!(std::fs::read(&output)?.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert!(!std::fs::read(&trace)?.is_empty());

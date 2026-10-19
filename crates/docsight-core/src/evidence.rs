@@ -10,7 +10,7 @@ const TEXT_LOSS_CODES: &[&str] = &["DOCX_RUN_ELEMENT_UNSUPPORTED"];
 const GLOBAL_TEXT_LOSS_CODES: &[&str] = &["PDF_TEXT_CODE_UNMAPPED"];
 
 const RESOURCE_LOSS_CODES: &[&str] = &[
-    "DOCX_FIGURE_RASTER_PLACEHOLDER",
+    "DOCX_IMAGE_RASTER_UNAVAILABLE",
     "DOCX_IMAGE_UNRESOLVED",
     "DOCX_EMBEDDED_OBJECT_INERT",
     "DOCX_ACTIVE_CONTENT_INERT",
@@ -18,28 +18,18 @@ const RESOURCE_LOSS_CODES: &[&str] = &[
 ];
 
 const GEOMETRY_WARNING_CODES: &[&str] = &[
-    "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
     "DOCX_BLOCK_TALLER_THAN_PAGE",
     "DOCX_WIDOW_CONTROL_RELAXED",
     "DOCX_SHAPE_VISUAL_OMITTED",
 ];
 
 const GLOBAL_GEOMETRY_APPROXIMATION_CODES: &[&str] = &[
-    "DOCX_FONT_SUBSTITUTED",
-    "DOCX_PAGINATION_BLOCK_GRANULAR",
-    "DOCX_SECTION_COLUMNS_UNSUPPORTED",
     "DOCX_SECTION_DEFAULTED",
-    "DOCX_SECTION_GUTTER_IGNORED",
     "DOCX_SECTION_GEOMETRY_DEFAULTED",
-    "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED",
-    "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
-    "DOCX_HEADER_FOOTER_OUTSIDE_PAGE",
-    "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
     "APPROXIMATED_PDF_FONT",
 ];
 
 const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
-    "DOCX_FONT_SUBSTITUTED",
     "APPROXIMATED_PDF_FONT",
     "PDF_XOBJECT_PLACEHOLDER",
     "PDF_EXTGSTATE_IGNORED",
@@ -52,28 +42,18 @@ const GLOBAL_VISUAL_UNSUPPORTED_CODES: &[&str] = &[
     "PDF_NON_UNIFORM_STROKE_VISUAL",
     "PDF_SHADING_UNSUPPORTED",
     "DOCX_HEADER_FOOTER_UNRESOLVED",
-    "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
-    "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED",
     "DOCX_SHAPE_VISUAL_OMITTED",
 ];
 
 const PAGE_APPROXIMATION_CODES: &[&str] = &["DOCX_LAYOUT_PAGINATED"];
 
 const DOCX_RENDER_APPROXIMATION_CODES: &[&str] = &[
-    "DOCX_FONT_SUBSTITUTED",
-    "DOCX_FIGURE_RASTER_PLACEHOLDER",
+    "DOCX_LAYOUT_PAGINATED",
+    "DOCX_IMAGE_RASTER_UNAVAILABLE",
     "DOCX_BLOCK_TALLER_THAN_PAGE",
-    "DOCX_PAGINATION_BLOCK_GRANULAR",
-    "DOCX_SECTION_COLUMNS_UNSUPPORTED",
     "DOCX_SECTION_DEFAULTED",
-    "DOCX_SECTION_GUTTER_IGNORED",
     "DOCX_SECTION_GEOMETRY_DEFAULTED",
-    "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED",
-    "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
-    "DOCX_HEADER_FOOTER_OUTSIDE_PAGE",
     "DOCX_HEADER_FOOTER_UNRESOLVED",
-    "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
-    "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED",
     "DOCX_SHAPE_VISUAL_OMITTED",
 ];
 
@@ -449,7 +429,7 @@ fn measured_fidelity_with_context(
             context
                 .warnings
                 .object_warnings(&block.id)
-                .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+                .any(|warning| warning.code == "DOCX_IMAGE_RASTER_UNAVAILABLE")
         })
         .count();
     let placeholder_share = if figures_total == 0 {
@@ -831,17 +811,17 @@ fn page_coverage(
             && context
                 .warnings
                 .object_warnings(&block.id)
-                .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+                .any(|warning| warning.code == "DOCX_IMAGE_RASTER_UNAVAILABLE")
         {
             affected_ids.insert(block.id.to_string());
-            all_reason_codes.insert("DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned());
+            all_reason_codes.insert("DOCX_IMAGE_RASTER_UNAVAILABLE".to_owned());
             if include_regions {
                 regions.push(CoverageRegion {
                     page,
                     object_id: Some(block.id.clone()),
                     bbox: region_bbox(block, page, is_global),
                     status: CoverageStatus::Unsupported,
-                    reason_code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
+                    reason_code: "DOCX_IMAGE_RASTER_UNAVAILABLE".to_owned(),
                     description: "embedded image bytes are not rasterized; visual evidence is a placeholder box"
                         .to_owned(),
                 });
@@ -916,32 +896,20 @@ fn page_coverage(
     let geometry_reasons = metric_reason_codes(
         &fidelity,
         &[
-            "DOCX_FONT_SUBSTITUTED",
-            "DOCX_PAGINATION_BLOCK_GRANULAR",
-            "DOCX_TABLE_GRID_WIDTHS_UNUSABLE",
             "DOCX_BLOCK_TALLER_THAN_PAGE",
             "DOCX_WIDOW_CONTROL_RELAXED",
-            "DOCX_SECTION_COLUMNS_UNSUPPORTED",
             "DOCX_SECTION_DEFAULTED",
-            "DOCX_SECTION_GUTTER_IGNORED",
             "DOCX_SECTION_GEOMETRY_DEFAULTED",
-            "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED",
-            "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
-            "DOCX_HEADER_FOOTER_OUTSIDE_PAGE",
-            "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
             "DOCX_SHAPE_VISUAL_OMITTED",
         ],
     );
     let visual_reasons = metric_reason_codes(
         &fidelity,
         &[
-            "DOCX_FONT_SUBSTITUTED",
             "APPROXIMATED_PDF_FONT",
             "PDF_XOBJECT_PLACEHOLDER",
-            "DOCX_FIGURE_RASTER_PLACEHOLDER",
+            "DOCX_IMAGE_RASTER_UNAVAILABLE",
             "DOCX_HEADER_FOOTER_UNRESOLVED",
-            "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
-            "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED",
             "DOCX_SHAPE_VISUAL_OMITTED",
         ],
     );
@@ -1236,8 +1204,8 @@ mod tests {
     #[test]
     fn page_fidelity_excludes_warnings_owned_by_other_pages() {
         let mut warning = Diagnostic::warning(
-            "DOCX_HEADER_FOOTER_OVERLAPS_BODY",
-            "header overlaps page 2".to_owned(),
+            "DOCX_WIDOW_CONTROL_RELAXED",
+            "constraint relaxed on page 2".to_owned(),
             "page 2 geometry is approximate",
         );
         warning.page = Some(2);
@@ -1283,6 +1251,7 @@ mod tests {
             flags: LayoutFlags::default(),
             format: ParagraphFormat::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Figure(FigureBlock {
                 alt_text: None,
                 caption: None,
@@ -1292,7 +1261,7 @@ mod tests {
             }),
         };
         let mut warning = Diagnostic::warning(
-            "DOCX_FIGURE_RASTER_PLACEHOLDER",
+            "DOCX_IMAGE_RASTER_UNAVAILABLE",
             "page 2 image is not decoded".to_owned(),
             "page 2 visual evidence is incomplete",
         );
@@ -1320,7 +1289,7 @@ mod tests {
         let page_two = resource_coverage(&document, &context, 2, &[&document.blocks[1]], false);
         assert!(page_one.reason_codes.is_empty());
         assert_eq!(page_one.score, 1.0);
-        assert_eq!(page_two.reason_codes, ["DOCX_FIGURE_RASTER_PLACEHOLDER"]);
+        assert_eq!(page_two.reason_codes, ["DOCX_IMAGE_RASTER_UNAVAILABLE"]);
         assert_eq!(page_two.score, 0.0);
         let ids = BTreeSet::from([&document.blocks[0].id]);
         let indexed = context.warnings.relevant(
@@ -1353,6 +1322,6 @@ mod tests {
         assert!(scoped_page.reasons.is_empty());
         let global =
             measured_fidelity_with_context(&document, &inputs, &context, WarningScope::Document);
-        assert_eq!(global.reasons, ["DOCX_FIGURE_RASTER_PLACEHOLDER"]);
+        assert_eq!(global.reasons, ["DOCX_IMAGE_RASTER_UNAVAILABLE"]);
     }
 }

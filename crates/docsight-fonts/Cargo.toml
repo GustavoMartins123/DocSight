@@ -1,0 +1,18 @@
+[package]
+name = "docsight-fonts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+docsight-core = { path = "../docsight-core" }
+fontdue.workspace = true
+rustybuzz.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

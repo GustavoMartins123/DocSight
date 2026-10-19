@@ -33,6 +33,10 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 ### DOCX
 
 - Paragraphs, headings, list items, structural tables, figures, footnotes and endnotes.
+- Source run fonts, sizes, bold, italic, underline and explicit colors, including paragraph/character style inheritance and document defaults. OpenType shaping and antialiased outline rasterization share the same exact resolved font bytes; font resources carry content digests.
+- Equal-width multi-column body flow and binding gutters. Contextual paragraph spacing, automatic/exact/minimum line height, hanging list markers and independent numbering sequences with start overrides.
+- Row-level table pagination, including legal line cuts in oversized rows, per-cell page continuations, structural child geometry, nested content, source grid widths, margins, fills and single-line borders.
+- Formatted header/footer paragraphs and tables reserve body space. Page-dependent fields are stabilized by bounded iterative pagination. Unsupported numbering formats and out-of-page headers/footers fail explicitly rather than changing their meaning.
 - Table grid with row and column spans, nested tables, cell text and cell geometry.
 - Style definitions with `basedOn` inheritance, including the default paragraph style and document defaults for `keepNext`, `keepLines`, `pageBreakBefore` and `widowControl`.
 - Sections from every paragraph-level and final `sectPr`: page size and orientation, margins, header and footer distances, start type (`nextPage`, `continuous`, `evenPage`, `oddPage`, `nextColumn`), title page, page-number restart and format, and default, first-page and even-page headers and footers inherited from the previous section as Word does. Every DOCX page records its `section_index`.
@@ -63,7 +67,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Text and tables: `text`, `tables`, `table` (JSON, Markdown, CSV, TSV, HTML).
 - Resources and links: `images`, `links`. Link targets are reported, never fetched.
 - Geometry: page-local points at 1/72 inch with the page origin at the top-left, used identically by geometry, render, crop, hit-testing and diff.
-- Raster output: `render` (page PNG), `contact-sheet` (bounded deterministic PNG index for explicitly selected pages) and `crop` (page region or object region derived from its bounding box). Embedded PNG and JPEG images from DOCX and supported PDF Image XObjects (DCTDecode/JPEG, 8-bit FlateDecode in DeviceRGB and DeviceGray) are decoded locally and drawn into their figure box; unsupported formats fail closed and render explicit placeholder boxes with typed diagnostics; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
+- Raster output: `render` (page PNG), `contact-sheet` (bounded deterministic PNG index for explicitly selected pages) and `crop` (page region or object region derived from its bounding box). Embedded PNG and JPEG images from DOCX and supported PDF Image XObjects (DCTDecode/JPEG, 8-bit FlateDecode in DeviceRGB and DeviceGray) are decoded locally and drawn into their figure box; unsupported DOCX images fail closed without an artifact; unsupported PDF images are reported with typed diagnostics; text, lines, boxes, table borders and fills are drawn from the same display list at any supported DPI.
 - Search: `find` returns every literal or regex occurrence at the finest object granularity the IR holds — a table is searched cell by cell — with the matched character range, surrounding context, page, bounding box, source, confidence and the diagnostics that affect that object. Results can be narrowed by object kind, page range and a page region, and are bounded with deterministic continuation. Regular expressions run in guaranteed linear time.
 - Spatial and structural selection: `query` (DQL with `above`, `below`, `inside`, `overlaps`, `nearest`, `distance-to`), `hit` (point or region to objects), `resolve` (ranked descriptor matching with explainable components).
 - Object addressing is closed: every object identifier any command emits — block, table cell, nested block, overlay or hyperlink — is accepted by `evidence`, `context` and `crop`. An object without geometry of its own fails with a typed error that names the anchoring block to use instead.
@@ -92,32 +96,25 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | --- | --- |
 | Missing `sectPr`; a default Letter section is synthesized | `DOCX_SECTION_DEFAULTED` |
 | Missing section geometry values use declared deterministic defaults | `DOCX_SECTION_GEOMETRY_DEFAULTED` |
-| Binding gutters are parsed but not added to the body margins | `DOCX_SECTION_GUTTER_IGNORED` |
-| Multi-column sections are laid out as one column | `DOCX_SECTION_COLUMNS_UNSUPPORTED` |
-| A `nextColumn` section break starts a new page because multi-column flow is unsupported | `DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED` |
 | Widow/orphan control is relaxed only when the declared constraint cannot fit on an empty page | `DOCX_WIDOW_CONTROL_RELAXED` |
-| Tables move as a whole because row-level table splitting is not implemented | `DOCX_PAGINATION_BLOCK_GRANULAR` |
 | A block taller than the content area overflows the page | `DOCX_BLOCK_TALLER_THAN_PAGE` |
 | A header or footer reference cannot be resolved to an available package part | `DOCX_HEADER_FOOTER_UNRESOLVED` |
 | Unsupported header or footer fields retain their cached source result, which can be stale | `DOCX_HEADER_FOOTER_FIELD_CACHED` |
-| Header and footer content is projected as deterministic plain text without source formatting, tab stops, tables, drawings, or positioned content | `DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED` |
-| A header or footer extends into the body because body flow does not reserve additional space for it | `DOCX_HEADER_FOOTER_OVERLAPS_BODY` |
-| A header or footer extends outside the physical page and is clipped | `DOCX_HEADER_FOOTER_OUTSIDE_PAGE` |
-| Unsupported page-number formats render as decimal | `DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED` |
 | Recognized DrawingML lines are preserved as `Shape` blocks, but their floating position, extent, stroke, and pixels are not projected | `DOCX_SHAPE_VISUAL_OMITTED` |
-| Layout is computed rather than read from the source | `DOCX_LAYOUT_PAGINATED` |
-| Text is measured with a deterministic proportional fallback font, not the document's own font | `DOCX_FONT_SUBSTITUTED` |
-| An embedded image is neither a supported PNG nor JPEG, or its bytes fail strict decoding, so a placeholder box is rendered instead of its pixels; the diagnostic names the detected format or decoding failure | `DOCX_FIGURE_RASTER_PLACEHOLDER` |
+| Layout is computed from source formatting and exact font bytes, not validated as identical to an authoring application | `DOCX_LAYOUT_PAGINATED` |
+| An embedded image is neither a supported PNG nor JPEG, or its bytes fail strict decoding, so rendering fails explicitly without replacement pixels; the diagnostic names the detected format or decoding failure | `DOCX_IMAGE_RASTER_UNAVAILABLE` |
 | An image relationship cannot be resolved | `DOCX_IMAGE_UNRESOLVED` |
 | Numbering definitions or formats cannot be resolved | `DOCX_NUMBERING_UNRESOLVED`, `DOCX_NUMBERING_FORMAT_MISSING` |
-| Unusable table grid widths fall back to equal columns | `DOCX_TABLE_GRID_WIDTHS_UNUSABLE` |
 | Run-level elements that are not interpreted, so paragraph text may be incomplete | `DOCX_RUN_ELEMENT_UNSUPPORTED` |
 | Body elements preserved as opaque nodes without semantic interpretation | `DOCX_BODY_ELEMENT_UNSUPPORTED` |
 | Embedded objects and active content preserved inert, digest only | `DOCX_EMBEDDED_OBJECT_INERT`, `DOCX_ACTIVE_CONTENT_INERT` |
 | A hyperlink target page cannot be resolved | `DOCX_LINK_PAGE_UNRESOLVED` |
-| Contextual spacing is declared but not applied, so spacing is added even between paragraphs of the same style | `DOCX_CONTEXTUAL_SPACING_IGNORED` |
 | A spacing, indentation, page size or margin length is written as a decimal within 0.001 of a whole number of twentieths of a point and is read as that whole number; a length further from a whole number still rejects the document | `DOCX_MEASURE_ROUNDED` |
 
+
+Fonts are loaded only from bundled Liberation faces and the explicitly configured local font directory. A requested missing family, weight or slant returns `FONT_UNAVAILABLE` with exit `30`, a typed `required_font` and source location; there is no automatic substitution. Font files are never downloaded by the runtime. See README for setup.
+
+Advanced table row policies (repeated headers, `cantSplit`, exact row heights and vertical alignment), unequal/balanced columns, complex numbering overrides, theme-only formatting, positioned drawings in headers/cells and general floating objects are not covered by the verified DOCX layout profile. Real Word fidelity requires reviewed reference renders; internal golden agreement alone does not prove it.
 
 Tracked changes are counted, not reconstructed: `tracked_changes` reports insertion and deletion counts without per-revision authorship or content.
 
@@ -161,7 +158,7 @@ These are not format limitations. They are the cases where a command can answer,
 
 ### Images
 
-For DOCX, embedded PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG is decoded strictly through a pinned pure-Rust adapter with platform-specific acceleration disabled, so malformed or non-conformant data is not accepted as visual evidence. GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as placeholders.
+For DOCX, embedded PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG is decoded strictly through a pinned pure-Rust adapter with platform-specific acceleration disabled, so malformed or non-conformant data is not accepted as visual evidence. GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as unavailable for rasterization; rendering them fails explicitly.
 
 For PDF, Image XObjects are decoded when encoded with DCTDecode (JPEG) or 8-bit FlateDecode in DeviceRGB or DeviceGray color spaces. Unsupported image formats (such as JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit depths, DeviceCMYK, or images with unsupported masks) fail closed and render an explicit placeholder box accompanied by `PDF_XOBJECT_PLACEHOLDER`. DocSight does not perform OCR: scanned pages containing raster images without an underlying text layer continue to report `PDF_PAGE_HAS_NO_TEXT_LAYER`.
 

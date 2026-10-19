@@ -4,6 +4,7 @@ pub mod evidence;
 mod glyph;
 pub mod ir;
 pub mod jpeg;
+mod numbering;
 pub mod object;
 pub mod png;
 
@@ -13,6 +14,7 @@ pub use evidence::*;
 pub use glyph::*;
 pub use ir::*;
 pub use jpeg::*;
+pub use numbering::format_ooxml_number;
 pub use object::*;
 pub use png::*;
 use serde::{Deserialize, Serialize};
@@ -111,6 +113,13 @@ impl Display for ErrorLocation {
 
 #[derive(Debug, Error)]
 pub enum DocsightError {
+    #[error(
+        "required font {font:?} is unavailable; install the exact OpenType face in DOCSIGHT_FONT_DIR"
+    )]
+    FontUnavailable {
+        font: FontRequirement,
+        location: Option<ErrorLocation>,
+    },
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String },
     #[error("I/O operation failed for {path}: {source}")]
@@ -161,7 +170,7 @@ impl DocsightError {
             Self::ResourceLimit { .. } => 13,
             Self::UnsupportedFeature { .. } => 20,
             Self::ObjectNotFound { .. } => 21,
-            Self::BackendFailure { .. } => 30,
+            Self::BackendFailure { .. } | Self::FontUnavailable { .. } => 30,
             Self::Io { .. } => 40,
         }
     }
@@ -196,6 +205,10 @@ impl DocsightError {
                 "BACKEND_FAILURE",
                 "the requested operation could not be completed",
             ),
+            Self::FontUnavailable { .. } => (
+                "FONT_UNAVAILABLE",
+                "layout stopped because the exact requested font face is missing; no font substitution was performed",
+            ),
             Self::Io { .. } => ("IO_ERROR", "the requested file could not be read"),
         };
         let page = self.error_location().and_then(|location| location.page);
@@ -212,6 +225,10 @@ impl DocsightError {
 
     pub fn with_error_location(self, location: ErrorLocation) -> Self {
         match self {
+            Self::FontUnavailable { font, .. } => Self::FontUnavailable {
+                font,
+                location: Some(location),
+            },
             Self::MalformedDocument { message } => Self::MalformedDocumentAt { message, location },
             Self::MalformedDocumentAt {
                 message,
@@ -231,10 +248,25 @@ impl DocsightError {
 
     pub fn error_location(&self) -> Option<&ErrorLocation> {
         match self {
+            Self::FontUnavailable { location, .. } => location.as_ref(),
             Self::MalformedDocumentAt { location, .. } => Some(location),
             _ => None,
         }
     }
+
+    pub fn font_requirement(&self) -> Option<&FontRequirement> {
+        match self {
+            Self::FontUnavailable { font, .. } => Some(font),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FontRequirement {
+    pub family: String,
+    pub bold: bool,
+    pub italic: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -291,6 +323,11 @@ pub const ERROR_CATALOG: &[ErrorCatalogEntry] = &[
         code: "BACKEND_FAILURE",
         exit_code: 30,
         meaning: "an internal backend could not complete the operation",
+    },
+    ErrorCatalogEntry {
+        code: "FONT_UNAVAILABLE",
+        exit_code: 30,
+        meaning: "the exact font face required for layout is unavailable; substitution is disabled",
     },
     ErrorCatalogEntry {
         code: "IO_ERROR",
@@ -528,6 +565,7 @@ mod tests {
 
     fn variant_name(error: &DocsightError) -> &'static str {
         match error {
+            DocsightError::FontUnavailable { .. } => "FontUnavailable",
             DocsightError::InvalidArgument { .. } => "InvalidArgument",
             DocsightError::Io { .. } => "Io",
             DocsightError::UnsupportedFormat => "UnsupportedFormat",
@@ -546,6 +584,14 @@ mod tests {
 
     fn every_error_variant() -> Vec<DocsightError> {
         vec![
+            DocsightError::FontUnavailable {
+                font: super::FontRequirement {
+                    family: "Missing Font".to_owned(),
+                    bold: false,
+                    italic: false,
+                },
+                location: None,
+            },
             DocsightError::InvalidArgument {
                 message: "message".to_owned(),
             },

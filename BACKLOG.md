@@ -16,7 +16,7 @@ Classification:
 
 ### Operability
 
-The 2026-09-23 architecture and real-use audit reopened the following v1-blocking families. Their reproductions, dependencies and acceptance gates are tracked in `PLANO_CORRECOES_DOCSIGHT.md` and `release/known-gaps.json`.
+The 2026-09-23 architecture and real-use audit reopened the following v1-blocking families. They are summarized below and tracked in `release/known-gaps.json`.
 
 | Item | Current state |
 | --- | --- |
@@ -24,7 +24,7 @@ The 2026-09-23 architecture and real-use audit reopened the following v1-blockin
 | MCP security boundary | Request/output limits, strict arguments, roots, warnings, structured errors and sandbox stdio are incomplete. |
 | Diff NDJSON continuation | A valid continuation token re-emits the same event sequence instead of advancing. |
 | Agent contract alignment | Password transports, output-limit discovery, projected schemas, page validation and cache handoff disagree across code, capabilities and docs. |
-| DOCX visual fidelity | The deterministic bitmap fallback is legible but does not meet the newly approved font, geometry and oracle gates. |
+| DOCX visual fidelity | Exact local OpenType fonts, shaping, antialiased rasterization, formatted runs/headers and paginated tables are implemented; reviewed real-document oracle and geometry gates remain open. |
 
 ### Evidence that requires people
 
@@ -48,23 +48,17 @@ Recorded 2026-09-20. The operation matrix, budgets and cost structure in `benchm
 
 ## post-v1
 
-- Real font discovery, loading and shaping instead of the deterministic proportional fallback, with a declared font fingerprint in the reproducibility inputs.
 - Filtered image scaling. Figure scaling is nearest-neighbour, chosen for determinism; a box or Lanczos filter would look closer to Word at the cost of a defined tolerance in the visual goldens.
 - Remaining PNG variants: 1, 2, 4 and 16 bits per channel, and interlaced images. Each currently fails closed with a diagnostic naming the variant.
 - Shading (`sh`) painting. The operator no longer vetoes a document, but the shaded area is left unpainted and reported through `PDF_SHADING_UNSUPPORTED`.
 - Remaining PDF Image XObject formats (JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit depths, DeviceCMYK, image masks). DCTDecode/JPEG and 8-bit FlateDecode (DeviceRGB, DeviceGray) are decoded natively; other formats fail closed and emit `PDF_XOBJECT_PLACEHOLDER`. OCR remains strictly out of scope.
-- Contextual spacing (`w:contextualSpacing`), which is parsed and reported but not applied between paragraphs of the same style.
 - Annotation appearance streams: an annotation currently contributes geometry and text to the IR, not its rendered pixels.
 - `Watermark` overlays in the IR. The entity exists but no parser produces it.
 - DOCX floating objects and shapes. Recognized DrawingML lines are preserved as `Shape` blocks, but their position, extent, stroke and pixels are not projected (`DOCX_SHAPE_VISUAL_OMITTED`); other Office shapes are not produced.
-- Row-level table pagination. Paragraphs split by line across pages, but a table that does not fit the remaining space moves to the next page as a whole (`DOCX_PAGINATION_BLOCK_GRANULAR`).
-- Multi-column sections. A section with more than one text column is laid out as one column (`DOCX_SECTION_COLUMNS_UNSUPPORTED`), and a `nextColumn` section break starts a new page (`DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED`).
-- Header and footer formatting. Header and footer parts are projected as deterministic 9 pt plain text lines without their own run formatting, tab stops, tables or drawings (`DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED`), and body text does not move away from a tall header or footer (`DOCX_HEADER_FOOTER_OVERLAPS_BODY`).
-- Binding gutters, which are parsed but not added to the body margins (`DOCX_SECTION_GUTTER_IGNORED`).
 - Page parity with restarted numbering. An `evenPage` or `oddPage` section break decides parity by physical page number, while even-page headers and footers follow the displayed page number; the two can disagree when a section restarts its numbering.
 - Per-revision tracked changes: authorship, timestamp and content, rather than insertion and deletion counts.
 - Complex DOCX numbering: multi-level list restarts, custom patterns and style-linked numbering.
-- Table columns, column spans and text flow across columns.
+- Advanced table row policies: repeated header rows, `cantSplit`, exact row heights and cell vertical alignment; unequal-width and balanced section columns.
 - PDF caption reconstruction, which would let the `caption` DQL selector work for PDF instead of failing closed.
 - Table detection quality: calibrated confidence for unruled and partially-ruled tables, and a second detector with declared provenance.
 - Richer `diff` lineage across versions, reducing `DIFF_LINEAGE_AMBIGUOUS`.

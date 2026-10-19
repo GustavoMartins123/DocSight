@@ -272,3 +272,45 @@ fn workspace_notices_are_complete_for_every_release_target() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn notices_include_the_bundled_font_license_from_the_workspace_member() -> TestResult {
+    let registry = Registry::new()?;
+    let dependency = registry.crate_directory("dependency", "1.0.0")?;
+    fs::write(dependency.join("LICENSE"), "Dependency license\n")?;
+    let fonts = registry.crate_directory("docsight-fonts", "0.1.0")?;
+    fs::create_dir(fonts.join("assets"))?;
+    fs::write(
+        fonts.join("assets/LICENSE-Liberation"),
+        "Bundled font license text\n",
+    )?;
+    let mut data = metadata(vec![package(
+        &dependency,
+        "dependency",
+        "1.0.0",
+        Some("MIT"),
+    )]);
+    let font_id = "path+file:///workspace#docsight-fonts@0.1.0";
+    data["packages"]
+        .as_array_mut()
+        .ok_or("packages")?
+        .push(json!({
+            "id": font_id,
+            "name": "docsight-fonts",
+            "version": "0.1.0",
+            "manifest_path": fonts.join("Cargo.toml"),
+            "license": "MIT",
+            "license_file": null,
+            "source": null
+        }));
+    data["workspace_members"]
+        .as_array_mut()
+        .ok_or("members")?
+        .push(json!(font_id));
+    let lock = registry.lockfile(&[("dependency", "1.0.0")])?;
+    let output = generate(data, &lock)?;
+    assert!(output.contains("## Bundled Liberation fonts\n\nDeclared license: SIL-OFL-1.1"));
+    assert!(output.contains("Bundled font license text"));
+    assert!(!output.contains(registry.root.to_string_lossy().as_ref()));
+    Ok(())
+}

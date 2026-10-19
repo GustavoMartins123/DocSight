@@ -5,7 +5,7 @@
         "x0": 72.0,
         "x1": 540.0,
         "y0": 72.0,
-        "y1": 107.0
+        "y1": 84.64892578125
       },
       "confidence": 1.0,
       "content": {
@@ -22,6 +22,24 @@
         "widow_control": true
       },
       "id": "h_d5d019d36212d102b32751c147a50a31",
+      "inline_runs": [
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[1]/r[1]"
+          },
+          "text": "Feature Overview"
+        }
+      ],
       "kind": "heading",
       "page": 1,
       "reading_order": 1,
@@ -36,8 +54,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 107.0,
-        "y1": 124.97000122070312
+        "y0": 84.64892578125,
+        "y1": 97.2978515625
       },
       "confidence": 1.0,
       "content": {
@@ -53,6 +71,40 @@
         "widow_control": true
       },
       "id": "p_817e1ba3e94c51819e85808e4ecbb9c5",
+      "inline_runs": [
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[2]/r[1]"
+          },
+          "text": "For details see our website: "
+        },
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[2]/r[2]"
+          },
+          "text": "Project Homepage"
+        }
+      ],
       "kind": "paragraph",
       "page": 1,
       "reading_order": 2,
@@ -67,8 +119,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 124.97000122070312,
-        "y1": 142.94000244140625
+        "y0": 97.2978515625,
+        "y1": 109.94677734375
       },
       "confidence": 1.0,
       "content": {
@@ -84,6 +136,40 @@
         "widow_control": true
       },
       "id": "p_9efd02251e1dc62950242447da23755c",
+      "inline_runs": [
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[3]/r[1]"
+          },
+          "text": "Check appendix: "
+        },
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[3]/r[2]"
+          },
+          "text": "Go to Appendix"
+        }
+      ],
       "kind": "paragraph",
       "page": 1,
       "reading_order": 3,
@@ -98,8 +184,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 142.94000244140625,
-        "y1": 160.91000366210938
+        "y0": 109.94677734375,
+        "y1": 127.91677856445312
       },
       "confidence": 1.0,
       "content": {
@@ -128,9 +214,9 @@
     {
       "bbox": {
         "x0": 72.0,
-        "x1": 540.0,
-        "y0": 160.91000366210938,
-        "y1": 272.9100036621094
+        "x1": 272.0,
+        "y0": 133.91677856445312,
+        "y1": 233.91677856445312
       },
       "confidence": 1.0,
       "content": {
@@ -163,8 +249,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 272.9100036621094,
-        "y1": 290.8800048828125
+        "y0": 239.91677856445312,
+        "y1": 252.56570434570312
       },
       "confidence": 1.0,
       "content": {
@@ -180,6 +266,40 @@
         "widow_control": true
       },
       "id": "p_042e14f8e2a3db58e5e3ea11c833d106",
+      "inline_runs": [
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[5]/r[1]"
+          },
+          "text": "Status of this revision: "
+        },
+        {
+          "format": {
+            "bold": null,
+            "color_argb": null,
+            "font_family": null,
+            "font_size_pt": null,
+            "italic": null,
+            "underline": null
+          },
+          "source": {
+            "length": null,
+            "offset": null,
+            "path": "/word/document.xml::body/p[5]/r[2]"
+          },
+          "text": "Approved"
+        }
+      ],
       "kind": "paragraph",
       "page": 1,
       "reading_order": 6,
@@ -194,8 +314,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 290.8800048828125,
-        "y1": 305.8800048828125
+        "y0": 252.56570434570312,
+        "y1": 266.9956970214844
       },
       "confidence": 1.0,
       "content": {
@@ -227,8 +347,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 305.8800048828125,
-        "y1": 320.8800048828125
+        "y0": 266.9956970214844,
+        "y1": 281.4256896972656
       },
       "confidence": 1.0,
       "content": {
@@ -328,7 +448,7 @@
             "x0": 72.0,
             "x1": 540.0,
             "y0": 36.0,
-            "y1": 48.0
+            "y1": 48.64892578125
           },
           "id": "hdr_f69a0863ed491463ee97d1b892f39382",
           "kind": "header",
@@ -344,7 +464,7 @@
           "bbox": {
             "x0": 72.0,
             "x1": 540.0,
-            "y0": 744.0,
+            "y0": 743.35107421875,
             "y1": 756.0
           },
           "id": "ftr_ce65905ffcbdbcc104ce18ee5d85c5a4",
@@ -370,18 +490,74 @@
       "mime_type": "image/png",
       "name": "rIdImg",
       "target": "word/media/arch.png"
+    },
+    {
+      "content_sha256": "4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144",
+      "id": "font_74832f68d590cb641a86248f6787f803",
+      "kind": "font",
+      "mime_type": "font/ttf",
+      "name": "Liberation Sans;bold=false;italic=false",
+      "target": "opentype:4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144"
     }
   ],
   "sections": [
     {
+      "column_spacing_pt": null,
       "columns": 1,
       "even_and_odd_headers": false,
       "footer_distance_pt": null,
       "footer_text": "CONFIDENTIAL  •  PAGE [PAGE]",
+      "gutter_pt": 0.0,
       "header_distance_pt": null,
       "header_text": "STANDARD TECHNICAL REPORT",
       "headers_footers": [
         {
+          "blocks": [
+            {
+              "bbox": null,
+              "confidence": 1.0,
+              "content": {
+                "style_id": "Normal",
+                "text": "STANDARD TECHNICAL REPORT",
+                "type": "paragraph"
+              },
+              "flags": {
+                "break_after": false,
+                "keep_lines": false,
+                "keep_with_next": false,
+                "page_break_before": false,
+                "widow_control": true
+              },
+              "id": "hdrp_2abbfe9ddcecb16368bfa83f500fad76",
+              "inline_runs": [
+                {
+                  "format": {
+                    "bold": null,
+                    "color_argb": null,
+                    "font_family": null,
+                    "font_size_pt": null,
+                    "italic": null,
+                    "underline": null
+                  },
+                  "source": {
+                    "length": null,
+                    "offset": null,
+                    "path": "/word/header1.xml::p[1]/r@142"
+                  },
+                  "text": "STANDARD TECHNICAL REPORT"
+                }
+              ],
+              "kind": "paragraph",
+              "page": null,
+              "reading_order": 1,
+              "source": {
+                "length": null,
+                "offset": null,
+                "path": "/word/header1.xml::p[1]"
+              },
+              "z_index": 0
+            }
+          ],
           "inherited": false,
           "kind": "header",
           "part": "/word/header1.xml",
@@ -389,6 +565,68 @@
           "variant": "default"
         },
         {
+          "blocks": [
+            {
+              "bbox": null,
+              "confidence": 1.0,
+              "content": {
+                "style_id": "Normal",
+                "text": "CONFIDENTIAL  •  PAGE [PAGE]",
+                "type": "paragraph"
+              },
+              "flags": {
+                "break_after": false,
+                "keep_lines": false,
+                "keep_with_next": false,
+                "page_break_before": false,
+                "widow_control": true
+              },
+              "id": "hdrp_84027587db3768ef24b98c62218c07a2",
+              "inline_runs": [
+                {
+                  "format": {
+                    "bold": null,
+                    "color_argb": null,
+                    "font_family": null,
+                    "font_size_pt": null,
+                    "italic": null,
+                    "underline": null
+                  },
+                  "source": {
+                    "length": null,
+                    "offset": null,
+                    "path": "/word/footer1.xml::p[1]/r@142"
+                  },
+                  "text": "CONFIDENTIAL  •  PAGE "
+                },
+                {
+                  "format": {
+                    "bold": null,
+                    "color_argb": null,
+                    "font_family": null,
+                    "font_size_pt": null,
+                    "italic": null,
+                    "underline": null
+                  },
+                  "source": {
+                    "length": null,
+                    "offset": null,
+                    "path": "/word/footer1.xml::p[1]/r@209"
+                  },
+                  "text": "[PAGE]"
+                }
+              ],
+              "kind": "paragraph",
+              "page": null,
+              "reading_order": 1,
+              "source": {
+                "length": null,
+                "offset": null,
+                "path": "/word/footer1.xml::p[1]"
+              },
+              "z_index": 0
+            }
+          ],
           "inherited": false,
           "kind": "footer",
           "part": "/word/footer1.xml",
@@ -439,7 +677,7 @@
   },
   "version": {
     "engine_version": "<engine>",
-    "schema_version": "1.3"
+    "schema_version": "1.4"
   },
   "warnings": [
     {
@@ -451,28 +689,8 @@
     },
     {
       "code": "DOCX_LAYOUT_PAGINATED",
-      "effect": "line wrapping and page boundaries are computed approximations",
-      "message": "DOCX was paginated using deterministic layout engine",
-      "severity": "warning"
-    },
-    {
-      "code": "DOCX_FONT_SUBSTITUTED",
-      "effect": "glyph metrics follow standard proportional reference widths",
-      "message": "layout used deterministic proportional fallback font",
-      "severity": "warning"
-    },
-    {
-      "code": "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
-      "effect": "source paragraph and run formatting, tab stops, tables, drawings, and positioned content are not reproduced; projected evidence uses deterministic 9 pt text lines",
-      "message": "header or footer part /word/header1.xml is projected as plain text",
-      "object": "sect_0c8f53318d22c73d52330cfb1eb62b66",
-      "severity": "warning"
-    },
-    {
-      "code": "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED",
-      "effect": "source paragraph and run formatting, tab stops, tables, drawings, and positioned content are not reproduced; projected evidence uses deterministic 9 pt text lines",
-      "message": "header or footer part /word/footer1.xml is projected as plain text",
-      "object": "sect_0c8f53318d22c73d52330cfb1eb62b66",
+      "effect": "page geometry is inferred by DocSight; equivalence to an authoring application has not been established",
+      "message": "DOCX pagination was computed from source formatting and resolved OpenType fonts",
       "severity": "warning"
     }
   ]

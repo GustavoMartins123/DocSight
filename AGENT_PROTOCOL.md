@@ -161,3 +161,11 @@ The M16 interaction contracts are `schemas/v2/peek-result.json`, `schemas/v2/con
 The M17 adaptive projection contract is `schemas/v2/projection-selection.json`, referenced by `schemas/v2/agent-envelope.json`. Explicit `--select` projections are published as `schemas/v2/projected-result.json`; the envelope records the selected field names in `limits.selected_fields`, and capabilities advertises the projection schema.
 
 M18 interaction-economy conformance is defined by `fixtures/conformance/m18-interaction-economy.json`. The corpus exercises table location in DOCX and PDF, merged-cell reading, bounded page context, visual proof creation and verification, and generated-document comparison. Every scenario declares maximum CLI invocations, serialized output bytes, render requests and required evidence. The conformance runner invokes only the `docsight` executable, requires one or two calls per normal workflow and rejects missing scenario definitions or evidence assertions.
+
+### DOCX IR 1.4 and font requirements
+
+The normalized IR version is `1.4`. Inline runs retain source spans and font/style/color/underline properties. Tables retain structural child blocks, cell formatting, primary pages and continuations; sections retain columns/gutters and formatted header/footer blocks. Geometry remains page-local points with a top-left origin.
+
+`FONT_UNAVAILABLE` (exit `30`) includes `error.required_font` with `family`, `bold`, and `italic`, plus an affected source object where known. Supply the exact licensed face in `DOCSIGHT_FONT_DIR`; no substitution or network resolution is attempted. `DOCX_LAYOUT_PAGINATED` identifies computed, non-authoritative pagination even when all requested fonts resolve. Reproduction fingerprints include fonts actually used by the document, not unrelated installed faces.
+
+DOCX trace text operations identify resolved faces in `font_name` as `<family>;bold=<bool>;italic=<bool>`, matching font resource names and content digests. Underline rectangles are recorded as fill operations.

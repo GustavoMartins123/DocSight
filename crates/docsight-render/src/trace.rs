@@ -456,7 +456,7 @@ pub fn record_trace_with_password(
             format: source.format(),
             bytes: source.size_bytes(),
         },
-        fingerprint: reproduction_fingerprint(source),
+        fingerprint: reproduction_fingerprint(source)?,
         target,
         decision_coverage,
         resources: trace_resources(&material, source),
@@ -505,7 +505,7 @@ pub fn create_proof_bundle_with_password(
 ) -> Result<ProofBundle, DocsightError> {
     let trace = record_trace_with_password(source, request, password, limits)?;
     let document = load_document(source, password)?;
-    let glyph_coverage = document_glyph_coverage(&document, source);
+    let glyph_coverage = document_glyph_coverage(&document, source)?;
     let evidence = selected_evidence(
         &document,
         source,
@@ -898,6 +898,38 @@ impl TraceMaterial {
                 let mut glyph_runs = Vec::new();
                 let mut operations = Vec::new();
                 for page in pages.iter().filter(|page| page.number == target_page) {
+                    for (rect, color_argb) in page
+                        .fills
+                        .iter()
+                        .map(|fill| (fill.rect, fill.color_argb))
+                        .chain(
+                            page.runs
+                                .iter()
+                                .filter_map(|run| run.underline.map(|rect| (rect, run.color_argb))),
+                        )
+                    {
+                        let point = |x, y| docsight_pdf::PdfTracePoint { x, y };
+                        operations.push(TraceDisplayOperation::Fill {
+                            path: vec![
+                                PdfTracePathSegment::Move {
+                                    point: point(rect.x0, rect.y0),
+                                },
+                                PdfTracePathSegment::Line {
+                                    point: point(rect.x1, rect.y0),
+                                },
+                                PdfTracePathSegment::Line {
+                                    point: point(rect.x1, rect.y1),
+                                },
+                                PdfTracePathSegment::Line {
+                                    point: point(rect.x0, rect.y1),
+                                },
+                                PdfTracePathSegment::Close,
+                            ],
+                            color_argb,
+                            fill_rule: PdfTraceFillRule::Nonzero,
+                            clips: Vec::new(),
+                        });
+                    }
                     for border in &page.borders {
                         operations.push(TraceDisplayOperation::Border {
                             bbox: border.rect,
@@ -910,7 +942,10 @@ impl TraceMaterial {
                             text_sha256: text_sha256.clone(),
                             bbox: run.bbox,
                             font_size_pt: run.font_size,
-                            font_name: "docsight-proportional-reference".to_owned(),
+                            font_name: format!(
+                                "{};bold={};italic={}",
+                                run.font_family, run.bold, run.italic
+                            ),
                             bold: run.bold,
                             color_argb: run.color_argb,
                         });
@@ -918,7 +953,10 @@ impl TraceMaterial {
                             text_sha256,
                             bbox: run.bbox,
                             font_size_pt: run.font_size,
-                            font_name: "docsight-proportional-reference".to_owned(),
+                            font_name: format!(
+                                "{};bold={};italic={}",
+                                run.font_family, run.bold, run.italic
+                            ),
                             bold: run.bold,
                             color_argb: run.color_argb,
                             stroke_color_argb: run.color_argb,
@@ -1207,16 +1245,37 @@ fn selected_evidence(
         .collect()
 }
 
-pub fn reproduction_fingerprint(source: &DocumentSource) -> ReproductionFingerprint {
+pub fn reproduction_fingerprint(
+    source: &DocumentSource,
+) -> Result<ReproductionFingerprint, DocsightError> {
     let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
     let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
     let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));
     let raster_engine = format!("docsight-render {}", env!("CARGO_PKG_VERSION"));
-    let fonts = format!(
-        "layout:{}|raster:{}",
-        docsight_layout::font_fingerprint(),
-        crate::raster_font_fingerprint()
-    );
+    let fonts = if source.format() == docsight_core::DocumentFormat::Docx {
+        let document = docsight_ingest::ingest_docx(source)?.document;
+        let mut digests = document
+            .resources
+            .iter()
+            .filter(|resource| resource.kind == docsight_core::ResourceKind::Font)
+            .map(|resource| {
+                resource
+                    .content_sha256
+                    .as_deref()
+                    .ok_or_else(|| DocsightError::MalformedDocument {
+                        message: "a resolved font resource has no content digest".to_owned(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        digests.sort_unstable();
+        format!(
+            "layout:{}|raster:{}",
+            sha256_hex(digests.join("|").as_bytes()),
+            crate::raster_font_fingerprint()
+        )
+    } else {
+        "docsight-pdf-builtin-fonts-v1".to_owned()
+    };
     let layout_profile = "agent-fidelity-v1".to_owned();
     let values = [
         source.sha256(),
@@ -1228,7 +1287,7 @@ pub fn reproduction_fingerprint(source: &DocumentSource) -> ReproductionFingerpr
         &layout_profile,
     ];
     let result_fingerprint = sha256_hex(&values.join("|").into_bytes());
-    ReproductionFingerprint {
+    Ok(ReproductionFingerprint {
         engine,
         ooxml_engine,
         pdf_engine,
@@ -1236,7 +1295,7 @@ pub fn reproduction_fingerprint(source: &DocumentSource) -> ReproductionFingerpr
         fonts,
         layout_profile,
         result_fingerprint,
-    }
+    })
 }
 
 fn validate_trace_manifest(manifest: &TraceManifest) -> Result<(), DocsightError> {

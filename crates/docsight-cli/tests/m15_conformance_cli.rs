@@ -261,8 +261,8 @@ fn evidence_engine_matches_cross_platform_conformance_golden()
     let pdf = fixture("synthetic_table.pdf");
     let docx_str = docx.to_str().ok_or("DOCX path")?;
     let pdf_str = pdf.to_str().ok_or("PDF path")?;
-    let docx_object = "h_515ad605791c12fc496c1c18d79f6526";
-    let pdf_object = "tbl_b54dbb45da2a78dec493d24c309ea8c0";
+    let docx_object = "h_11ff36836ef204cec23ee89837654132";
+    let pdf_object = "tbl_4a65916a4d36e2ccc570158c5302585f";
 
     let evidence_docx = success_json(&[
         "--agent",

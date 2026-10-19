@@ -75,7 +75,7 @@ impl<'a> DocumentObject<'a> {
             Self::Block { block, container } => block
                 .page
                 .or_else(|| container.and_then(|container| container.page)),
-            Self::TableCell { table, .. } => table.page,
+            Self::TableCell { table, cell } => cell.page.or(table.page),
             Self::Overlay(overlay) => Some(overlay.page),
             Self::Hyperlink(link) => link.page,
         }
@@ -92,53 +92,68 @@ impl<'a> DocumentObject<'a> {
 
     pub fn fragments(&self) -> Vec<(u32, Rect)> {
         match self {
-            Self::Block {
-                block,
-                container: None,
-            } => block.fragments().collect(),
+            Self::TableCell { cell, .. } => self
+                .page()
+                .zip(cell.bbox)
+                .into_iter()
+                .chain(
+                    cell.continuations
+                        .iter()
+                        .map(|fragment| (fragment.page, fragment.bbox)),
+                )
+                .collect(),
+            Self::Block { block, .. } => block.fragments().collect(),
             _ => self.page().zip(self.bbox()).into_iter().collect(),
         }
     }
 
     pub fn continuations(&self) -> &'a [crate::BlockContinuation] {
         match self {
-            Self::Block {
-                block,
-                container: None,
-            } => &block.continuations,
+            Self::TableCell { cell, .. } => &cell.continuations,
+            Self::Block { block, .. } => &block.continuations,
             _ => &[],
         }
     }
 
     pub fn occupies_page(&self, page: u32) -> bool {
         match self {
-            Self::Block {
-                block,
-                container: None,
-            } => block.occupies_page(page),
+            Self::TableCell { cell, .. } => {
+                self.page() == Some(page)
+                    || cell
+                        .continuations
+                        .iter()
+                        .any(|fragment| fragment.page == page)
+            }
+            Self::Block { block, .. } => block.occupies_page(page),
             _ => self.page() == Some(page),
         }
     }
 
     pub fn bbox_on_page(&self, page: u32) -> Option<Rect> {
         match self {
-            Self::Block {
-                block,
-                container: None,
-            } => block.bbox_on_page(page),
+            Self::TableCell { cell, .. } => {
+                if self.page() == Some(page) {
+                    cell.bbox
+                } else {
+                    cell.continuations
+                        .iter()
+                        .find(|fragment| fragment.page == page)
+                        .map(|fragment| fragment.bbox)
+                }
+            }
+            Self::Block { block, .. } => block.bbox_on_page(page),
             _ => self.bbox().filter(|_| self.page() == Some(page)),
         }
     }
 
     pub fn location_at_char(&self, char_index: usize) -> (Option<u32>, Option<Rect>) {
         match self {
-            Self::Block {
-                block,
-                container: None,
-            } if !block.continuations.is_empty() => match block.fragment_at_char(char_index) {
-                Some((page, bbox)) => (Some(page), Some(bbox)),
-                None => (self.page(), self.bbox()),
-            },
+            Self::Block { block, .. } if !block.continuations.is_empty() => {
+                match block.fragment_at_char(char_index) {
+                    Some((page, bbox)) => (Some(page), Some(bbox)),
+                    None => (self.page(), self.bbox()),
+                }
+            }
             _ => (self.page(), self.bbox()),
         }
     }

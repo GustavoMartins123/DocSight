@@ -6,9 +6,10 @@ use crate::sections::{
 use docsight_core::{
     Block, BlockContent, BlockKind, Comment, Diagnostic, DiagnosticSeverity, DocsightError,
     Document, DocumentFormat, DocumentMetadata, DocumentSource, FigureBlock, HeadingBlock,
-    Hyperlink, IrVersion, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId,
-    ParagraphBlock, ParagraphFormat, Resource, ResourceKind, Section, ShapeBlock, SourceSpan,
-    Style, TableBlock, TableCell, TextAlignment, TrackedChanges, UnknownBlock, validate_canonical,
+    Hyperlink, InlineRun, IrVersion, LayoutFlags, ListItemBlock, NoteBlock, NoteKind, ObjectId,
+    ParagraphBlock, ParagraphFormat, Resource, ResourceKind, RunFormat, Section, ShapeBlock,
+    SourceSpan, Style, TableBlock, TableCell, TextAlignment, TrackedChanges, UnknownBlock,
+    validate_canonical,
 };
 use roxmltree::{Document as XmlDocument, Node, ParsingOptions};
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,14 +30,131 @@ struct StyleDefinition {
     name: Option<String>,
     based_on: Option<String>,
     paragraph_format: ParagraphFormat,
-    contextual_spacing: bool,
     outline_level: Option<u8>,
     numbering: Option<NumberingProperties>,
     font_family: Option<String>,
     font_size_pt: Option<f32>,
     bold: Option<bool>,
     italic: Option<bool>,
+    color_argb: Option<u32>,
+    underline: Option<bool>,
     layout_flags: StyleLayoutFlags,
+    cell_format: CellFormatPatch,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CellFormatPatch {
+    padding: [Option<f32>; 4],
+    fill: Option<u32>,
+    borders: [Option<Option<docsight_core::CellBorder>>; 6],
+}
+
+fn cell_format_patch(properties: Node<'_, '_>) -> Result<CellFormatPatch, DocsightError> {
+    let mut patch = CellFormatPatch::default();
+    if let Some(margins) =
+        child_element(properties, "tcMar").or_else(|| child_element(properties, "tblCellMar"))
+    {
+        for (index, names) in [
+            (0, ["top", "top"]),
+            (1, ["end", "right"]),
+            (2, ["bottom", "bottom"]),
+            (3, ["start", "left"]),
+        ] {
+            if let Some(margin) =
+                child_element(margins, names[0]).or_else(|| child_element(margins, names[1]))
+            {
+                patch.padding[index] = attribute_points(margin, &["w"], "table cell margin")?;
+            }
+        }
+    }
+    if let Some(shading) =
+        child_element(properties, "shd").and_then(|node| node.attribute((W_NS, "fill")))
+        && shading != "auto"
+    {
+        patch.fill = Some(parse_argb(shading)?);
+    }
+    if let Some(borders) =
+        child_element(properties, "tcBorders").or_else(|| child_element(properties, "tblBorders"))
+    {
+        for (index, name) in ["top", "right", "bottom", "left", "insideH", "insideV"]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(border) = child_element(borders, name) {
+                let style = word_value(border).unwrap_or_else(|| "single".to_owned());
+                patch.borders[index] = Some(match style.as_str() {
+                    "nil" | "none" => None,
+                    "single" => {
+                        let raw = border
+                            .attribute((W_NS, "sz"))
+                            .unwrap_or("4")
+                            .parse::<u32>()
+                            .map_err(|_| DocsightError::MalformedDocument {
+                                message: "table border size must be an unsigned integer".to_owned(),
+                            })?;
+                        let color = border
+                            .attribute((W_NS, "color"))
+                            .filter(|color| *color != "auto")
+                            .map(parse_argb)
+                            .transpose()?
+                            .unwrap_or(0xff000000);
+                        Some(docsight_core::CellBorder {
+                            width_pt: raw as f32 / 8.0,
+                            color_argb: color,
+                        })
+                    }
+                    _ => {
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: format!("DOCX table border style {style}"),
+                        });
+                    }
+                });
+            }
+        }
+    }
+    Ok(patch)
+}
+
+fn parse_argb(value: &str) -> Result<u32, DocsightError> {
+    if value.len() != 6 {
+        return Err(DocsightError::MalformedDocument {
+            message: format!("invalid RGB color {value}"),
+        });
+    }
+    u32::from_str_radix(value, 16)
+        .map(|color| color | 0xff000000)
+        .map_err(|_| DocsightError::MalformedDocument {
+            message: format!("invalid RGB color {value}"),
+        })
+}
+
+fn apply_cell_patch(
+    format: &mut docsight_core::CellFormat,
+    patch: &CellFormatPatch,
+    row: u32,
+    column: u32,
+    rows: u32,
+    columns: u32,
+) {
+    for index in 0..4 {
+        if let Some(padding) = patch.padding[index] {
+            format.padding_pt[index] = padding;
+        }
+        let inner = match index {
+            0 if row > 0 => Some(4),
+            1 if column + 1 < columns => Some(5),
+            2 if row + 1 < rows => Some(4),
+            3 if column > 0 => Some(5),
+            _ => None,
+        };
+        if let Some(border) = inner
+            .and_then(|inner| patch.borders[inner])
+            .or(patch.borders[index])
+        {
+            format.borders[index] = border;
+        }
+    }
+    format.fill_argb = patch.fill.or(format.fill_argb);
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -82,6 +200,8 @@ impl StyleLayoutFlags {
 struct ParagraphDefaults {
     style_id: Option<String>,
     layout_flags: StyleLayoutFlags,
+    run_format: RunFormat,
+    paragraph_format: ParagraphFormat,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -90,6 +210,8 @@ struct ResolvedStyleFormatting {
     font_size_pt: Option<f32>,
     bold: Option<bool>,
     italic: Option<bool>,
+    color_argb: Option<u32>,
+    underline: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -102,6 +224,9 @@ struct NumberingProperties {
 struct NumberingLevel {
     format: Option<String>,
     pattern: Option<String>,
+    start: u32,
+    format_properties: RunFormat,
+    paragraph_format: ParagraphFormat,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -112,6 +237,8 @@ struct NumberingDefinitions {
 
 #[derive(Clone, Debug)]
 struct ListMarker {
+    numbering_id: String,
+    format_properties: Option<RunFormat>,
     level: u8,
     format: Option<String>,
     pattern: Option<String>,
@@ -232,7 +359,18 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         } else if child.has_tag_name((W_NS, "tbl")) {
             table_index = table_index.checked_add(1).ok_or_else(block_count_error)?;
             reading_order = reading_order.checked_add(1).ok_or_else(block_count_error)?;
-            blocks.push(parse_table(child, table_index, source, reading_order)?);
+            blocks.push(parse_table(
+                child,
+                table_index,
+                source,
+                reading_order,
+                &TableContext {
+                    styles: &styles,
+                    defaults: &paragraph_defaults,
+                    numbering: &numbering,
+                    header_tokens: None,
+                },
+            )?);
         } else if child.has_tag_name((W_NS, "sectPr")) {
             body_section_index = body_section_index
                 .checked_add(1)
@@ -258,27 +396,6 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
                 &mut warnings,
             ));
         }
-    }
-
-    if body
-        .children()
-        .filter(Node::is_element)
-        .filter(|child| child.has_tag_name((W_NS, "p")))
-        .any(|paragraph| {
-            declares_contextual_spacing(
-                paragraph,
-                paragraph_property(paragraph, "pStyle")
-                    .and_then(word_value)
-                    .as_deref(),
-                &styles,
-            )
-        })
-    {
-        warnings.push(Diagnostic::warning(
-            "DOCX_CONTEXTUAL_SPACING_IGNORED",
-            "the document declares contextual spacing for at least one paragraph style".to_owned(),
-            "spacing before and after is applied even between paragraphs of the same style, so blocks can sit lower than in Word",
-        ));
     }
 
     let rounded_measures = rounded_twips_measures(xml.root())
@@ -349,6 +466,21 @@ pub fn parse_docx(source: &DocumentSource) -> Result<Document, DocsightError> {
         deletions,
     };
 
+    for section in &mut sections {
+        for entry in &mut section.headers_footers {
+            let raw = parts
+                .headers
+                .iter()
+                .chain(&parts.footers)
+                .find(|(name, _)| format!("/{name}") == entry.part)
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: format!("header or footer {} has no source part", entry.part),
+                })?;
+            entry.blocks =
+                formatted_header_footer(&raw.1, &entry.part, source, &styles, &paragraph_defaults)?;
+        }
+    }
+    realize_numbering(&mut blocks, &numbering, &mut BTreeMap::new())?;
     let converted_styles: Vec<Style> = styles
         .iter()
         .map(|(style_id, style_def)| {
@@ -701,6 +833,7 @@ fn extract_figures(
                 flags: LayoutFlags::default(),
                 format: Default::default(),
                 continuations: Vec::new(),
+                inline_runs: Vec::new(),
                 content: BlockContent::Shape(ShapeBlock {
                     shape_type: "line".to_owned(),
                     label: alt_text,
@@ -748,6 +881,7 @@ fn extract_figures(
                     flags: LayoutFlags::default(),
                     format: Default::default(),
                     continuations: Vec::new(),
+                    inline_runs: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -779,6 +913,7 @@ fn extract_figures(
                     flags: LayoutFlags::default(),
                     format: Default::default(),
                     continuations: Vec::new(),
+                    inline_runs: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -810,6 +945,7 @@ fn extract_figures(
                     flags: LayoutFlags::default(),
                     format: Default::default(),
                     continuations: Vec::new(),
+                    inline_runs: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -842,6 +978,7 @@ fn extract_figures(
                     flags: LayoutFlags::default(),
                     format: Default::default(),
                     continuations: Vec::new(),
+                    inline_runs: Vec::new(),
                     content: BlockContent::Figure(FigureBlock {
                         alt_text: alt_text.clone(),
                         caption: None,
@@ -879,6 +1016,7 @@ fn extract_figures(
             flags: LayoutFlags::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Figure(FigureBlock {
                 alt_text,
                 caption: None,
@@ -929,13 +1067,13 @@ fn figure_warnings<'a>(
             continue;
         }
         warnings.push(Diagnostic {
-            code: "DOCX_FIGURE_RASTER_PLACEHOLDER".to_owned(),
+            code: "DOCX_IMAGE_RASTER_UNAVAILABLE".to_owned(),
             severity: DiagnosticSeverity::Warning,
             message: format!(
-                "embedded {format} image for figure {} is not rasterized; a placeholder box is rendered",
+                "embedded {format} image for figure {} cannot be rasterized by the selected image decoder",
                 figure.id
             ),
-            effect: "visual evidence for this figure does not include the original image pixels"
+            effect: "rendering this figure fails explicitly; no replacement pixels are produced"
                 .to_owned(),
             object: Some(figure.id.clone()),
             page: None,
@@ -1091,6 +1229,7 @@ fn parse_notes(
             flags: LayoutFlags::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Note(NoteBlock {
                 kind: note_kind,
                 note_id: id.to_owned(),
@@ -1192,6 +1331,7 @@ fn parse_unknown_body_element(
         flags: LayoutFlags::default(),
         format: Default::default(),
         continuations: Vec::new(),
+        inline_runs: Vec::new(),
         content: BlockContent::Unknown(UnknownBlock { raw_tag, details }),
     }
 }
@@ -1235,6 +1375,7 @@ const KNOWN_RUN_CHILDREN: &[&str] = &[
     "delText",
     "noBreakHyphen",
     "softHyphen",
+    "lastRenderedPageBreak",
 ];
 
 const RUN_CONTAINERS: &[&str] = &[
@@ -1451,7 +1592,11 @@ fn attribute_points(
 }
 
 fn paragraph_format(properties: Node<'_, '_>) -> Result<ParagraphFormat, DocsightError> {
-    let mut format = ParagraphFormat::default();
+    let mut format = ParagraphFormat {
+        contextual_spacing: child_element(properties, "contextualSpacing")
+            .map(|flag| on_off_value(word_value(flag).as_deref())),
+        ..Default::default()
+    };
 
     if let Some(justification) = child_element(properties, "jc")
         && let Some(value) = word_value(justification)
@@ -1480,10 +1625,23 @@ fn paragraph_format(properties: Node<'_, '_>) -> Result<ParagraphFormat, Docsigh
                 .map_err(|_| DocsightError::MalformedDocument {
                     message: "paragraph line spacing must be an integer".to_owned(),
                 })?;
-            format.line_spacing = match rule.as_str() {
-                "auto" => Some(raw as f32 / 240.0),
-                _ => None,
-            };
+            if raw <= 0 {
+                return Err(DocsightError::MalformedDocument {
+                    message: "paragraph line spacing must be positive".to_owned(),
+                });
+            }
+            match rule.as_str() {
+                "auto" => format.line_spacing = Some(raw as f32 / 240.0),
+                "exact" | "atLeast" => {
+                    format.line_height_pt = Some(raw as f32 / 20.0);
+                    format.exact_line_height = rule == "exact";
+                }
+                _ => {
+                    return Err(DocsightError::MalformedDocument {
+                        message: format!("unknown paragraph line spacing rule {rule}"),
+                    });
+                }
+            }
         }
     }
 
@@ -1502,48 +1660,14 @@ fn paragraph_format(properties: Node<'_, '_>) -> Result<ParagraphFormat, Docsigh
     Ok(format)
 }
 
-fn declares_contextual_spacing(
-    node: Node<'_, '_>,
-    style_id: Option<&str>,
-    styles: &BTreeMap<String, StyleDefinition>,
-) -> bool {
-    let direct = child_element(node, "pPr")
-        .and_then(|properties| child_element(properties, "contextualSpacing"))
-        .is_some_and(|flag| on_off_value(word_value(flag).as_deref()));
-    if direct {
-        return true;
-    }
-    let Some(id) = style_id else {
-        return false;
-    };
-    let mut current = Some(id.to_owned());
-    let mut seen = Vec::new();
-    for _ in 0..MAX_STYLE_DEPTH {
-        let Some(key) = current else {
-            return false;
-        };
-        if seen.contains(&key) {
-            return false;
-        }
-        let Some(definition) = styles.get(&key) else {
-            return false;
-        };
-        if definition.contextual_spacing {
-            return true;
-        }
-        seen.push(key);
-        current = definition.based_on.clone();
-    }
-    false
-}
-
 fn resolve_paragraph_format(
     node: Node<'_, '_>,
     style_id: Option<&str>,
     styles: &BTreeMap<String, StyleDefinition>,
+    defaults: &ParagraphDefaults,
 ) -> Result<ParagraphFormat, DocsightError> {
-    let mut resolved = ParagraphFormat::default();
-    if let Some(id) = style_id {
+    let mut resolved = defaults.paragraph_format;
+    if let Some(id) = style_id.or(defaults.style_id.as_deref()) {
         let mut current = Some(id.to_owned());
         let mut chain = Vec::new();
         let mut depth = 0usize;
@@ -1571,6 +1695,12 @@ fn resolve_paragraph_format(
 }
 
 fn merge_paragraph_format(target: &mut ParagraphFormat, source: &ParagraphFormat) {
+    target.contextual_spacing = source.contextual_spacing.or(target.contextual_spacing);
+    if source.line_height_pt.is_some() || source.line_spacing.is_some() {
+        target.line_height_pt = source.line_height_pt;
+        target.exact_line_height = source.exact_line_height;
+        target.line_spacing = source.line_spacing;
+    }
     target.alignment = source.alignment.or(target.alignment);
     target.space_before_pt = source.space_before_pt.or(target.space_before_pt);
     target.space_after_pt = source.space_after_pt.or(target.space_after_pt);
@@ -1628,7 +1758,7 @@ fn parse_paragraph(
 ) -> Result<Vec<Block>, DocsightError> {
     let base_path = format!("/word/document.xml::body/p[{index}]");
     let style_id = paragraph_property(node, "pStyle").and_then(|property| word_value(property));
-    let block_format = resolve_paragraph_format(node, style_id.as_deref(), styles)?;
+    let mut block_format = resolve_paragraph_format(node, style_id.as_deref(), styles, defaults)?;
     let direct_outline = child_element(node, "pPr")
         .map(outline_level)
         .transpose()?
@@ -1641,7 +1771,23 @@ fn parse_paragraph(
     let inherited_numbering = resolve_style_numbering(style_id.as_deref(), styles)?;
     let list_reference = merge_numbering(direct_numbering, inherited_numbering);
     let list = resolve_list_marker(list_reference, numbering, warnings);
+    if let Some(list) = &list
+        && let Some(level) = numbering
+            .levels
+            .get(&(list.numbering_id.clone(), list.level))
+    {
+        let mut format = level.paragraph_format;
+        merge_paragraph_format(&mut format, &block_format);
+        block_format = format;
+    }
     let facts = paragraph_facts(node);
+    let run_segments = paragraph_runs(
+        node,
+        style_id.as_deref().or(defaults.style_id.as_deref()),
+        styles,
+        &defaults.run_format,
+        &base_path,
+    )?;
     let segments = facts.segments;
     let paragraph_flags = paragraph_layout_flags(node, style_id.as_deref(), styles, defaults);
     let segment_count = segments.texts.len();
@@ -1679,6 +1825,8 @@ fn parse_paragraph(
                 BlockKind::ListItem,
                 "li",
                 BlockContent::ListItem(ListItemBlock {
+                    numbering_id: Some(list.numbering_id.clone()),
+                    marker_format: list.format_properties.clone(),
                     level: list.level,
                     marker: list.pattern.clone(),
                     format: list.format.clone(),
@@ -1716,6 +1864,7 @@ fn parse_paragraph(
             flags,
             format: block_format,
             continuations: Vec::new(),
+            inline_runs: run_segments.get(segment_index).cloned().unwrap_or_default(),
             content,
         });
     }
@@ -1744,14 +1893,22 @@ fn warn_unsupported_run_content(
     }
 }
 
+struct TableContext<'a> {
+    styles: &'a BTreeMap<String, StyleDefinition>,
+    defaults: &'a ParagraphDefaults,
+    numbering: &'a NumberingDefinitions,
+    header_tokens: Option<&'a BTreeMap<usize, Vec<(usize, String)>>>,
+}
+
 fn parse_table(
     node: Node<'_, '_>,
     index: u32,
     source: &DocumentSource,
     reading_order: u32,
+    context: &TableContext<'_>,
 ) -> Result<Block, DocsightError> {
     let source_path = format!("/word/document.xml::body/tbl[{index}]");
-    let (id, table_block, span) = parse_table_at(node, source_path, source, 0)?;
+    let (id, table_block, span) = parse_table_at(node, source_path, source, 0, context)?;
     Ok(Block {
         id,
         kind: BlockKind::Table,
@@ -1764,6 +1921,7 @@ fn parse_table(
         flags: LayoutFlags::default(),
         format: Default::default(),
         continuations: Vec::new(),
+        inline_runs: Vec::new(),
         content: BlockContent::Table(table_block),
     })
 }
@@ -1773,6 +1931,7 @@ fn parse_table_at(
     source_path: String,
     source: &DocumentSource,
     depth: usize,
+    context: &TableContext<'_>,
 ) -> Result<(ObjectId, TableBlock, SourceSpan), DocsightError> {
     if depth > MAX_TABLE_DEPTH {
         return Err(DocsightError::ResourceLimit {
@@ -1785,6 +1944,7 @@ fn parse_table_at(
     let mut rows = 0_u32;
     let mut columns = 0_u32;
     let mut header_rows = 0_u32;
+    let mut cell_patches = Vec::new();
     for (row_offset, row_node) in node
         .children()
         .filter(|child| child.has_tag_name((W_NS, "tr")))
@@ -1796,7 +1956,9 @@ fn parse_table_at(
         let mut column = 0_u32;
         let mut next_merges = BTreeMap::new();
         let mut extended = BTreeSet::new();
-        let mut row_is_header = false;
+        let mut row_is_header = child_element(row_node, "trPr")
+            .and_then(|node| child_element(node, "tblHeader"))
+            .is_some_and(|node| on_off_value(word_value(node).as_deref()));
         for cell_node in row_node
             .children()
             .filter(|child| child.has_tag_name((W_NS, "tc")))
@@ -1809,32 +1971,89 @@ fn parse_table_at(
             let merge = table_cell_vertical_merge(cell_node)?;
             let column_number = column.checked_add(1).ok_or_else(table_size_error)?;
             let cell_source = format!("{source_path}/tr[{row_number}]/tc[{column_number}]");
-            let text = table_cell_text(cell_node);
-            let nested_tables = cell_node
-                .children()
-                .filter(|child| child.has_tag_name((W_NS, "tbl")))
-                .enumerate()
-                .map(|(nested_index, nested)| {
-                    let nested_number = nested_index.checked_add(1).ok_or_else(table_size_error)?;
-                    let nested_source = format!("{cell_source}/tbl[{nested_number}]");
-                    let (nested_id, nested_table, nested_span) =
-                        parse_table_at(nested, nested_source, source, depth + 1)?;
-                    Ok(Block {
-                        id: nested_id,
+
+            let mut nested_tables = Vec::new();
+            let mut paragraph_index = 0;
+            let mut table_index = 0;
+            let mut order = 0;
+            for child in cell_node.children().filter(Node::is_element) {
+                if child.has_tag_name((W_NS, "tbl")) {
+                    table_index += 1;
+                    let (id, table, span) = parse_table_at(
+                        child,
+                        format!("{cell_source}/tbl[{table_index}]"),
+                        source,
+                        depth + 1,
+                        context,
+                    )?;
+                    order += 1;
+                    nested_tables.push(Block {
+                        id,
                         kind: BlockKind::Table,
                         page: None,
                         bbox: None,
                         z_index: 0,
-                        reading_order: 0,
-                        source: nested_span,
+                        reading_order: order,
+                        source: span,
                         confidence: 1.0,
                         flags: LayoutFlags::default(),
-                        format: Default::default(),
+                        format: ParagraphFormat::default(),
                         continuations: Vec::new(),
-                        content: BlockContent::Table(nested_table),
-                    })
-                })
-                .collect::<Result<Vec<_>, DocsightError>>()?;
+                        inline_runs: Vec::new(),
+                        content: BlockContent::Table(table),
+                    });
+                } else if child.has_tag_name((W_NS, "p")) {
+                    paragraph_index += 1;
+                    let path = format!("{cell_source}/p[{paragraph_index}]");
+                    let mut parsed = if let Some(tokens) = context.header_tokens {
+                        order += 1;
+                        vec![formatted_header_paragraph(
+                            child,
+                            tokens.get(&child.range().start).ok_or_else(|| {
+                                DocsightError::MalformedDocument {
+                                    message: "header table paragraph has no decoded tokens"
+                                        .to_owned(),
+                                }
+                            })?,
+                            path.clone(),
+                            order,
+                            source,
+                            context.styles,
+                            context.defaults,
+                        )?]
+                    } else {
+                        parse_paragraph(
+                            child,
+                            paragraph_index,
+                            source,
+                            context.styles,
+                            context.defaults,
+                            context.numbering,
+                            &mut order,
+                            &mut Vec::new(),
+                        )?
+                    };
+                    for (segment, block) in parsed.iter_mut().enumerate() {
+                        let path = if segment == 0 {
+                            path.clone()
+                        } else {
+                            format!("{path}::part[{}]", segment + 1)
+                        };
+                        block.source = SourceSpan::new(path.clone());
+                        block.id = source.object_id("p", &path);
+                        for run in &mut block.inline_runs {
+                            run.source = block.source.clone();
+                        }
+                    }
+                    nested_tables.extend(parsed);
+                }
+            }
+            let text = nested_tables
+                .iter()
+                .map(Block::text)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
             match merge.as_deref() {
                 Some("continue") => {
                     let cell_index = active_merges.get(&column).copied().ok_or_else(|| {
@@ -1861,6 +2080,12 @@ fn parse_table_at(
                 }
                 Some("restart") | None => {
                     let cell_index = cells.len();
+                    cell_patches.push(
+                        child_element(cell_node, "tcPr")
+                            .map(cell_format_patch)
+                            .transpose()?
+                            .unwrap_or_default(),
+                    );
                     cells.push(TableCell {
                         id: source.object_id("cell", &cell_source),
                         row,
@@ -1868,6 +2093,9 @@ fn parse_table_at(
                         row_span: 1,
                         column_span,
                         bbox: None,
+                        page: None,
+                        continuations: Vec::new(),
+                        format: Default::default(),
                         text,
                         blocks: nested_tables,
                         source: SourceSpan::new(cell_source),
@@ -1892,7 +2120,48 @@ fn parse_table_at(
         columns = columns.max(column);
         active_merges = next_merges;
     }
-    let column_widths_pt = table_grid_widths(node);
+    let column_widths_pt = table_grid_widths(node)?;
+    let properties = child_element(node, "tblPr");
+    let style_id = properties
+        .and_then(|node| child_element(node, "tblStyle"))
+        .and_then(word_value);
+    let table_patch = properties
+        .map(cell_format_patch)
+        .transpose()?
+        .unwrap_or_default();
+    for (cell, patch) in cells.iter_mut().zip(cell_patches) {
+        for style in style_chain(style_id.as_deref(), context.styles)
+            .iter()
+            .rev()
+        {
+            if let Some(style) = context.styles.get(style) {
+                apply_cell_patch(
+                    &mut cell.format,
+                    &style.cell_format,
+                    cell.row,
+                    cell.column,
+                    rows,
+                    columns,
+                );
+            }
+        }
+        apply_cell_patch(
+            &mut cell.format,
+            &table_patch,
+            cell.row,
+            cell.column,
+            rows,
+            columns,
+        );
+        apply_cell_patch(
+            &mut cell.format,
+            &patch,
+            cell.row,
+            cell.column,
+            rows,
+            columns,
+        );
+    }
     let id = source.object_id("tbl", &source_path);
     let span = SourceSpan::new(source_path);
     Ok((
@@ -1909,19 +2178,34 @@ fn parse_table_at(
     ))
 }
 
-fn table_grid_widths(node: Node<'_, '_>) -> Option<Vec<f32>> {
-    let grid = child_element(node, "tblGrid")?;
-    let widths: Vec<f32> = grid
-        .children()
-        .filter(|child| child.has_tag_name((W_NS, "gridCol")))
-        .filter_map(|column| {
-            column
-                .attribute((W_NS, "w"))
-                .and_then(|value| value.parse::<f32>().ok())
-                .map(|dxa| dxa / 20.0)
-        })
-        .collect();
-    (!widths.is_empty()).then_some(widths)
+fn table_grid_widths(node: Node<'_, '_>) -> Result<Option<Vec<f32>>, DocsightError> {
+    let Some(grid) = child_element(node, "tblGrid") else {
+        return Ok(None);
+    };
+    let widths =
+        grid.children()
+            .filter(|child| child.has_tag_name((W_NS, "gridCol")))
+            .map(|column| {
+                let value = column.attribute((W_NS, "w")).ok_or_else(|| {
+                    DocsightError::MalformedDocument {
+                        message: "table grid column has no width".to_owned(),
+                    }
+                })?;
+                let width = twips_to_points(value, "table grid column width")?;
+                if width <= 0.0 {
+                    return Err(DocsightError::MalformedDocument {
+                        message: "table grid column width must be positive".to_owned(),
+                    });
+                }
+                Ok(width)
+            })
+            .collect::<Result<Vec<_>, DocsightError>>()?;
+    if widths.is_empty() {
+        return Err(DocsightError::MalformedDocument {
+            message: "explicit table grid has no columns".to_owned(),
+        });
+    }
+    Ok(Some(widths))
 }
 
 fn table_cell_is_header(node: Node<'_, '_>) -> bool {
@@ -1972,15 +2256,6 @@ fn paragraph_text(node: Node<'_, '_>) -> String {
     text
 }
 
-fn table_cell_text(node: Node<'_, '_>) -> String {
-    node.descendants()
-        .filter(|child| child.has_tag_name((W_NS, "p")))
-        .map(paragraph_text)
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn table_cell_span(node: Node<'_, '_>) -> Result<u32, DocsightError> {
     let span = child_element(node, "tcPr")
         .and_then(|properties| child_element(properties, "gridSpan"))
@@ -2021,7 +2296,10 @@ fn parse_styles(
         .descendants()
         .filter(|node| node.has_tag_name((W_NS, "style")))
     {
-        if node.attribute((W_NS, "type")) != Some("paragraph") {
+        if !matches!(
+            node.attribute((W_NS, "type")),
+            Some("paragraph" | "character" | "table")
+        ) {
             continue;
         }
         let style_id =
@@ -2064,17 +2342,27 @@ fn parse_styles(
                     Some(properties) => paragraph_format(properties)?,
                     None => ParagraphFormat::default(),
                 },
-                contextual_spacing: child_element(node, "pPr")
-                    .and_then(|properties| child_element(properties, "contextualSpacing"))
-                    .is_some_and(|flag| on_off_value(word_value(flag).as_deref())),
                 outline_level,
                 numbering,
                 font_family,
                 font_size_pt,
                 bold,
                 italic,
+                color_argb: run_properties
+                    .map(run_format)
+                    .transpose()?
+                    .and_then(|format| format.color_argb),
+                underline: run_properties
+                    .map(run_format)
+                    .transpose()?
+                    .and_then(|format| format.underline),
                 layout_flags: child_element(node, "pPr")
                     .map(StyleLayoutFlags::from_properties)
+                    .unwrap_or_default(),
+                cell_format: child_element(node, "tcPr")
+                    .or_else(|| child_element(node, "tblPr"))
+                    .map(cell_format_patch)
+                    .transpose()?
                     .unwrap_or_default(),
             },
         );
@@ -2108,7 +2396,287 @@ fn parse_paragraph_defaults(
     Ok(ParagraphDefaults {
         style_id,
         layout_flags,
+        run_format: child_element(root, "docDefaults")
+            .and_then(|defaults| child_element(defaults, "rPrDefault"))
+            .and_then(|defaults| child_element(defaults, "rPr"))
+            .map(run_format)
+            .transpose()?
+            .unwrap_or_default(),
+        paragraph_format: child_element(root, "docDefaults")
+            .and_then(|node| child_element(node, "pPrDefault"))
+            .and_then(|node| child_element(node, "pPr"))
+            .map(paragraph_format)
+            .transpose()?
+            .unwrap_or_default(),
     })
+}
+
+fn merge_run_format(target: &mut RunFormat, source: &RunFormat) {
+    target.font_family = source.font_family.clone().or(target.font_family.clone());
+    target.font_size_pt = source.font_size_pt.or(target.font_size_pt);
+    target.bold = source.bold.or(target.bold);
+    target.italic = source.italic.or(target.italic);
+    target.color_argb = source.color_argb.or(target.color_argb);
+    target.underline = source.underline.or(target.underline);
+}
+
+fn formatted_header_paragraph(
+    paragraph: Node<'_, '_>,
+    tokens: &[(usize, String)],
+    path: String,
+    order: u32,
+    source: &DocumentSource,
+    styles: &BTreeMap<String, StyleDefinition>,
+    defaults: &ParagraphDefaults,
+) -> Result<Block, DocsightError> {
+    let style_id = paragraph_property(paragraph, "pStyle")
+        .and_then(word_value)
+        .or(defaults.style_id.clone());
+    let mut runs = Vec::new();
+    for (position, text) in tokens.iter().cloned() {
+        let run = paragraph
+            .descendants()
+            .find(|node| node.range().start == position && node.is_element())
+            .ok_or_else(|| DocsightError::MalformedDocument {
+                message: format!("header text has no source run in {path}"),
+            })?;
+        let mut format = defaults.run_format.clone();
+        if let Some(style) = &style_id {
+            let style = resolve_style_formatting(style, styles)?;
+            merge_run_format(
+                &mut format,
+                &RunFormat {
+                    font_family: style.font_family,
+                    font_size_pt: style.font_size_pt,
+                    bold: style.bold,
+                    italic: style.italic,
+                    color_argb: style.color_argb,
+                    underline: style.underline,
+                },
+            );
+        }
+        if let Some(properties) = child_element(run, "rPr") {
+            merge_run_format(&mut format, &run_format(properties)?);
+        }
+        runs.push(InlineRun {
+            text,
+            format,
+            source: SourceSpan::new(format!("{path}/r@{position}")),
+        });
+    }
+    let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+    Ok(Block {
+        id: source.object_id("hdrp", &path),
+        kind: BlockKind::Paragraph,
+        page: None,
+        bbox: None,
+        z_index: 0,
+        reading_order: order,
+        source: SourceSpan::new(path),
+        confidence: 1.0,
+        flags: paragraph_layout_flags(paragraph, style_id.as_deref(), styles, defaults),
+        format: resolve_paragraph_format(paragraph, style_id.as_deref(), styles, defaults)?,
+        continuations: Vec::new(),
+        inline_runs: runs,
+        content: BlockContent::Paragraph(ParagraphBlock { text, style_id }),
+    })
+}
+
+fn formatted_header_footer(
+    xml: &str,
+    part: &str,
+    source: &DocumentSource,
+    styles: &BTreeMap<String, StyleDefinition>,
+    defaults: &ParagraphDefaults,
+) -> Result<Vec<Block>, DocsightError> {
+    let parsed = parse_xml(xml)?;
+    let decoded = crate::sections::header_footer_part(xml)?;
+    let tokens = parsed
+        .descendants()
+        .filter(|node| node.has_tag_name((W_NS, "p")))
+        .zip(decoded.paragraphs)
+        .map(|(node, tokens)| (node.range().start, tokens))
+        .collect::<BTreeMap<_, _>>();
+    let numbering = NumberingDefinitions::default();
+    let context = TableContext {
+        styles,
+        defaults,
+        numbering: &numbering,
+        header_tokens: Some(&tokens),
+    };
+    let mut blocks = Vec::new();
+    let mut paragraph_index = 0;
+    let mut table_index = 0;
+    for node in parsed.root_element().children().filter(Node::is_element) {
+        let order = u32::try_from(blocks.len() + 1).map_err(|_| block_count_error())?;
+        if node.has_tag_name((W_NS, "p")) {
+            paragraph_index += 1;
+            let content = tokens.get(&node.range().start).ok_or_else(|| {
+                DocsightError::MalformedDocument {
+                    message: format!("header paragraph has no decoded content in {part}"),
+                }
+            })?;
+            blocks.push(formatted_header_paragraph(
+                node,
+                content,
+                format!("{part}::p[{paragraph_index}]"),
+                order,
+                source,
+                styles,
+                defaults,
+            )?);
+        } else if node.has_tag_name((W_NS, "tbl")) {
+            table_index += 1;
+            let (id, table, span) = parse_table_at(
+                node,
+                format!("{part}::tbl[{table_index}]"),
+                source,
+                0,
+                &context,
+            )?;
+            blocks.push(Block {
+                id,
+                kind: BlockKind::Table,
+                page: None,
+                bbox: None,
+                z_index: 0,
+                reading_order: order,
+                source: span,
+                confidence: 1.0,
+                flags: LayoutFlags::default(),
+                format: ParagraphFormat::default(),
+                continuations: Vec::new(),
+                inline_runs: Vec::new(),
+                content: BlockContent::Table(table),
+            });
+        } else {
+            return Err(DocsightError::UnsupportedFeature {
+                feature: format!("header/footer element {} in {part}", node.tag_name().name()),
+            });
+        }
+    }
+    Ok(blocks)
+}
+
+fn run_format(properties: Node<'_, '_>) -> Result<RunFormat, DocsightError> {
+    let font_family = child_element(properties, "rFonts")
+        .and_then(|fonts| {
+            fonts
+                .attribute((W_NS, "ascii"))
+                .or_else(|| fonts.attribute((W_NS, "hAnsi")))
+        })
+        .map(str::to_owned);
+    let color_argb = child_element(properties, "color")
+        .and_then(word_value)
+        .filter(|value| value != "auto")
+        .map(|value| {
+            u32::from_str_radix(&value, 16)
+                .map(|color| color | 0xff000000)
+                .map_err(|_| DocsightError::MalformedDocument {
+                    message: format!("invalid run color {value}"),
+                })
+        })
+        .transpose()?;
+    Ok(RunFormat {
+        font_family,
+        font_size_pt: child_element(properties, "sz")
+            .map(parse_half_point_size)
+            .transpose()?,
+        bold: child_element(properties, "b").map(|node| on_off_value(word_value(node).as_deref())),
+        italic: child_element(properties, "i")
+            .map(|node| on_off_value(word_value(node).as_deref())),
+        color_argb,
+        underline: child_element(properties, "u")
+            .map(|node| word_value(node).as_deref() != Some("none")),
+    })
+}
+
+fn paragraph_runs(
+    node: Node<'_, '_>,
+    style_id: Option<&str>,
+    styles: &BTreeMap<String, StyleDefinition>,
+    defaults: &RunFormat,
+    path: &str,
+) -> Result<Vec<Vec<InlineRun>>, DocsightError> {
+    let mut base = defaults.clone();
+    if let Some(style_id) = style_id {
+        let resolved = resolve_style_formatting(style_id, styles)?;
+        merge_run_format(
+            &mut base,
+            &RunFormat {
+                font_family: resolved.font_family,
+                font_size_pt: resolved.font_size_pt,
+                bold: resolved.bold,
+                italic: resolved.italic,
+                color_argb: resolved.color_argb,
+                underline: resolved.underline,
+            },
+        );
+    }
+    let mut segments = vec![Vec::<InlineRun>::new()];
+    for (index, run) in node
+        .descendants()
+        .filter(|run| run.has_tag_name((W_NS, "r")))
+        .enumerate()
+    {
+        if run
+            .ancestors()
+            .any(|ancestor| ancestor.has_tag_name((W_NS, "del")))
+        {
+            continue;
+        }
+        let mut format = base.clone();
+        if let Some(properties) = child_element(run, "rPr") {
+            if let Some(style) = child_element(properties, "rStyle").and_then(word_value) {
+                let resolved = resolve_style_formatting(&style, styles)?;
+                merge_run_format(
+                    &mut format,
+                    &RunFormat {
+                        font_family: resolved.font_family,
+                        font_size_pt: resolved.font_size_pt,
+                        bold: resolved.bold,
+                        italic: resolved.italic,
+                        color_argb: resolved.color_argb,
+                        underline: resolved.underline,
+                    },
+                );
+            }
+            merge_run_format(&mut format, &run_format(properties)?);
+        }
+        let mut text = String::new();
+        for child in run.children().filter(Node::is_element) {
+            match child.tag_name().name() {
+                "t" => text.push_str(child.text().unwrap_or_default()),
+                "tab" => text.push('\t'),
+                "br" if child.attribute((W_NS, "type")) == Some("page") => {
+                    if !text.is_empty()
+                        && let Some(segment) = segments.last_mut()
+                    {
+                        segment.push(InlineRun {
+                            text: std::mem::take(&mut text),
+                            format: format.clone(),
+                            source: SourceSpan::new(format!("{path}/r[{}]", index + 1)),
+                        });
+                    }
+                    if segments.last().is_some_and(|segment| !segment.is_empty()) {
+                        segments.push(Vec::new());
+                    }
+                }
+                "br" | "cr" => text.push('\n'),
+                _ => {}
+            }
+        }
+        if !text.is_empty()
+            && let Some(segment) = segments.last_mut()
+        {
+            segment.push(InlineRun {
+                text,
+                format,
+                source: SourceSpan::new(format!("{path}/r[{}]", index + 1)),
+            });
+        }
+    }
+    Ok(segments)
 }
 
 fn parse_half_point_size(node: Node<'_, '_>) -> Result<f32, DocsightError> {
@@ -2167,6 +2735,8 @@ fn resolve_style_formatting(
         if let Some(value) = definition.italic {
             resolved.italic = Some(value);
         }
+        resolved.color_argb = definition.color_argb.or(resolved.color_argb);
+        resolved.underline = definition.underline.or(resolved.underline);
     }
     Ok(resolved)
 }
@@ -2277,7 +2847,33 @@ fn parse_numbering(xml: Option<&str>) -> Result<NumberingDefinitions, DocsightEr
                 })?;
             let format = child_element(level_node, "numFmt").and_then(word_value);
             let pattern = child_element(level_node, "lvlText").and_then(word_value);
-            levels.insert(level, NumberingLevel { format, pattern });
+            levels.insert(
+                level,
+                NumberingLevel {
+                    format,
+                    pattern,
+                    start: child_element(level_node, "start")
+                        .and_then(word_value)
+                        .map(|value| {
+                            value
+                                .parse::<u32>()
+                                .map_err(|_| DocsightError::MalformedDocument {
+                                    message: "numbering start must be an unsigned integer"
+                                        .to_owned(),
+                                })
+                        })
+                        .transpose()?
+                        .unwrap_or(1),
+                    format_properties: child_element(level_node, "rPr")
+                        .map(run_format)
+                        .transpose()?
+                        .unwrap_or_default(),
+                    paragraph_format: child_element(level_node, "pPr")
+                        .map(paragraph_format)
+                        .transpose()?
+                        .unwrap_or_default(),
+                },
+            );
         }
         abstract_numbers.insert(abstract_id.to_owned(), levels);
     }
@@ -2298,7 +2894,35 @@ fn parse_numbering(xml: Option<&str>) -> Result<NumberingDefinitions, DocsightEr
         numbers.insert(num_id.to_owned(), abstract_id.clone());
         if let Some(abstract_levels) = abstract_numbers.get(&abstract_id) {
             for (level, definition) in abstract_levels {
-                levels.insert((abstract_id.clone(), *level), definition.clone());
+                levels.insert((num_id.to_owned(), *level), definition.clone());
+            }
+        }
+        for override_node in node
+            .children()
+            .filter(|node| node.has_tag_name((W_NS, "lvlOverride")))
+        {
+            let level = override_node
+                .attribute((W_NS, "ilvl"))
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: "numbering override has no level".to_owned(),
+                })?
+                .parse::<u8>()
+                .map_err(|_| DocsightError::MalformedDocument {
+                    message: "numbering override level must be an integer".to_owned(),
+                })?;
+            if let Some(start) = child_element(override_node, "startOverride").and_then(word_value)
+            {
+                let start = start
+                    .parse::<u32>()
+                    .map_err(|_| DocsightError::MalformedDocument {
+                        message: "numbering start override must be an unsigned integer".to_owned(),
+                    })?;
+                let definition = levels.get_mut(&(num_id.to_owned(), level)).ok_or_else(|| {
+                    DocsightError::MalformedDocument {
+                        message: "numbering start override has no level definition".to_owned(),
+                    }
+                })?;
+                definition.start = start;
             }
         }
     }
@@ -2314,7 +2938,7 @@ fn resolve_list_marker(
     let definition = numbering
         .numbers
         .get(&num_id)
-        .and_then(|abstract_id| numbering.levels.get(&(abstract_id.clone(), level)));
+        .and_then(|_| numbering.levels.get(&(num_id.clone(), level)));
     let (format, pattern, ordered) = match definition {
         Some(definition) => {
             if definition.format.is_none() {
@@ -2344,11 +2968,98 @@ fn resolve_list_marker(
         }
     };
     Some(ListMarker {
+        numbering_id: num_id,
+        format_properties: definition.map(|definition| definition.format_properties.clone()),
         level,
         format,
         pattern,
         ordered,
     })
+}
+
+fn realize_numbering(
+    blocks: &mut [Block],
+    definitions: &NumberingDefinitions,
+    counters: &mut BTreeMap<(String, u8), u32>,
+) -> Result<(), DocsightError> {
+    for block in blocks {
+        match &mut block.content {
+            BlockContent::ListItem(item) => {
+                let Some(id) = item.numbering_id.as_deref() else {
+                    continue;
+                };
+                let key = (id.to_owned(), item.level);
+                let Some(definition) = definitions.levels.get(&key) else {
+                    continue;
+                };
+                if block.source.path.contains("::part[") {
+                    item.marker = None;
+                    continue;
+                }
+                let next = match counters.get(&key) {
+                    Some(previous) => {
+                        previous
+                            .checked_add(1)
+                            .ok_or_else(|| DocsightError::ResourceLimit {
+                                resource: "list numbering counter".to_owned(),
+                                limit: u64::from(u32::MAX),
+                            })?
+                    }
+                    None => definition.start,
+                };
+                counters.retain(|(list, level), _| list != id || *level <= item.level);
+                counters.insert(key, next);
+                if item.format.as_deref() == Some("none") {
+                    item.marker = None;
+                    continue;
+                }
+                if let Some(pattern) = &item.pattern {
+                    let mut marker = pattern.clone();
+                    for level in 0..9_u8 {
+                        let placeholder = format!("%{}", level + 1);
+                        if !marker.contains(&placeholder) {
+                            continue;
+                        }
+                        let level_definition = definitions
+                            .levels
+                            .get(&(id.to_owned(), level))
+                            .ok_or_else(|| DocsightError::MalformedDocument {
+                                message: format!("list marker references undefined level {level}"),
+                            })?;
+                        let number = counters
+                            .get(&(id.to_owned(), level))
+                            .copied()
+                            .unwrap_or(level_definition.start);
+                        let text = match level_definition.format.as_deref() {
+                            Some("decimal") => number.to_string(),
+                            Some("decimalZero") => format!("{number:02}"),
+                            Some("lowerRoman" | "upperRoman" | "lowerLetter" | "upperLetter") => {
+                                docsight_core::format_ooxml_number(
+                                    number,
+                                    level_definition.format.as_deref(),
+                                )?
+                            }
+                            Some("bullet") => continue,
+                            other => {
+                                return Err(DocsightError::UnsupportedFeature {
+                                    feature: format!("DOCX numbering format {other:?}"),
+                                });
+                            }
+                        };
+                        marker = marker.replace(&placeholder, &text);
+                    }
+                    item.marker = Some(marker);
+                }
+            }
+            BlockContent::Table(table) => {
+                for cell in &mut table.cells {
+                    realize_numbering(&mut cell.blocks, definitions, counters)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn paragraph_numbering_properties(

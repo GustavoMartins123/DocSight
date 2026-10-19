@@ -1,9 +1,11 @@
 {
-  "fixture": "sample_features.docx",
-  "pages": [1],
   "dpi": 72,
-  "width_px": 280,
+  "fixture": "sample_features.docx",
   "height_px": 360,
   "media_type": "image/png",
-  "output_sha256": "810c2e5250bc05a9a0313082f339f853f1f9be30e991cddd471d91743c4de6f8"
+  "output_sha256": "bcf846765cb743f9dc91ba9a9154095eadaf36eb07e93eabf688661495b0eaba",
+  "pages": [
+    1
+  ],
+  "width_px": 280
 }

@@ -6,6 +6,7 @@ members = [
     "crates/docsight-core",
     "crates/docsight-ingest",
     "crates/docsight-layout",
+    "crates/docsight-fonts",
     "crates/docsight-ooxml",
     "crates/docsight-pdf",
     "crates/docsight-render",
@@ -42,6 +43,8 @@ windows-sys = "0.61.2"
 roxmltree = "0.21.1"
 zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 zune-jpeg = { version = "=0.5.15", default-features = false, features = ["std"] }
+rustybuzz = "=0.20.1"
+fontdue = { version = "=0.9.3", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -54,4 +57,16 @@ todo = "deny"
 unwrap_used = "deny"
 
 [profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.rustybuzz]
+opt-level = 3
+
+[profile.dev.package.fontdue]
+opt-level = 3
+
+[profile.dev.package."ttf-parser:0.25.1"]
+opt-level = 3
+
+[profile.dev.package."ttf-parser:0.21.1"]
 opt-level = 3

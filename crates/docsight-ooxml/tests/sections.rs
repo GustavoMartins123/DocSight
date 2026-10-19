@@ -117,15 +117,9 @@ fn paragraph_section_breaks_produce_ordered_sections_with_block_boundaries() -> 
     assert_eq!(second.page_number_format.as_deref(), Some("lowerRoman"));
 
     let warnings = codes(&parsed);
-    assert!(warnings.contains(&"DOCX_SECTION_COLUMNS_UNSUPPORTED"));
+    assert!(!warnings.contains(&"DOCX_SECTION_COLUMNS_UNSUPPORTED"));
     assert!(!warnings.contains(&"DOCX_SECTIONS_COLLAPSED"));
     assert!(!warnings.contains(&"DOCX_SECTION_GEOMETRY_DEFAULTED"));
-    let columns = parsed
-        .warnings
-        .iter()
-        .find(|warning| warning.code == "DOCX_SECTION_COLUMNS_UNSUPPORTED")
-        .ok_or("columns warning")?;
-    assert_eq!(columns.object.as_ref(), Some(&second.id));
     Ok(())
 }
 
@@ -266,7 +260,8 @@ fn geometry_and_reference_gaps_are_diagnosed_per_section() -> TestResult {
     assert!(section.headers_footers.is_empty());
     let warnings = codes(&parsed);
     assert!(warnings.contains(&"DOCX_HEADER_FOOTER_UNRESOLVED"));
-    assert!(warnings.contains(&"DOCX_SECTION_GUTTER_IGNORED"));
+    assert_eq!(section.gutter_pt, 18.0);
+    assert!(!warnings.contains(&"DOCX_SECTION_GUTTER_IGNORED"));
     assert!(!warnings.contains(&"DOCX_SECTION_GEOMETRY_DEFAULTED"));
 
     let document = body(r#"<w:p/><w:sectPr><w:pgSz w:w="12240"/></w:sectPr>"#);

@@ -984,7 +984,7 @@ fn tool_verify(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, 
         .map(|p| p as u32);
     let source = loader.open_source(&path)?;
     let document = loader.load(&source)?;
-    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source);
+    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source)?;
     let report = compute_coverage(&document, &source, page_num, true, glyph_coverage)?;
     serde_json::to_value(report).map_err(serialization_error)
 }

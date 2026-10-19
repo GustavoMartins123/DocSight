@@ -173,6 +173,7 @@ pub fn generate(metadata: Value, lock_path: &Path) -> Result<String> {
     let members: BTreeSet<_> = metadata.workspace_members.into_iter().collect();
     let mut seen = BTreeSet::new();
     let mut packages = Vec::new();
+    let mut font_license = None;
     for package in metadata.packages {
         require(
             seen.insert(package.id.clone()),
@@ -180,6 +181,16 @@ pub fn generate(metadata: Value, lock_path: &Path) -> Result<String> {
             "Package identities must be unique",
         )?;
         if members.contains(&package.id) {
+            if package.name == "docsight-fonts" {
+                let root = package
+                    .manifest_path
+                    .parent()
+                    .ok_or_else(|| {
+                        ToolError::new("INVALID_CARGO_METADATA", "Font manifest has no parent")
+                    })?
+                    .canonicalize()?;
+                font_license = Some(license_path(&root, Path::new("assets/LICENSE-Liberation"))?);
+            }
             continue;
         }
         require(
@@ -255,6 +266,12 @@ pub fn generate(metadata: Value, lock_path: &Path) -> Result<String> {
                 text(&bytes)?.trim_end()
             ));
         }
+    }
+    if let Some(path) = font_license {
+        let bytes = read_bytes(&path, MAX_JSON_BYTES)?;
+        output.push_str("## Bundled Liberation fonts\n\nDeclared license: SIL-OFL-1.1\n\n");
+        output.push_str(text(&bytes)?);
+        output.push('\n');
     }
     Ok(output)
 }

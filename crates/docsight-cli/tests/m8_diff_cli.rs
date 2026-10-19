@@ -195,7 +195,7 @@ fn diff_visual_docx_is_deterministic_and_evidence_limited() -> Result<(), Box<dy
             .as_array()
             .ok_or("reason codes")?
             .iter()
-            .any(|code| code == "DOCX_FONT_SUBSTITUTED")
+            .any(|code| code == "DOCX_LAYOUT_PAGINATED")
     );
     let pages = visual["page_diffs"].as_array().ok_or("page diffs")?;
     assert_eq!(pages.len(), 4);

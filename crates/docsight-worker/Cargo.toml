@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 docsight-core = { path = "../docsight-core" }
+docsight-fonts = { path = "../docsight-fonts" }
 docsight-ingest = { path = "../docsight-ingest" }
 docsight-render = { path = "../docsight-render" }
 serde.workspace = true

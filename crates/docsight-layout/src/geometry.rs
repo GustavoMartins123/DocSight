@@ -16,6 +16,8 @@ pub(crate) struct SectionGeometry {
     pub margin_right: f32,
     pub header_distance: f32,
     pub footer_distance: f32,
+    pub columns: u32,
+    pub column_gap: f32,
 }
 
 impl SectionGeometry {
@@ -25,7 +27,7 @@ impl SectionGeometry {
             page_height: section.page_height_pt.unwrap_or(DEFAULT_PAGE_HEIGHT_PT),
             margin_top: section.margin_top_pt.unwrap_or(DEFAULT_MARGIN_PT).abs(),
             margin_bottom: section.margin_bottom_pt.unwrap_or(DEFAULT_MARGIN_PT).abs(),
-            margin_left: section.margin_left_pt.unwrap_or(DEFAULT_MARGIN_PT),
+            margin_left: section.margin_left_pt.unwrap_or(DEFAULT_MARGIN_PT) + section.gutter_pt,
             margin_right: section.margin_right_pt.unwrap_or(DEFAULT_MARGIN_PT),
             header_distance: section
                 .header_distance_pt
@@ -35,6 +37,8 @@ impl SectionGeometry {
                 .footer_distance_pt
                 .unwrap_or(DEFAULT_HEADER_FOOTER_DISTANCE_PT)
                 .abs(),
+            columns: section.columns,
+            column_gap: section.column_spacing_pt.unwrap_or(36.0),
         };
         let values = [
             geometry.page_width,
@@ -61,6 +65,11 @@ impl SectionGeometry {
     }
 
     pub fn content_width(&self) -> f32 {
+        (self.full_content_width() - self.column_gap * self.columns.saturating_sub(1) as f32)
+            / self.columns.max(1) as f32
+    }
+
+    pub fn full_content_width(&self) -> f32 {
         self.page_width - self.margin_left - self.margin_right
     }
 

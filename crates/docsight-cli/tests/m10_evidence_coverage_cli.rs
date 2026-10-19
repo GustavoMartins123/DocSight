@@ -20,11 +20,11 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     let doc_str = doc_path.to_str().ok_or("invalid path")?;
 
     let output = docsight()
-        .args(["evidence", doc_str, "h_515ad605791c12fc496c1c18d79f6526"])
+        .args(["evidence", doc_str, "h_11ff36836ef204cec23ee89837654132"])
         .output()?;
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("Evidence for h_515ad605791c12fc496c1c18d79f6526:"));
+    assert!(stdout.contains("Evidence for h_11ff36836ef204cec23ee89837654132:"));
     assert!(stdout.contains("Kind:              Heading"));
     assert!(stdout.contains("Source Path:       /word/document.xml::body/p[1]"));
     assert!(stdout.contains("Page:              1"));
@@ -39,7 +39,7 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
         .args([
             "evidence",
             doc_str,
-            "h_515ad605791c12fc496c1c18d79f6526",
+            "h_11ff36836ef204cec23ee89837654132",
             "--json",
         ])
         .output()?;
@@ -47,20 +47,20 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
     let val: serde_json::Value = serde_json::from_slice(&json_output.stdout)?;
     assert_eq!(val["schema"], "docsight.agent/v2");
     let result = &val["result"];
-    assert_eq!(result["object_id"], "h_515ad605791c12fc496c1c18d79f6526");
+    assert_eq!(result["object_id"], "h_11ff36836ef204cec23ee89837654132");
     assert_eq!(result["kind"], "heading");
     assert_eq!(result["page"], 1);
     assert_eq!(result["fidelity"]["text"], 1.0);
     assert_eq!(result["fidelity"]["structure"], 1.0);
     let geometry = result["fidelity"]["geometry"].as_f64().ok_or("geometry")?;
-    assert_eq!(geometry, 0.0);
-    assert_eq!(result["fidelity"]["visual"], 0.0);
+    assert_eq!(geometry, 1.0);
+    assert_eq!(result["fidelity"]["visual"], 1.0);
     assert!(
         result["fidelity"]["reasons"]
             .as_array()
             .ok_or("reasons")?
             .iter()
-            .any(|reason| reason == "DOCX_FONT_SUBSTITUTED")
+            .any(|reason| reason == "DOCX_LAYOUT_PAGINATED")
     );
     assert!(
         !result["render_fingerprint"]
@@ -157,10 +157,10 @@ fn coverage_docx_reports_measured_penalties() -> Result<(), Box<dyn std::error::
     assert!(stdout.contains("Format:              DOCX"));
     assert!(stdout.contains("Text Fidelity:       1.000 (exact)"));
     assert!(stdout.contains("Structure Fidelity:  1.000 (exact)"));
-    assert!(stdout.contains("Geometry Fidelity:   0.000 (unsupported)"));
-    assert!(stdout.contains("Visual Fidelity:     0.000 (unsupported)"));
-    assert!(stdout.contains("Affected Objects:    50"));
-    assert!(stdout.contains("DOCX_FONT_SUBSTITUTED"));
+    assert!(stdout.contains("Geometry Fidelity:   1.000 (exact)"));
+    assert!(stdout.contains("Visual Fidelity:     1.000 (exact)"));
+    assert!(stdout.contains("Affected Objects:    0"));
+    assert!(stdout.contains("DOCX_LAYOUT_PAGINATED"));
 
     Ok(())
 }
@@ -182,7 +182,7 @@ fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::er
     let mut unsupported_regions = 0;
     for page in result["pages"].as_array().ok_or("pages")? {
         for region in page["regions"].as_array().ok_or("regions")? {
-            if region["reason_code"] == "DOCX_FIGURE_RASTER_PLACEHOLDER" {
+            if region["reason_code"] == "DOCX_IMAGE_RASTER_UNAVAILABLE" {
                 unsupported_regions += 1;
                 assert_eq!(region["status"], "unsupported");
                 assert!(
@@ -200,7 +200,7 @@ fn coverage_enumerates_unsupported_figure_region() -> Result<(), Box<dyn std::er
             .as_array()
             .ok_or("codes")?
             .iter()
-            .any(|code| code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+            .any(|code| code == "DOCX_IMAGE_RASTER_UNAVAILABLE")
     );
     assert!(
         result["global"]["resource"]["score"]
@@ -232,7 +232,7 @@ fn coverage_counts_affected_objects_for_a_rasterizable_document()
             .as_array()
             .ok_or("codes")?
             .iter()
-            .any(|code| code == "DOCX_FIGURE_RASTER_PLACEHOLDER"),
+            .any(|code| code == "DOCX_IMAGE_RASTER_UNAVAILABLE"),
         "a PNG figure must not be reported as an unrasterized placeholder"
     );
 
@@ -429,7 +429,7 @@ fn evidence_and_coverage_deterministic_json() -> Result<(), Box<dyn std::error::
         .args([
             "evidence",
             doc_str,
-            "h_515ad605791c12fc496c1c18d79f6526",
+            "h_11ff36836ef204cec23ee89837654132",
             "--json",
         ])
         .output()?;
@@ -437,7 +437,7 @@ fn evidence_and_coverage_deterministic_json() -> Result<(), Box<dyn std::error::
         .args([
             "evidence",
             doc_str,
-            "h_515ad605791c12fc496c1c18d79f6526",
+            "h_11ff36836ef204cec23ee89837654132",
             "--json",
         ])
         .output()?;
