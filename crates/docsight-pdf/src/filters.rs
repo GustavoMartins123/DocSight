@@ -107,19 +107,39 @@ fn decode_filtered(
 
     let mut output = data.to_vec();
     for (name, parm) in names.iter().zip(parms) {
+        let parm = match parm {
+            Value::Ref(_) => resolve(&parm)?,
+            other => other,
+        };
         output = match name.as_str() {
             "FlateDecode" | "Fl" => inflate_zlib(&output)?,
             "ASCII85Decode" | "A85" => ascii85_decode(&output)?,
             "ASCIIHexDecode" | "AHx" => ascii_hex_decode(&output)?,
+            "LZWDecode" | "LZW" => {
+                let early_change = match &parm {
+                    Value::Dict(dict) => match dict.get("EarlyChange") {
+                        Some(Value::Ref(_)) => {
+                            match resolve(dict.get("EarlyChange").unwrap_or(&Value::Null))? {
+                                Value::Int(value) => value != 0,
+                                Value::Null => true,
+                                _ => return Err(malformed("EarlyChange must be an integer")),
+                            }
+                        }
+                        Some(Value::Int(value)) => *value != 0,
+                        Some(Value::Null) | None => true,
+                        _ => return Err(malformed("EarlyChange must be an integer")),
+                    },
+                    Value::Null => true,
+                    _ => return Err(malformed("DecodeParms must be a dictionary")),
+                };
+                lzw_decode(&output, early_change)?
+            }
+            "RunLengthDecode" | "RL" => run_length_decode(&output)?,
             other => {
                 return Err(DocsightError::UnsupportedFeature {
                     feature: format!("PDF stream filter {other}"),
                 });
             }
-        };
-        let parm = match parm {
-            Value::Ref(_) => resolve(&parm)?,
-            other => other,
         };
         output = apply_predictor(&parm, output, resolve)?;
     }
@@ -318,6 +338,144 @@ pub(crate) fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, DocsightError> {
     Ok(output)
 }
 
+fn lzw_decode(data: &[u8], early_change: bool) -> Result<Vec<u8>, DocsightError> {
+    let mut reader = LzwCodeReader::new(data);
+    let mut out = Vec::new();
+    let mut table: Vec<Vec<u8>> = (0..256).map(|value| vec![value as u8]).collect();
+    table.push(Vec::new());
+    table.push(Vec::new());
+    let mut previous: Option<Vec<u8>> = None;
+    while let Some(code) = reader.next_code()? {
+        match code {
+            256 => {
+                table.truncate(258);
+                previous = None;
+                reader.width = 9;
+            }
+            257 => break,
+            _ => {
+                let entry = if (code as usize) < table.len() {
+                    table[code as usize].clone()
+                } else if code as usize == table.len() {
+                    match &previous {
+                        Some(previous) if !previous.is_empty() => {
+                            let mut entry = previous.clone();
+                            entry.push(previous[0]);
+                            entry
+                        }
+                        _ => {
+                            return Err(malformed("LZWDecode stream references an undefined code"));
+                        }
+                    }
+                } else {
+                    return Err(malformed("LZWDecode stream references an undefined code"));
+                };
+                out.extend_from_slice(&entry);
+                if out.len() as u64 > MAX_FLATE_OUTPUT_BYTES {
+                    return Err(DocsightError::ResourceLimit {
+                        resource: "decoded PDF content bytes".to_owned(),
+                        limit: MAX_FLATE_OUTPUT_BYTES,
+                    });
+                }
+                if let Some(previous) = &previous
+                    && table.len() < 4096
+                {
+                    let mut next = previous.clone();
+                    next.push(entry[0]);
+                    table.push(next);
+                }
+                previous = Some(entry);
+            }
+        }
+        reader.observe_table(table.len(), early_change)?;
+    }
+    Ok(out)
+}
+
+struct LzwCodeReader<'a> {
+    data: &'a [u8],
+    bit_offset: usize,
+    width: u8,
+}
+
+impl<'a> LzwCodeReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            bit_offset: 0,
+            width: 9,
+        }
+    }
+
+    fn next_code(&mut self) -> Result<Option<u16>, DocsightError> {
+        let total_bits = self
+            .data
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| malformed("LZWDecode stream is too large"))?;
+        if self.bit_offset + usize::from(self.width) > total_bits {
+            if total_bits - self.bit_offset < 8 {
+                return Ok(None);
+            }
+            return Err(malformed("LZWDecode stream ends inside a code"));
+        }
+        let mut code = 0_u16;
+        for _ in 0..self.width {
+            let byte = self.data[self.bit_offset / 8];
+            let bit = (byte >> (7 - (self.bit_offset % 8))) & 1;
+            code = (code << 1) | u16::from(bit);
+            self.bit_offset += 1;
+        }
+        Ok(Some(code))
+    }
+
+    fn observe_table(&mut self, table_len: usize, early_change: bool) -> Result<(), DocsightError> {
+        let offset = usize::from(early_change);
+        while self.width < 12 && table_len >= (1_usize << self.width).saturating_sub(offset) {
+            self.width += 1;
+        }
+        Ok(())
+    }
+}
+
+fn run_length_decode(data: &[u8]) -> Result<Vec<u8>, DocsightError> {
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < data.len() {
+        let length = data[index];
+        index += 1;
+        match length {
+            128 => return Ok(out),
+            0..=127 => {
+                let count = usize::from(length) + 1;
+                let end = index
+                    .checked_add(count)
+                    .ok_or_else(|| malformed("RunLengthDecode stream overflows"))?;
+                if end > data.len() {
+                    return Err(malformed("RunLengthDecode stream is truncated"));
+                }
+                out.extend_from_slice(&data[index..end]);
+                index = end;
+            }
+            _ => {
+                let Some(byte) = data.get(index) else {
+                    return Err(malformed("RunLengthDecode stream is truncated"));
+                };
+                index += 1;
+                let count = 257 - usize::from(length);
+                out.extend(std::iter::repeat_n(*byte, count));
+            }
+        }
+        if out.len() as u64 > MAX_FLATE_OUTPUT_BYTES {
+            return Err(DocsightError::ResourceLimit {
+                resource: "decoded PDF content bytes".to_owned(),
+                limit: MAX_FLATE_OUTPUT_BYTES,
+            });
+        }
+    }
+    Ok(out)
+}
+
 fn ascii_hex_decode(data: &[u8]) -> Result<Vec<u8>, DocsightError> {
     let mut out = Vec::new();
     let mut high: Option<u8> = None;
@@ -409,4 +567,65 @@ fn ascii85_group(group: &[u8; 5], len: usize) -> Result<[u8; 4], DocsightError> 
             .ok_or_else(|| malformed("ASCII85Decode group overflows 32 bits"))?;
     }
     Ok(value.to_be_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lzw_decode;
+    use docsight_core::DocsightError;
+
+    fn pack_lzw_codes(codes: &[(u16, u8)]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut current = 0_u8;
+        let mut filled = 0_u8;
+        for &(code, width) in codes {
+            for bit in (0..width).rev() {
+                current = (current << 1) | u8::from((code >> bit) & 1 != 0);
+                filled += 1;
+                if filled == 8 {
+                    bytes.push(current);
+                    current = 0;
+                    filled = 0;
+                }
+            }
+        }
+        if filled > 0 {
+            bytes.push(current << (8 - filled));
+        }
+        bytes
+    }
+
+    #[test]
+    fn lzw_clear_restores_nine_bit_codes_after_every_width_transition() -> Result<(), DocsightError>
+    {
+        for early_change in [false, true] {
+            for grown_width in 10..=12 {
+                let mut codes = vec![(256, 9)];
+                let mut count = 0;
+                for width in 9..grown_width {
+                    let new_count = (1 << width) - 257 - usize::from(early_change);
+                    codes.extend(std::iter::repeat_n((65, width), new_count - count));
+                    count = new_count;
+                }
+                codes.extend([(256, grown_width), (66, 9), (67, 9), (257, 9)]);
+                let mut expected = vec![65; count];
+                expected.extend_from_slice(b"BC");
+                assert_eq!(
+                    lzw_decode(&pack_lzw_codes(&codes), early_change)?,
+                    expected,
+                    "early_change={early_change}, grown_width={grown_width}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lzw_clear_discards_previous_dictionary_entries() {
+        let codes = [(256, 9), (65, 9), (66, 9), (256, 9), (258, 9), (257, 9)];
+        assert!(matches!(
+            lzw_decode(&pack_lzw_codes(&codes), true),
+            Err(DocsightError::MalformedDocument { .. })
+        ));
+    }
 }

@@ -110,14 +110,6 @@ fn test_1_valid_jpeg_image_xobject() -> Result<(), DocsightError> {
     let document = PdfDocument::open(&source)?;
     let raster = document.rasterize(1, 72, None)?;
 
-    assert!(
-        !raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "valid JPEG should not produce placeholder warning"
-    );
-
     let doc = document.to_document()?;
     let figures = doc.figures().collect::<Vec<_>>();
     assert_eq!(figures.len(), 1);
@@ -164,13 +156,6 @@ fn test_2_valid_flate_devicergb_8bit() -> Result<(), DocsightError> {
     let document = PdfDocument::open(&source)?;
     let raster = document.rasterize(1, 72, None)?;
 
-    assert!(
-        !raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER")
-    );
-
     let sample_x = 40_usize;
     let sample_y = 50_usize;
     let index = (sample_y * raster.width_px as usize + sample_x) * 3;
@@ -214,14 +199,6 @@ fn test_3_valid_flate_devicegray_8bit() -> Result<(), DocsightError> {
     let source = DocumentSource::from_bytes(pdf_bytes)?;
     let document = PdfDocument::open(&source)?;
     let raster = document.rasterize(1, 72, None)?;
-
-    assert!(
-        !raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER")
-    );
-
     let sample_x = 40_usize;
     let sample_y = 50_usize;
     let index = (sample_y * raster.width_px as usize + sample_x) * 3;
@@ -238,7 +215,7 @@ fn test_3_valid_flate_devicegray_8bit() -> Result<(), DocsightError> {
 }
 
 #[test]
-fn test_4_malformed_image_falls_back_to_placeholder() -> Result<(), DocsightError> {
+fn test_4_malformed_image_fails_closed() -> Result<(), DocsightError> {
     let bad_data = b"not a real jpeg stream at all".to_vec();
     let content = "q 60 0 0 40 20 30 cm /Im0 Do Q".as_bytes().to_vec();
     let objects = vec![
@@ -263,20 +240,16 @@ fn test_4_malformed_image_falls_back_to_placeholder() -> Result<(), DocsightErro
     let pdf_bytes = build_pdf_with_raw_objects(&objects);
     let source = DocumentSource::from_bytes(pdf_bytes)?;
     let document = PdfDocument::open(&source)?;
-    let raster = document.rasterize(1, 72, None)?;
-
+    let result = document.rasterize(1, 72, None);
     assert!(
-        raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "malformed image must emit placeholder warning"
+        matches!(result, Err(DocsightError::MalformedDocument { .. })),
+        "malformed image must fail closed"
     );
     Ok(())
 }
 
 #[test]
-fn test_5_excessive_dimensions_falls_back_to_placeholder() -> Result<(), DocsightError> {
+fn test_5_excessive_dimensions_fail_closed() -> Result<(), DocsightError> {
     let content = "q 60 0 0 40 20 30 cm /Im0 Do Q".as_bytes().to_vec();
     let objects = vec![
         ("<< /Type /Catalog /Pages 2 0 R >>".to_owned(), None),
@@ -297,20 +270,16 @@ fn test_5_excessive_dimensions_falls_back_to_placeholder() -> Result<(), Docsigh
     let pdf_bytes = build_pdf_with_raw_objects(&objects);
     let source = DocumentSource::from_bytes(pdf_bytes)?;
     let document = PdfDocument::open(&source)?;
-    let raster = document.rasterize(1, 72, None)?;
-
+    let result = document.rasterize(1, 72, None);
     assert!(
-        raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "excessive dimension must fall back to placeholder"
+        matches!(result, Err(DocsightError::ResourceLimit { .. })),
+        "excessive image dimensions must fail closed"
     );
     Ok(())
 }
 
 #[test]
-fn test_6_unsupported_filter_falls_back_to_placeholder() -> Result<(), DocsightError> {
+fn test_6_unsupported_filter_fails_closed() -> Result<(), DocsightError> {
     let content = "q 60 0 0 40 20 30 cm /Im0 Do Q".as_bytes().to_vec();
     let objects = vec![
         ("<< /Type /Catalog /Pages 2 0 R >>".to_owned(), None),
@@ -320,7 +289,7 @@ fn test_6_unsupported_filter_falls_back_to_placeholder() -> Result<(), DocsightE
             None,
         ),
         (
-            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JBIG2Decode /Length 4 >>".to_owned(),
+            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FooDecode /Length 4 >>".to_owned(),
             Some(vec![0, 0, 0, 0]),
         ),
         (
@@ -331,14 +300,10 @@ fn test_6_unsupported_filter_falls_back_to_placeholder() -> Result<(), DocsightE
     let pdf_bytes = build_pdf_with_raw_objects(&objects);
     let source = DocumentSource::from_bytes(pdf_bytes)?;
     let document = PdfDocument::open(&source)?;
-    let raster = document.rasterize(1, 72, None)?;
-
+    let result = document.rasterize(1, 72, None);
     assert!(
-        raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "unsupported filter must produce placeholder warning"
+        matches!(result, Err(DocsightError::UnsupportedFeature { .. })),
+        "unsupported image filter must fail closed"
     );
     Ok(())
 }
@@ -432,7 +397,7 @@ fn test_8_image_respects_page_transformation_ctm() -> Result<(), DocsightError> 
 }
 
 #[test]
-fn test_9_fallback_produces_explicit_diagnostic() -> Result<(), DocsightError> {
+fn test_9_unsupported_color_space_fails_closed() -> Result<(), DocsightError> {
     let content = "q 60 0 0 40 20 30 cm /Im0 Do Q".as_bytes().to_vec();
     let objects = vec![
         ("<< /Type /Catalog /Pages 2 0 R >>".to_owned(), None),
@@ -442,8 +407,8 @@ fn test_9_fallback_produces_explicit_diagnostic() -> Result<(), DocsightError> {
             None,
         ),
         (
-            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 8 >>".to_owned(),
-            Some(vec![0; 8]),
+            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace [/Separation /Spot /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] /BitsPerComponent 8 /Length 2 >>".to_owned(),
+            Some(vec![0, 0]),
         ),
         (
             format!("<< /Length {} >>", content.len()),
@@ -453,19 +418,11 @@ fn test_9_fallback_produces_explicit_diagnostic() -> Result<(), DocsightError> {
     let pdf_bytes = build_pdf_with_raw_objects(&objects);
     let source = DocumentSource::from_bytes(pdf_bytes)?;
     let document = PdfDocument::open(&source)?;
-    let raster = document.rasterize(1, 72, None)?;
-
-    let placeholder_warning = raster
-        .warnings
-        .iter()
-        .find(|w| w.code == "PDF_XOBJECT_PLACEHOLDER");
-    assert!(placeholder_warning.is_some());
-    let w = placeholder_warning.ok_or_else(|| DocsightError::MalformedDocument {
-        message: "expected placeholder warning".to_owned(),
-    })?;
-    assert_eq!(w.severity, docsight_core::DiagnosticSeverity::Warning);
-    assert!(!w.effect.is_empty());
-    assert_eq!(w.page, Some(1));
+    let result = document.rasterize(1, 72, None);
+    assert!(
+        matches!(result, Err(DocsightError::UnsupportedFeature { .. })),
+        "unsupported color space must fail closed"
+    );
     Ok(())
 }
 
@@ -497,14 +454,14 @@ fn test_10_supported_image_does_not_produce_placeholder() -> Result<(), Docsight
     let source = DocumentSource::from_bytes(pdf_bytes)?;
     let document = PdfDocument::open(&source)?;
     let raster = document.rasterize(1, 72, None)?;
-
     assert!(
-        !raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "supported image must not produce PDF_XOBJECT_PLACEHOLDER"
+        raster
+            .pixels
+            .chunks_exact(3)
+            .any(|pixel| pixel != [255, 255, 255]),
+        "a supported image must be painted, not replaced by a placeholder"
     );
+
     Ok(())
 }
 
@@ -560,13 +517,6 @@ fn test_11_ascii85_flate_filter_array_decodes() -> Result<(), DocsightError> {
     let document = PdfDocument::open(&source)?;
     let raster = document.rasterize(1, 72, None)?;
 
-    assert!(
-        !raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "ASCII85+Flate filter array must decode without placeholder"
-    );
     let sample_x = 40_usize;
     let sample_y = 50_usize;
     let index = (sample_y * raster.width_px as usize + sample_x) * 3;
@@ -617,13 +567,6 @@ fn test_12_smask_alpha_composites_over_page() -> Result<(), DocsightError> {
     let document = PdfDocument::open(&source)?;
     let raster = document.rasterize(1, 72, None)?;
 
-    assert!(
-        !raster
-            .warnings
-            .iter()
-            .any(|w| w.code == "PDF_XOBJECT_PLACEHOLDER"),
-        "image with decodable SMask must not produce placeholder"
-    );
     let sample_x = 40_usize;
     let sample_y = 50_usize;
     let index = (sample_y * raster.width_px as usize + sample_x) * 3;
@@ -632,6 +575,203 @@ fn test_12_smask_alpha_composites_over_page() -> Result<(), DocsightError> {
     assert!(
         r > 240 && g > 90 && g < 170,
         "SMask alpha must blend red image over white page: r={r} g={g}"
+    );
+    Ok(())
+}
+
+fn raster_image_pixels(
+    fields: &str,
+    samples: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, DocsightError> {
+    let content = format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q").into_bytes();
+    let objects = vec![
+        ("<< /Type /Catalog /Pages 2 0 R >>".to_owned(), None),
+        ("<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(), None),
+        (
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"
+            ),
+            None,
+        ),
+        (
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} {fields} /Length {} >>",
+                samples.len()
+            ),
+            Some(samples.to_vec()),
+        ),
+        (format!("<< /Length {} >>", content.len()), Some(content)),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_raw_objects(&objects))?;
+    let document = PdfDocument::open(&source)?;
+    let first = document.rasterize(1, 72, None)?;
+    assert_eq!((first.width_px, first.height_px), (width, height));
+    assert_eq!(first.pixels, document.rasterize(1, 72, None)?.pixels);
+    Ok(first.pixels)
+}
+
+#[test]
+fn indexed_images_preserve_raw_indices_at_every_supported_bit_depth() -> Result<(), DocsightError> {
+    for (bits, samples) in [
+        (1, vec![0b0100_0000]),
+        (2, vec![0b0001_1000]),
+        (4, vec![0x01, 0x20]),
+        (8, vec![0, 1, 2]),
+        (16, vec![0, 0, 0, 1, 0, 2]),
+    ] {
+        let high = if bits == 1 { 1 } else { 2 };
+        let fields = format!(
+            "/ColorSpace [/Indexed /DeviceRGB {high} <ff000000ff000000ff>] /BitsPerComponent {bits}"
+        );
+        let pixels = raster_image_pixels(&fields, &samples, 3, 1)?;
+        let last = if bits == 1 { [255, 0, 0] } else { [0, 0, 255] };
+        assert_eq!(
+            pixels,
+            [vec![255, 0, 0, 0, 255, 0], last.to_vec()].concat(),
+            "bits={bits}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn indexed_images_apply_explicit_decode_before_palette_lookup() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace [/Indexed /DeviceRGB 2 <ff000000ff000000ff>] /BitsPerComponent 8 /Decode [2 0]";
+    assert_eq!(
+        raster_image_pixels(fields, &[0, 128, 255], 3, 1)?,
+        [0, 0, 255, 0, 255, 0, 255, 0, 0]
+    );
+    Ok(())
+}
+
+#[test]
+fn indexed_images_clamp_indices_to_palette_high() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace [/Indexed /DeviceRGB 2 <ff000000ff000000ff>] /BitsPerComponent 8";
+    assert_eq!(
+        raster_image_pixels(fields, &[2, 3, 255], 3, 1)?,
+        [0, 0, 255].repeat(3)
+    );
+    Ok(())
+}
+
+#[test]
+fn indexed_subbyte_images_preserve_row_padding() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace [/Indexed /DeviceRGB 2 <ff000000ff000000ff>] /BitsPerComponent 2";
+    assert_eq!(
+        raster_image_pixels(fields, &[0x60, 0x90], 3, 2)?,
+        [
+            0, 255, 0, 0, 0, 255, 255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 0, 0
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn color_key_masks_use_interleaved_component_ranges() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Mask [255 255 0 0 0 0]";
+    assert_eq!(
+        raster_image_pixels(fields, &[255, 0, 0, 254, 0, 0, 255, 1, 0], 3, 1)?,
+        [255, 255, 255, 254, 0, 0, 255, 1, 0]
+    );
+    Ok(())
+}
+
+#[test]
+fn color_key_masks_compare_raw_samples_before_decode() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [1 0] /Mask [0 0]";
+    assert_eq!(
+        raster_image_pixels(fields, &[0, 255], 2, 1)?,
+        [255, 255, 255, 0, 0, 0]
+    );
+    Ok(())
+}
+
+#[test]
+fn color_key_masks_preserve_sixteen_bit_sample_precision() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace /DeviceGray /BitsPerComponent 16 /Mask [4097 4097]";
+    assert_eq!(
+        raster_image_pixels(fields, &[0x10, 0x01, 0x10, 0x02], 2, 1)?,
+        [255, 255, 255, 16, 16, 16]
+    );
+    Ok(())
+}
+
+#[test]
+fn color_key_masks_use_unscaled_subbyte_samples() -> Result<(), DocsightError> {
+    for (bits, samples) in [
+        (1, vec![0b0100_0000]),
+        (2, vec![0b0001_0000]),
+        (4, vec![0x01]),
+    ] {
+        let fields = format!("/ColorSpace /DeviceGray /BitsPerComponent {bits} /Mask [1 1]");
+        assert_eq!(
+            raster_image_pixels(&fields, &samples, 2, 1)?,
+            [0, 0, 0, 255, 255, 255],
+            "bits={bits}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn indexed_color_key_masks_compare_original_indices() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace [/Indexed /DeviceRGB 2 <ff000000ff000000ff>] /BitsPerComponent 8 /Decode [2 0] /Mask [0 0]";
+    assert_eq!(
+        raster_image_pixels(fields, &[0, 255], 2, 1)?,
+        [255, 255, 255, 255, 0, 0]
+    );
+    Ok(())
+}
+
+#[test]
+fn color_key_masks_include_both_range_boundaries() -> Result<(), DocsightError> {
+    let fields = "/ColorSpace /DeviceGray /BitsPerComponent 8 /Mask [128 129]";
+    assert_eq!(
+        raster_image_pixels(fields, &[127, 128, 129, 130], 4, 1)?,
+        [127, 127, 127, 255, 255, 255, 255, 255, 255, 130, 130, 130]
+    );
+    Ok(())
+}
+
+#[test]
+fn malformed_color_key_masks_fail_closed() {
+    for mask in ["[-1 0]", "[0 256]", "[2 1]", "[0.0 1]", "[0]", "[0 1 0 1]"] {
+        let fields = format!("/ColorSpace /DeviceGray /BitsPerComponent 8 /Mask {mask}");
+        assert!(
+            matches!(
+                raster_image_pixels(&fields, &[0], 1, 1),
+                Err(DocsightError::MalformedDocument { .. })
+            ),
+            "mask={mask}"
+        );
+    }
+    let fields = "/ColorSpace /DeviceGray /BitsPerComponent 1 /Mask [0 2]";
+    assert!(matches!(
+        raster_image_pixels(fields, &[0], 1, 1),
+        Err(DocsightError::MalformedDocument { .. })
+    ));
+}
+
+#[test]
+fn jpx_alpha_does_not_shift_color_channels() -> Result<(), DocsightError> {
+    let fields = "/Filter /JPXDecode /ColorSpace /DeviceRGB /SMaskInData 1";
+    assert_eq!(
+        raster_image_pixels(fields, include_bytes!("fixtures/rgba.jp2"), 3, 1)?,
+        [255, 0, 0, 127, 255, 127, 255, 255, 255]
+    );
+    Ok(())
+}
+
+#[test]
+fn jpx_cmyk_preserves_white_colors_and_midtone_channels() -> Result<(), DocsightError> {
+    let fields = "/Filter /JPXDecode /ColorSpace /DeviceCMYK";
+    assert_eq!(
+        raster_image_pixels(fields, include_bytes!("fixtures/cmyk.jp2"), 5, 1)?,
+        [
+            255, 255, 255, 0, 255, 255, 255, 0, 255, 255, 255, 0, 95, 63, 31
+        ]
     );
     Ok(())
 }

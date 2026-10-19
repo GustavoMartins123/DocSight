@@ -74,9 +74,6 @@ pub(crate) fn rasterize(
     for command in commands {
         match command {
             DisplayCommand::Text(run) => canvas.draw_text(run)?,
-            DisplayCommand::Figure { bbox, clips, .. } => {
-                canvas.draw_figure_placeholder(*bbox, clips)?
-            }
             DisplayCommand::Image {
                 image,
                 bbox,
@@ -236,57 +233,6 @@ impl Canvas {
         Ok(())
     }
 
-    fn draw_figure_placeholder(
-        &mut self,
-        bbox: Rect,
-        clips: &[ClipRegion],
-    ) -> Result<(), DocsightError> {
-        let color = Color {
-            red: 128,
-            green: 128,
-            blue: 128,
-        };
-        let top_left = Point {
-            x: bbox.x0,
-            y: bbox.y0,
-        };
-        let top_right = Point {
-            x: bbox.x1,
-            y: bbox.y0,
-        };
-        let bottom_left = Point {
-            x: bbox.x0,
-            y: bbox.y1,
-        };
-        let bottom_right = Point {
-            x: bbox.x1,
-            y: bbox.y1,
-        };
-        for (start, end) in [
-            (top_left, top_right),
-            (top_right, bottom_right),
-            (bottom_right, bottom_left),
-            (bottom_left, top_left),
-            (top_left, bottom_right),
-            (top_right, bottom_left),
-        ] {
-            self.stroke_path(
-                &[PathSegment::Move(start), PathSegment::Line(end)],
-                Paint { color, alpha: 1.0 },
-                &StrokeStyle {
-                    width: 1.0,
-                    cap: LineCap::Butt,
-                    join: LineJoin::Miter,
-                    miter_limit: 10.0,
-                    dash: Vec::new(),
-                    dash_phase: 0.0,
-                },
-                clips,
-            )?;
-        }
-        Ok(())
-    }
-
     fn draw_text(&mut self, run: &TextRun) -> Result<(), DocsightError> {
         if matches!(run.render_mode, 3 | 7) {
             return Ok(());
@@ -298,57 +244,20 @@ impl Canvas {
         if !run.glyphs.is_empty() {
             return self.draw_outline_text(run, fill, stroke, fill_paint, stroke_paint);
         }
-        let character_count = run.text.chars().count();
-        if character_count == 0 {
+        let visible = run.text.chars().any(|character| {
+            !character.is_whitespace()
+                && character != '\u{200b}'
+                && !docsight_core::is_combining_mark(character)
+        });
+        if !visible {
             return Ok(());
         }
-        let advance = run.bbox.width() / character_count as f32;
-        for (index, character) in run.text.chars().enumerate() {
-            if character.is_whitespace()
-                || character == '\u{200b}'
-                || docsight_core::is_combining_mark(character)
-            {
-                continue;
-            }
-            let pattern = glyph(character).ok_or_else(|| DocsightError::UnsupportedFeature {
-                feature: format!("bitmap glyph for character {character:?}"),
-            })?;
-            let visual_index = if run.mirrored_x {
-                character_count - index - 1
-            } else {
-                index
-            };
-            let left = run.bbox.x0 + visual_index as f32 * advance;
-            let cell_width = advance / 6.0;
-            let cell_height = run.bbox.height() / 7.0;
-            for (row, bits) in pattern.iter().enumerate() {
-                for column in 0..5 {
-                    if bits & (1 << (4 - column)) == 0 {
-                        continue;
-                    }
-                    let visual_column = if run.mirrored_x { 4 - column } else { column };
-                    let x0 = left + visual_column as f32 * cell_width;
-                    let y0 = run.bbox.y0 + row as f32 * cell_height;
-                    let x1 = x0 + cell_width * if run.bold { 1.35 } else { 1.0 };
-                    let y1 = y0 + cell_height;
-                    if stroke {
-                        let expansion = run.stroke_style.width / 2.0;
-                        self.fill_rect(
-                            x0 - expansion,
-                            y0 - expansion,
-                            x1 + expansion,
-                            y1 + expansion,
-                            stroke_paint,
-                            &run.clips,
-                        );
-                    }
-                    if fill {
-                        self.fill_rect(x0, y0, x1, y1, fill_paint, &run.clips);
-                    }
-                }
-            }
-        }
-        Ok(())
+        Err(DocsightError::UnsupportedFeature {
+            feature: format!(
+                "PDF text rasterization without glyph outlines for font {:?}",
+                run.font_name
+            ),
+        })
     }
 
     fn draw_outline_text(
@@ -777,25 +686,6 @@ impl Canvas {
                 masks[index] = mask;
             }
         }
-    }
-
-    fn fill_rect(
-        &mut self,
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-        paint: Paint,
-        clips: &[ClipRegion],
-    ) {
-        let polygon = vec![
-            Point { x: x0, y: y0 },
-            Point { x: x1, y: y0 },
-            Point { x: x1, y: y1 },
-            Point { x: x0, y: y1 },
-            Point { x: x0, y: y0 },
-        ];
-        self.fill_polygons(&[polygon], paint, false, clips);
     }
 
     fn pixel_floor_x(&self, value: f32) -> i32 {
@@ -1429,277 +1319,8 @@ fn malformed_path(message: &str) -> DocsightError {
     }
 }
 
-fn glyph(character: char) -> Option<[u8; 7]> {
-    if let Some(pattern) = base_glyph(character) {
-        return Some(pattern);
-    }
-    let (base, diacritic) = docsight_core::latin_decomposition(character)?;
-    let base = base_glyph(base)?;
-    Some(docsight_core::compose_glyph(
-        base,
-        diacritic,
-        character.is_uppercase(),
-    ))
-}
-
-fn base_glyph(character: char) -> Option<[u8; 7]> {
-    let pattern = match character {
-        '\u{fffd}' => [31, 17, 21, 17, 21, 17, 31],
-        '\u{c6}' => [7, 12, 20, 23, 28, 20, 23],
-        '\u{d0}' => [28, 18, 17, 31, 17, 18, 28],
-        '\u{d8}' => [14, 19, 21, 21, 25, 17, 14],
-        '\u{de}' => [16, 30, 17, 17, 30, 16, 16],
-        '\u{df}' => [12, 18, 18, 28, 18, 18, 28],
-        '\u{e6}' => [0, 0, 26, 5, 15, 20, 11],
-        '\u{f0}' => [10, 4, 14, 1, 15, 17, 14],
-        '\u{f7}' => [0, 4, 0, 31, 0, 4, 0],
-        '\u{f8}' => [0, 0, 15, 19, 21, 25, 30],
-        '\u{fe}' => [16, 16, 30, 17, 17, 30, 16],
-        '\u{a2}' => [4, 14, 20, 20, 20, 14, 4],
-        '\u{a3}' => [6, 9, 8, 28, 8, 8, 30],
-        '\u{a4}' => [0, 17, 14, 10, 14, 17, 0],
-        '\u{a5}' => [17, 17, 10, 31, 4, 31, 4],
-        '\u{a6}' => [4, 4, 4, 0, 4, 4, 4],
-        '\u{ab}' => [0, 5, 10, 20, 10, 5, 0],
-        '\u{ac}' => [0, 0, 31, 1, 1, 0, 0],
-        '\u{ae}' => [14, 17, 29, 21, 29, 17, 14],
-        '\u{af}' => [31, 0, 0, 0, 0, 0, 0],
-        '\u{b5}' => [0, 0, 17, 17, 17, 30, 16],
-        '\u{b6}' => [15, 21, 21, 13, 5, 5, 5],
-        '\u{b7}' => [0, 0, 0, 12, 12, 0, 0],
-        '\u{bb}' => [0, 20, 10, 5, 10, 20, 0],
-        '\u{bc}' => [8, 8, 4, 2, 9, 15, 1],
-        '\u{bd}' => [8, 8, 4, 2, 11, 1, 3],
-        '\u{be}' => [24, 8, 4, 2, 9, 15, 1],
-        '\u{bf}' => [4, 0, 4, 8, 16, 17, 14],
-        '\u{131}' => [0, 0, 12, 4, 4, 4, 14],
-        '\u{152}' => [15, 20, 20, 23, 20, 20, 15],
-        '\u{153}' => [0, 0, 26, 21, 23, 20, 11],
-        '\u{160}' => [10, 4, 15, 16, 14, 1, 30],
-        '\u{161}' => [10, 4, 15, 16, 14, 1, 30],
-        '\u{178}' => [10, 0, 17, 10, 4, 4, 4],
-        '\u{17d}' => [10, 4, 31, 2, 4, 16, 31],
-        '\u{17e}' => [10, 4, 31, 2, 4, 8, 31],
-        '\u{192}' => [3, 4, 4, 14, 4, 4, 24],
-        '\u{3a9}' => [14, 17, 17, 17, 10, 10, 27],
-        '\u{3c0}' => [0, 0, 31, 10, 10, 10, 19],
-        '\u{201a}' => [0, 0, 0, 0, 4, 4, 8],
-        '\u{201e}' => [0, 0, 0, 0, 10, 10, 20],
-        '\u{2020}' => [4, 14, 4, 4, 4, 4, 0],
-        '\u{2021}' => [4, 14, 4, 14, 4, 4, 0],
-        '\u{2030}' => [17, 2, 4, 8, 21, 0, 5],
-        '\u{2039}' => [0, 2, 4, 8, 4, 2, 0],
-        '\u{203a}' => [0, 8, 4, 2, 4, 8, 0],
-        '\u{2044}' => [1, 2, 2, 4, 8, 8, 16],
-        '\u{20ac}' => [6, 9, 28, 8, 28, 9, 6],
-        '\u{2122}' => [27, 21, 17, 0, 0, 0, 0],
-        '\u{2202}' => [14, 1, 1, 15, 17, 17, 14],
-        '\u{2206}' => [0, 4, 4, 10, 10, 17, 31],
-        '\u{220f}' => [31, 10, 10, 10, 10, 10, 27],
-        '\u{221a}' => [3, 2, 2, 18, 10, 4, 0],
-        '\u{221e}' => [0, 0, 10, 21, 21, 10, 0],
-        '\u{2248}' => [0, 13, 18, 0, 13, 18, 0],
-        '\u{2260}' => [2, 2, 31, 4, 31, 8, 8],
-        '\u{2264}' => [2, 4, 8, 4, 2, 0, 31],
-        '\u{2265}' => [8, 4, 2, 4, 8, 0, 31],
-        '\u{25ca}' => [4, 10, 17, 17, 17, 10, 4],
-        '\u{fb01}' => [6, 9, 29, 8, 8, 8, 9],
-        '\u{fb02}' => [6, 9, 29, 8, 8, 8, 11],
-        '\u{2dd}' => [18, 9, 0, 0, 0, 0, 0],
-        '\u{2d8}' => [17, 14, 0, 0, 0, 0, 0],
-        '\u{2d9}' => [4, 0, 0, 0, 0, 0, 0],
-        '\u{2da}' => [4, 10, 4, 0, 0, 0, 0],
-        '\u{2db}' => [0, 0, 0, 0, 0, 4, 12],
-        '\u{2c7}' => [10, 4, 0, 0, 0, 0, 0],
-        '\u{2217}' => [0, 0, 21, 14, 21, 0, 0],
-        '<' => [2, 4, 8, 16, 8, 4, 2],
-        '>' => [8, 4, 2, 1, 2, 4, 8],
-        '{' => [6, 8, 8, 16, 8, 8, 6],
-        '}' => [24, 4, 4, 2, 4, 4, 24],
-        '~' => [0, 0, 13, 18, 0, 0, 0],
-        '\u{a1}' => [4, 0, 4, 4, 4, 4, 4],
-        '×' => [0, 17, 10, 4, 10, 17, 0],
-        '•' => [0, 0, 0, 0, 12, 12, 0],
-        '…' => [0, 0, 0, 0, 0, 21, 21],
-        '→' => [0, 4, 2, 31, 2, 4, 0],
-        '─' => [0, 0, 0, 31, 0, 0, 0],
-        '│' => [4, 4, 4, 4, 4, 4, 4],
-        '└' => [4, 4, 4, 4, 4, 4, 31],
-        '├' => [4, 4, 4, 4, 4, 4, 31],
-        '\u{f0b7}' => [0, 0, 0, 0, 12, 12, 0],
-        '´' => [4, 2, 0, 0, 0, 0, 0],
-        '`' => [2, 4, 0, 0, 0, 0, 0],
-        '¨' => [10, 0, 0, 0, 0, 0, 0],
-        'ˆ' => [4, 10, 0, 0, 0, 0, 0],
-        '˜' => [10, 0, 0, 0, 0, 0, 0],
-        '¸' => [0, 0, 0, 0, 0, 4, 8],
-        '^' => [4, 10, 17, 0, 0, 0, 0],
-        '¹' => [4, 12, 4, 14, 0, 0, 0],
-        '²' => [12, 2, 4, 14, 0, 0, 0],
-        '³' => [12, 2, 4, 2, 12, 0, 0],
-        '✓' => [0, 1, 2, 4, 20, 8, 0],
-        'ª' => [14, 1, 15, 17, 15, 0, 31],
-        'A' => [14, 17, 17, 31, 17, 17, 17],
-        'B' => [30, 17, 17, 30, 17, 17, 30],
-        'C' => [14, 17, 16, 16, 16, 17, 14],
-        'D' => [30, 17, 17, 17, 17, 17, 30],
-        'E' => [31, 16, 16, 30, 16, 16, 31],
-        'É' => [2, 4, 31, 16, 30, 16, 31],
-        'F' => [31, 16, 16, 30, 16, 16, 16],
-        'G' => [14, 17, 16, 23, 17, 17, 15],
-        'H' => [17, 17, 17, 31, 17, 17, 17],
-        'I' => [14, 4, 4, 4, 4, 4, 14],
-        'J' => [7, 2, 2, 2, 18, 18, 12],
-        'K' => [17, 18, 20, 24, 20, 18, 17],
-        'L' => [16, 16, 16, 16, 16, 16, 31],
-        'M' => [17, 27, 21, 21, 17, 17, 17],
-        'N' => [17, 25, 21, 19, 17, 17, 17],
-        'O' => [14, 17, 17, 17, 17, 17, 14],
-        'P' => [30, 17, 17, 30, 16, 16, 16],
-        'Q' => [14, 17, 17, 17, 21, 18, 13],
-        'R' => [30, 17, 17, 30, 20, 18, 17],
-        'S' => [15, 16, 16, 14, 1, 1, 30],
-        'T' => [31, 4, 4, 4, 4, 4, 4],
-        'U' => [17, 17, 17, 17, 17, 17, 14],
-        'V' => [17, 17, 17, 17, 17, 10, 4],
-        'W' => [17, 17, 17, 21, 21, 21, 10],
-        'X' => [17, 17, 10, 4, 10, 17, 17],
-        'Y' => [17, 17, 10, 4, 4, 4, 4],
-        'Z' => [31, 1, 2, 4, 8, 16, 31],
-        'a' => [0, 0, 14, 1, 15, 17, 15],
-        'á' => [4, 2, 14, 1, 15, 17, 15],
-        'ã' => [10, 0, 14, 1, 15, 17, 15],
-        'b' => [16, 16, 22, 25, 17, 17, 30],
-        'c' => [0, 0, 14, 17, 16, 17, 14],
-        'ç' => [0, 0, 14, 17, 16, 17, 8],
-        'd' => [1, 1, 13, 19, 17, 17, 15],
-        'e' => [0, 0, 14, 17, 31, 16, 14],
-        'é' => [4, 2, 14, 17, 31, 16, 14],
-        'ê' => [10, 0, 14, 17, 31, 16, 14],
-        'f' => [6, 9, 8, 28, 8, 8, 8],
-        'g' => [0, 0, 15, 17, 15, 1, 14],
-        'h' => [16, 16, 22, 25, 17, 17, 17],
-        'i' => [4, 0, 12, 4, 4, 4, 14],
-        'í' => [4, 2, 12, 4, 4, 4, 14],
-        'j' => [2, 0, 6, 2, 2, 18, 12],
-        'k' => [16, 16, 18, 20, 24, 20, 18],
-        'l' => [12, 4, 4, 4, 4, 4, 14],
-        'm' => [0, 0, 26, 21, 21, 17, 17],
-        'n' => [0, 0, 22, 25, 17, 17, 17],
-        'o' => [0, 0, 14, 17, 17, 17, 14],
-        'ó' => [4, 2, 14, 17, 17, 17, 14],
-        'ö' => [10, 0, 14, 17, 17, 17, 14],
-        'p' => [0, 0, 30, 17, 30, 16, 16],
-        'q' => [0, 0, 15, 17, 15, 1, 1],
-        'r' => [0, 0, 22, 25, 16, 16, 16],
-        's' => [0, 0, 15, 16, 14, 1, 30],
-        't' => [8, 8, 28, 8, 8, 9, 6],
-        'u' => [0, 0, 17, 17, 17, 19, 13],
-        'ú' => [4, 2, 17, 17, 17, 19, 13],
-        'ü' => [10, 0, 17, 17, 17, 19, 13],
-        'ő' => [10, 2, 14, 17, 17, 19, 13],
-        'ű' => [10, 2, 17, 17, 17, 19, 13],
-        'v' => [0, 0, 17, 17, 17, 10, 4],
-        'w' => [0, 0, 17, 17, 21, 21, 10],
-        'x' => [0, 0, 17, 10, 4, 10, 17],
-        'y' => [0, 0, 17, 17, 15, 1, 14],
-        'z' => [0, 0, 31, 2, 4, 8, 31],
-        'Ö' => [10, 0, 14, 17, 17, 17, 14],
-        '0' => [14, 17, 19, 21, 25, 17, 14],
-        '1' => [4, 12, 4, 4, 4, 4, 14],
-        '2' => [14, 17, 1, 2, 4, 8, 31],
-        '3' => [30, 1, 1, 14, 1, 1, 30],
-        '4' => [2, 6, 10, 18, 31, 2, 2],
-        '5' => [31, 16, 16, 30, 1, 1, 30],
-        '6' => [14, 16, 16, 30, 17, 17, 14],
-        '7' => [31, 1, 2, 4, 8, 8, 8],
-        '8' => [14, 17, 17, 14, 17, 17, 14],
-        '9' => [14, 17, 17, 15, 1, 1, 14],
-        '.' => [0, 0, 0, 0, 0, 12, 12],
-        ',' => [0, 0, 0, 0, 12, 12, 8],
-        '-' => [0, 0, 0, 31, 0, 0, 0],
-        '_' => [0, 0, 0, 0, 0, 0, 31],
-        ':' => [0, 12, 12, 0, 12, 12, 0],
-        ';' => [0, 12, 12, 0, 12, 12, 8],
-        '!' => [4, 4, 4, 4, 4, 0, 4],
-        '?' => [14, 17, 1, 2, 4, 0, 4],
-        '/' => [1, 2, 2, 4, 8, 8, 16],
-        '\\' => [16, 8, 8, 4, 2, 2, 1],
-        '(' => [2, 4, 8, 8, 8, 4, 2],
-        ')' => [8, 4, 2, 2, 2, 4, 8],
-        '[' => [14, 8, 8, 8, 8, 8, 14],
-        ']' => [14, 2, 2, 2, 2, 2, 14],
-        '+' => [0, 4, 4, 31, 4, 4, 0],
-        '=' => [0, 0, 31, 0, 31, 0, 0],
-        '°' => [6, 9, 6, 0, 0, 0, 0],
-        'º' => [6, 9, 9, 6, 0, 15, 0],
-        '±' => [0, 4, 4, 31, 4, 4, 0],
-        '−' | '–' | '—' => [0, 0, 0, 31, 0, 0, 0],
-        '‘' | '’' | '\'' => [4, 4, 2, 0, 0, 0, 0],
-        '“' | '”' | '"' => [10, 10, 5, 0, 0, 0, 0],
-        'ϵ' => [0, 0, 14, 16, 30, 16, 14],
-        '∑' => [31, 16, 8, 4, 2, 1, 31],
-        '∫' => [6, 4, 4, 4, 4, 4, 12],
-        '©' => [14, 17, 23, 21, 23, 17, 14],
-        '§' => [14, 16, 12, 18, 5, 3, 14],
-        '●' => [0, 14, 31, 31, 31, 14, 0],
-        '□' => [31, 17, 17, 17, 17, 17, 31],
-        '\u{f02a}' => [0, 14, 31, 31, 31, 14, 0],
-        '$' => [4, 14, 20, 12, 5, 11, 4],
-        '|' => [4, 4, 4, 4, 4, 4, 4],
-        '*' => [0, 4, 21, 14, 21, 4, 0],
-        '#' => [10, 31, 10, 10, 31, 10, 0],
-        '%' => [25, 25, 2, 4, 8, 19, 19],
-        '&' => [12, 18, 20, 8, 21, 18, 13],
-        '@' => [14, 17, 23, 21, 23, 16, 14],
-        _ => return None,
-    };
-    Some(pattern)
-}
-
-pub fn glyph_coverage(text: &str) -> f32 {
-    let mut total = 0_usize;
-    let mut covered = 0_usize;
-    for character in text.chars() {
-        if character.is_whitespace() {
-            continue;
-        }
-        total += 1;
-        if glyph(character).is_some() {
-            covered += 1;
-        }
-    }
-    if total == 0 {
-        1.0
-    } else {
-        covered as f32 / total as f32
-    }
-}
-
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn required_repertoire_is_supported() {
-        let required = [
-            "\u{fffd}",
-            "\u{21}\u{22}\u{23}\u{24}\u{25}\u{26}\u{27}\u{28}\u{29}\u{2a}\u{2b}\u{2c}\u{2d}\u{2e}\u{2f}\u{30}\u{31}\u{32}\u{33}\u{34}\u{35}\u{36}\u{37}\u{38}\u{39}\u{3a}\u{3b}\u{3c}\u{3d}\u{3e}\u{3f}\u{40}\u{41}\u{42}\u{43}\u{44}\u{45}\u{46}\u{47}\u{48}",
-            "\u{49}\u{4a}\u{4b}\u{4c}\u{4d}\u{4e}\u{4f}\u{50}\u{51}\u{52}\u{53}\u{54}\u{55}\u{56}\u{57}\u{58}\u{59}\u{5a}\u{5b}\u{5c}\u{5d}\u{5e}\u{5f}\u{60}\u{61}\u{62}\u{63}\u{64}\u{65}\u{66}\u{67}\u{68}\u{69}\u{6a}\u{6b}\u{6c}\u{6d}\u{6e}\u{6f}\u{70}",
-            "\u{71}\u{72}\u{73}\u{74}\u{75}\u{76}\u{77}\u{78}\u{79}\u{7a}\u{7b}\u{7c}\u{7d}\u{7e}\u{a1}\u{a2}\u{a3}\u{a4}\u{a5}\u{a6}\u{a7}\u{a8}\u{a9}\u{aa}\u{ab}\u{ac}\u{ae}\u{af}\u{b0}\u{b1}\u{b2}\u{b3}\u{b4}\u{b5}\u{b6}\u{b7}\u{b8}\u{b9}\u{ba}\u{bb}",
-            "\u{bc}\u{bd}\u{be}\u{bf}\u{c0}\u{c1}\u{c2}\u{c3}\u{c4}\u{c5}\u{c6}\u{c7}\u{c8}\u{c9}\u{ca}\u{cb}\u{cc}\u{cd}\u{ce}\u{cf}\u{d0}\u{d1}\u{d2}\u{d3}\u{d4}\u{d5}\u{d6}\u{d7}\u{d8}\u{d9}\u{da}\u{db}\u{dc}\u{dd}\u{de}\u{df}\u{e0}\u{e1}\u{e2}\u{e3}",
-            "\u{e4}\u{e5}\u{e6}\u{e7}\u{e8}\u{e9}\u{ea}\u{eb}\u{ec}\u{ed}\u{ee}\u{ef}\u{f0}\u{f1}\u{f2}\u{f3}\u{f4}\u{f5}\u{f6}\u{f7}\u{f8}\u{f9}\u{fa}\u{fb}\u{fc}\u{fd}\u{fe}\u{ff}\u{131}\u{152}\u{153}\u{160}\u{161}\u{178}\u{17d}\u{17e}\u{192}\u{2c6}\u{2c7}\u{2d8}",
-            "\u{2d9}\u{2da}\u{2db}\u{2dc}\u{2dd}\u{3a9}\u{3c0}\u{2013}\u{2014}\u{2018}\u{2019}\u{201a}\u{201c}\u{201d}\u{201e}\u{2020}\u{2021}\u{2022}\u{2026}\u{2030}\u{2039}\u{203a}\u{2044}\u{20ac}\u{2122}\u{2202}\u{2206}\u{220f}\u{2211}\u{221a}\u{221e}\u{222b}\u{2248}\u{2260}\u{2264}\u{2265}\u{25ca}\u{fb01}\u{fb02}",
-        ];
-        let missing: Vec<char> = required
-            .iter()
-            .flat_map(|group| group.chars())
-            .filter(|character| super::glyph(*character).is_none())
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "the PDF raster font cannot draw every character its encodings can produce: {missing:?}"
-        );
-    }
 
     use super::*;
     use crate::font::FontPoint;

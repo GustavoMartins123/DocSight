@@ -224,7 +224,7 @@ fn find_rejects_invalid_requests_with_typed_errors() -> Result<(), Box<dyn std::
 #[test]
 fn find_to_crop_to_evidence_works_end_to_end_from_the_cli() -> Result<(), Box<dyn std::error::Error>>
 {
-    let path = fixture("sample_semantic.pdf");
+    let path = fixture("sample_render.pdf");
     let path = path.to_str().ok_or("invalid path")?;
     let directory = tempfile::tempdir()?;
 

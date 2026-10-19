@@ -9,7 +9,7 @@ mod pdf_fixture;
 
 #[test]
 fn renders_page_region_and_object_through_one_pipeline() -> Result<(), DocsightError> {
-    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
+    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf_outlined())?;
     let page = render_pdf(
         &source,
         &RenderRequest {
@@ -52,7 +52,7 @@ fn renders_page_region_and_object_through_one_pipeline() -> Result<(), DocsightE
 
 #[test]
 fn renders_pdf_contact_sheet_through_the_canonical_page_renderer() -> Result<(), DocsightError> {
-    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
+    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf_outlined())?;
     let sheet = render_contact_sheet(
         &source,
         &ContactSheetRequest {

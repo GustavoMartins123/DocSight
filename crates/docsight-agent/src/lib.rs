@@ -1392,7 +1392,7 @@ mod tests {
                 Some(1),
                 Some("p_a"),
             ),
-            diagnostic("APPROXIMATED_PDF_FONT", "page 1 font", Some(1), None),
+            diagnostic("PDF_FONT_OUTLINE_MISSING", "page 1 font", Some(1), None),
             diagnostic(
                 "PDF_EXTGSTATE_IGNORED",
                 "page 1 entry OP",
@@ -1430,7 +1430,7 @@ mod tests {
             summary,
             vec![
                 ("PDF_EXTGSTATE_IGNORED", Some(1), Some(3), None),
-                ("APPROXIMATED_PDF_FONT", Some(1), None, None),
+                ("PDF_FONT_OUTLINE_MISSING", Some(1), None, None),
                 ("PDF_EXTGSTATE_IGNORED", Some(2), None, Some("p_c")),
                 ("DOCX_LAYOUT_PAGINATED", None, Some(2), Some("h_1")),
             ]

@@ -182,7 +182,7 @@ fn reconstructs_pdf_outline_and_semantic_text() -> Result<(), Box<dyn std::error
 
 #[test]
 fn crops_detected_pdf_table_object() -> Result<(), Box<dyn std::error::Error>> {
-    let pdf_path = fixture("sample_semantic.pdf");
+    let pdf_path = fixture("sample_render.pdf");
     let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
 
     let tables_out = docsight().args(["tables", pdf_str, "--json"]).output()?;

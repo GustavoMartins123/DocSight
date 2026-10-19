@@ -320,7 +320,7 @@ fn render_rejects_output_and_trace_aliases() -> Result<(), Box<dyn std::error::E
 #[test]
 fn render_atomically_replaces_output_and_trace() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let source = fixture("sample_semantic.pdf");
+    let source = fixture("sample_render.pdf");
     let output = directory.path().join("page.png");
     let trace = directory.path().join("page.trace");
     std::fs::write(&output, b"old output")?;
@@ -358,7 +358,7 @@ fn render_atomically_replaces_output_and_trace() -> Result<(), Box<dyn std::erro
 fn output_limit_failure_preserves_render_and_bundle_artifacts()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let source = fixture("sample_semantic.pdf");
+    let source = fixture("sample_render.pdf");
     let source_text = source.to_str().ok_or("source path")?;
     let png = directory.path().join("page.png");
     let trace = directory.path().join("page.trace");
@@ -392,7 +392,7 @@ fn output_limit_failure_preserves_render_and_bundle_artifacts()
             "--agent",
             "--json-errors",
             "--max-bytes",
-            "768",
+            "256",
             "bundle",
             source_text,
             "--out",
@@ -407,7 +407,7 @@ fn output_limit_failure_preserves_render_and_bundle_artifacts()
 #[test]
 fn sandbox_render_can_publish_output_and_trace() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let source = fixture("sample_semantic.pdf");
+    let source = fixture("sample_render.pdf");
     let output = directory.path().join("sandbox.png");
     let trace = directory.path().join("sandbox.trace");
 

@@ -122,10 +122,9 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 
 | Limitation | Diagnostic |
 | --- | --- |
-| An unsupported or uninterpretable image XObject (e.g. JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit component depths, DeviceCMYK, or malformed stream) is placed as a figure box; its pixels are not decoded | `PDF_XOBJECT_PLACEHOLDER` |
 | A page paints only images and carries no text operators, so there is nothing to extract without OCR | `PDF_PAGE_HAS_NO_TEXT_LAYER` |
 | A shading resource (`sh`) is not painted | `PDF_SHADING_UNSUPPORTED` |
-| Text without an embedded outline uses the deterministic fallback glyph set | `APPROXIMATED_PDF_FONT` |
+| Text whose font program provides no glyph outlines is still extracted, but rasterizing the page fails closed | `PDF_FONT_OUTLINE_MISSING` |
 | Codes the `ToUnicode` CMap does not map are extracted as the replacement character | `PDF_TEXT_CODE_UNMAPPED` |
 | Unsupported `ExtGState` entries are ignored for painting | `PDF_EXTGSTATE_IGNORED` |
 | The document information dictionary is malformed, so title, author, subject, producer and dates are reported as unknown while text and structure are still read | `PDF_INFO_UNREADABLE` |
@@ -135,7 +134,7 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 | Negative font sizes extract text but do not reproduce the signed transform | `PDF_NEGATIVE_FONT_SIZE_VISUAL` |
 | Strokes under a non-uniform transform use an area-preserving mean width | `PDF_NON_UNIFORM_STROKE_VISUAL` |
 
-Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators fail closed with exit code `20` rather than guessing. An embedded font program the engine cannot read fails closed only when decoding the text depends on it; when a `ToUnicode` map or an explicit encoding decodes the text, the text is extracted and its glyphs are painted with the fallback set, reported as `APPROXIMATED_PDF_FONT`; features that only affect painting reduce visual fidelity and are reported, but never veto text or structure.
+Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators fail closed with exit code `20` rather than guessing. An embedded font program the engine cannot read fails closed only when decoding the text depends on it; when a `ToUnicode` map or an explicit encoding decodes the text, the text is extracted, but painting that page fails closed instead of substituting glyphs, reported as `PDF_FONT_OUTLINE_MISSING`; features that only affect painting reduce visual fidelity and are reported, but never veto text or structure.
 
 ### Operation-level diagnostics
 
@@ -160,7 +159,7 @@ These are not format limitations. They are the cases where a command can answer,
 
 For DOCX, embedded PNG is decoded at 8 bits per channel, non-interlaced, in greyscale, RGB, palette, greyscale with alpha or RGBA. JPEG is decoded strictly through a pinned pure-Rust adapter with platform-specific acceleration disabled, so malformed or non-conformant data is not accepted as visual evidence. GIF, BMP, TIFF, EMF, WMF and SVG parts are preserved with their digest and reported as unavailable for rasterization; rendering them fails explicitly.
 
-For PDF, Image XObjects are decoded when encoded with DCTDecode (JPEG) or 8-bit FlateDecode in DeviceRGB or DeviceGray color spaces. Unsupported image formats (such as JBIG2Decode, CCITTFaxDecode, JPXDecode, non-8-bit depths, DeviceCMYK, or images with unsupported masks) fail closed and render an explicit placeholder box accompanied by `PDF_XOBJECT_PLACEHOLDER`. DocSight does not perform OCR: scanned pages containing raster images without an underlying text layer continue to report `PDF_PAGE_HAS_NO_TEXT_LAYER`.
+For PDF, Image XObjects are decoded from DCTDecode (JPEG), JPXDecode, JBIG2Decode, CCITTFaxDecode and the lossless filter chain (Flate, LZW, RunLength, ASCII85, ASCIIHex) with 1-, 2-, 4-, 8- and 16-bit components. DeviceGray, DeviceRGB, DeviceCMYK, Indexed, CalGray, CalRGB and Lab color spaces are supported, including explicit `Decode` arrays, colour-key masks and soft masks. Unsupported color spaces, codecs, filter combinations and masks fail closed with exit code `20` instead of drawing a placeholder. DocSight does not perform OCR: scanned pages containing raster images without an underlying text layer continue to report `PDF_PAGE_HAS_NO_TEXT_LAYER`.
 
 Scaling to the figure box is nearest-neighbour, which is deterministic but does not filter; enlarging a small image shows its pixels rather than a smoothed version.
 

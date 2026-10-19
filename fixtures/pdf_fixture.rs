@@ -8,6 +8,79 @@ pub fn sample_pdf() -> Vec<u8> {
     )
 }
 
+pub fn sample_pdf_outlined() -> Vec<u8> {
+    build_outline_pdf(
+        "0.9 0.9 1 rg 10 10 180 80 re f 0 0 0 rg BT /F1 12 Tf 20 70 Td (Hello DOCSIGHT) Tj ET",
+        "[0 0 200 100]",
+    )
+}
+
+pub fn build_outline_pdf(content: &str, media_box: &str) -> Vec<u8> {
+    const FONT: &[u8] =
+        include_bytes!("../crates/docsight-fonts/assets/LiberationSans-Regular.ttf");
+    let widths = vec!["500"; 95].join(" ");
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox {media_box} /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>"
+        )
+        .into_bytes(),
+        format!(
+            "<< /Type /Font /Subtype /TrueType /BaseFont /LiberationSans /FirstChar 32 /LastChar 126 /Widths [{widths}] /FontDescriptor 5 0 R /Encoding /WinAnsiEncoding >>"
+        )
+        .into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /LiberationSans /Flags 32 /FontBBox [-543 -303 1305 981] /ItalicAngle 0 /Ascent 905 /Descent -212 /CapHeight 729 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
+        {
+            let mut stream = format!(
+                "6 0 obj\n<< /Length {} /Length1 {} >>\nstream\n",
+                FONT.len(),
+                FONT.len()
+            )
+            .into_bytes();
+            stream.extend_from_slice(FONT);
+            stream.extend_from_slice(b"\nendstream\nendobj\n");
+            stream
+        },
+        {
+            let mut stream = format!(
+                "7 0 obj\n<< /Length {} >>\nstream\n",
+                content.len()
+            )
+            .into_bytes();
+            stream.extend_from_slice(content.as_bytes());
+            stream.extend_from_slice(b"\nendstream\nendobj\n");
+            stream
+        },
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        if object.starts_with(b"<<") {
+            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            pdf.extend_from_slice(object);
+            pdf.extend_from_slice(b"\nendobj\n");
+        } else {
+            pdf.extend_from_slice(object);
+        }
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    pdf
+}
+
 pub fn build_pdf(content: &str, media_box: &str, stream_entries: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),

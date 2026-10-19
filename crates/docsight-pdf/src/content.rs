@@ -121,12 +121,6 @@ pub(crate) struct TextRun {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DisplayCommand {
     Text(TextRun),
-    Figure {
-        bbox: Rect,
-        resource_name: String,
-        clips: Vec<ClipRegion>,
-        visual_issues: Vec<VisualIssue>,
-    },
     Image {
         image: std::sync::Arc<docsight_core::DecodedImage>,
         bbox: Rect,
@@ -297,7 +291,6 @@ struct ToUnicodeMap {
 #[derive(Clone, Debug)]
 pub(crate) enum XObjectEntry {
     Image(std::sync::Arc<docsight_core::DecodedImage>),
-    ImagePlaceholder,
     Form(Box<FormXObject>),
     /// A form XObject that is already being expanded higher up the resource chain. It is only
     /// an error when content actually invokes it, which would recurse without end.
@@ -322,7 +315,6 @@ pub(crate) struct ParsedContent {
     pub commands: Vec<DisplayCommand>,
     pub text_runs: Vec<TextRun>,
     pub approximated_font: bool,
-    pub omitted_xobjects: bool,
     pub unmapped_text_codes: bool,
     pub operations: usize,
     pub page_visual_issues: Vec<VisualIssue>,
@@ -373,7 +365,6 @@ fn parse_content_inner(
     let mut operations = 0usize;
     let mut approximated_font = false;
     let mut unmapped_text_codes = false;
-    let mut omitted_xobjects = false;
     let mut page_visual_issues: BTreeSet<VisualIssue> = BTreeSet::new();
     let mut inline_image = false;
     loop {
@@ -420,16 +411,9 @@ fn parse_content_inner(
                             });
                         }
                         validate_inline_image_dictionary(&operands)?;
-                        commands.push(DisplayCommand::Figure {
-                            bbox: transformed_unit_bbox(&state.ctm, page_left, page_height)?,
-                            resource_name: "<inline-image>".to_owned(),
-                            clips: state.clips.clone(),
-                            visual_issues: state.visual_issues(PaintScope::Common),
+                        return Err(DocsightError::UnsupportedFeature {
+                            feature: "PDF inline image data".to_owned(),
                         });
-                        operands.clear();
-                        lexer.skip_inline_image()?;
-                        inline_image = false;
-                        omitted_xobjects = true;
                     }
                     "q" => {
                         require_empty(&operands, &operator)?;
@@ -996,17 +980,6 @@ fn parse_content_inner(
                             XObjectEntry::Recursive => {
                                 return Err(malformed("cycle detected between PDF form XObjects"));
                             }
-                            XObjectEntry::ImagePlaceholder => {
-                                let bbox =
-                                    transformed_unit_bbox(&state.ctm, page_left, page_height)?;
-                                commands.push(DisplayCommand::Figure {
-                                    bbox,
-                                    resource_name,
-                                    clips: state.clips.clone(),
-                                    visual_issues: state.visual_issues(PaintScope::Common),
-                                });
-                                omitted_xobjects = true;
-                            }
                             XObjectEntry::Image(image) => {
                                 let bbox =
                                     transformed_unit_bbox(&state.ctm, page_left, page_height)?;
@@ -1067,7 +1040,6 @@ fn parse_content_inner(
                                 }
                                 approximated_font |= nested.approximated_font;
                                 unmapped_text_codes |= nested.unmapped_text_codes;
-                                omitted_xobjects |= nested.omitted_xobjects;
                                 page_visual_issues.extend(nested.page_visual_issues);
                             }
                         }
@@ -1137,7 +1109,6 @@ fn parse_content_inner(
         commands,
         text_runs,
         approximated_font,
-        omitted_xobjects,
         unmapped_text_codes,
         operations,
         page_visual_issues: page_visual_issues.into_iter().collect(),
@@ -2283,26 +2254,6 @@ impl<'a> ContentLexer<'a> {
         let byte = self.peek()?;
         self.cursor += 1;
         Some(byte)
-    }
-
-    fn skip_inline_image(&mut self) -> Result<(), DocsightError> {
-        while self.peek().is_some_and(is_space) {
-            self.cursor += 1;
-        }
-        let data_start = self.cursor;
-        let mut cursor = data_start;
-        while cursor + 2 < self.bytes.len() {
-            if self.bytes[cursor] == b'E'
-                && self.bytes[cursor + 1] == b'I'
-                && is_space(self.bytes[cursor.saturating_sub(1)])
-                && is_space(self.bytes[cursor + 2])
-            {
-                self.cursor = cursor + 2;
-                return Ok(());
-            }
-            cursor += 1;
-        }
-        Err(malformed("inline PDF image has no EI terminator"))
     }
 }
 

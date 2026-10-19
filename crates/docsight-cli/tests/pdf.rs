@@ -25,7 +25,7 @@ fn exposes_pdf_page_spans_as_deterministic_json() -> Result<(), Box<dyn std::err
     assert_eq!(value["result"]["number"], 1);
     assert_eq!(value["result"]["width_pt"], 200.0);
     assert_eq!(value["result"]["spans"][0]["text"], "Hello DOCSIGHT");
-    assert_eq!(value["warnings"][0]["code"], "APPROXIMATED_PDF_FONT");
+    assert_eq!(value["warnings"][0]["code"], "PDF_FONT_OUTLINE_MISSING");
     Ok(())
 }
 
@@ -36,7 +36,7 @@ fn renders_page_bbox_and_object_crops() -> Result<(), Box<dyn std::error::Error>
     let full = directory.path().join("full.png");
     let region = directory.path().join("region.png");
     let object = directory.path().join("object.png");
-    fs::write(&path, pdf_fixture::sample_pdf())?;
+    fs::write(&path, pdf_fixture::sample_pdf_outlined())?;
     let render = docsight()
         .args([
             "render",
@@ -50,7 +50,6 @@ fn renders_page_bbox_and_object_crops() -> Result<(), Box<dyn std::error::Error>
         ])
         .output()?;
     assert!(render.status.success());
-    assert!(String::from_utf8(render.stderr)?.contains("APPROXIMATED_PDF_FONT"));
     assert_png_dimensions(&fs::read(&full)?, 400, 200)?;
     let crop = docsight()
         .args([
@@ -97,7 +96,7 @@ fn cli_renders_a_pdf_contact_sheet() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("sample.pdf");
     let output = directory.path().join("contact.png");
-    fs::write(&path, pdf_fixture::sample_pdf())?;
+    fs::write(&path, pdf_fixture::sample_pdf_outlined())?;
     let result = docsight()
         .args([
             "--agent",
