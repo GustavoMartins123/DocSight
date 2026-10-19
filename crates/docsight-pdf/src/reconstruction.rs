@@ -74,12 +74,7 @@ pub(crate) fn reconstruct_page_semantics(
     let figures = commands
         .iter()
         .filter_map(|command| match command {
-            DisplayCommand::Figure {
-                bbox,
-                resource_name,
-                ..
-            }
-            | DisplayCommand::Image {
+            DisplayCommand::Image {
                 bbox,
                 resource_name,
                 ..

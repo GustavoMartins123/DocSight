@@ -258,11 +258,11 @@ fn evidence_engine_matches_cross_platform_conformance_golden()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
     let docx = fixture("sample_headings.docx");
-    let pdf = fixture("synthetic_table.pdf");
+    let pdf = fixture("sample_render.pdf");
     let docx_str = docx.to_str().ok_or("DOCX path")?;
     let pdf_str = pdf.to_str().ok_or("PDF path")?;
     let docx_object = "h_11ff36836ef204cec23ee89837654132";
-    let pdf_object = "tbl_4a65916a4d36e2ccc570158c5302585f";
+    let pdf_object = "tbl_3feaa3e9f1be31ac41d788641028bd8a";
 
     let evidence_docx = success_json(&[
         "--agent",

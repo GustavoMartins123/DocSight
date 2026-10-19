@@ -180,12 +180,12 @@
         "pointer_equals": {},
         "repeat": 2
       },
-      "file": "fixtures/validation/sample_semantic.pdf",
+      "file": "fixtures/validation/sample_render.pdf",
       "format": "pdf",
-      "id": "sample-semantic-render",
+      "id": "sample-render-render",
       "operation": "render",
       "origin": "synthetic",
-      "sha256": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05"
+      "sha256": "2e7ac59813e515ba7adbdd098fe054d56a42d40238d57e91ca05606e6ee7e9d3"
     },
     {
       "class": "docx-structured",

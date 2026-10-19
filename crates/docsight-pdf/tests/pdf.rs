@@ -5,7 +5,7 @@ use docsight_core::{DocsightError, DocumentSource, Rect};
 use docsight_pdf::{
     PdfDocument, PdfTraceDisplayOperation, PdfTraceLineCap, PdfTraceLineJoin, PdfTraceResourceKind,
 };
-use pdf_fixture::{build_pdf, sample_pdf};
+use pdf_fixture::{build_outline_pdf, build_pdf, sample_pdf, sample_pdf_outlined};
 
 #[test]
 fn reconstructs_all_synthetic_measurements() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,13 +115,13 @@ fn inspects_page_geometry_and_text_spans() -> Result<(), DocsightError> {
     assert_eq!(page.number, 1);
     assert!(page.spans.iter().any(|span| span.text == "Hello DOCSIGHT"));
     assert!(page.spans.iter().all(|span| span.confidence == 0.75));
-    assert_eq!(page.warnings[0].code, "APPROXIMATED_PDF_FONT");
+    assert_eq!(page.warnings[0].code, "PDF_FONT_OUTLINE_MISSING");
     Ok(())
 }
 
 #[test]
 fn page_projection_matches_trace_and_reuses_page_parsing() -> Result<(), DocsightError> {
-    let source = DocumentSource::from_bytes(sample_pdf())?;
+    let source = DocumentSource::from_bytes(sample_pdf_outlined())?;
     let document = PdfDocument::open(&source)?;
     let page = document.page(1)?;
     let trace = document.trace_page(1)?;
@@ -152,7 +152,7 @@ fn creates_stable_span_identifiers() -> Result<(), DocsightError> {
 
 #[test]
 fn renders_full_page_and_crop_with_expected_dimensions() -> Result<(), DocsightError> {
-    let source = DocumentSource::from_bytes(sample_pdf())?;
+    let source = DocumentSource::from_bytes(sample_pdf_outlined())?;
     let document = PdfDocument::open(&source)?;
     let page = document.rasterize(1, 144, None)?;
     assert_eq!((page.width_px, page.height_px), (400, 200));
@@ -316,7 +316,7 @@ fn rejects_a_malformed_encryption_dictionary() -> Result<(), DocsightError> {
 
 #[test]
 fn produces_byte_identical_rasters() -> Result<(), DocsightError> {
-    let source = DocumentSource::from_bytes(sample_pdf())?;
+    let source = DocumentSource::from_bytes(sample_pdf_outlined())?;
     let document = PdfDocument::open(&source)?;
     let first = document.rasterize(1, 144, None)?;
     let second = document.rasterize(1, 144, None)?;
@@ -327,7 +327,7 @@ fn produces_byte_identical_rasters() -> Result<(), DocsightError> {
 #[test]
 fn executes_initial_text_path_and_transform_operators() -> Result<(), DocsightError> {
     let content = "q 1 0 0 1 0 0 cm 0 0 0 RG 2 w 10 10 m 60 90 140 10 190 90 c S Q BT /F1 10 Tf 1 0 0 1 20 70 Tm [(A) -100 (B)] TJ ET";
-    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let source = DocumentSource::from_bytes(build_outline_pdf(content, "[0 0 200 100]"))?;
     let document = PdfDocument::open(&source)?;
     let page = document.page(1)?;
     assert_eq!(
@@ -405,7 +405,7 @@ fn decodes_simple_truetype_text_through_to_unicode() -> Result<(), DocsightError
     assert_eq!(page.spans[0].text, "é你");
     assert_eq!(page.spans[0].font_name, "Example-Bold");
     assert!(page.spans[0].bold);
-    assert_eq!(page.warnings[0].code, "APPROXIMATED_PDF_FONT");
+    assert_eq!(page.warnings[0].code, "PDF_FONT_OUTLINE_MISSING");
     Ok(())
 }
 
@@ -596,9 +596,9 @@ fn decodes_type0_font_through_to_unicode() -> Result<(), DocsightError> {
 }
 
 #[test]
-fn exposes_xobject_placements_as_figure_blocks() -> Result<(), DocsightError> {
+fn exposes_xobject_placements_as_image_blocks() -> Result<(), DocsightError> {
     let content = "q 100 0 0 50 10 20 cm /Im#30 Do Q";
-    let objects = vec![
+    let objects: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 6 0 R >>".to_owned(),
@@ -617,18 +617,13 @@ fn exposes_xobject_placements_as_figure_blocks() -> Result<(), DocsightError> {
     assert_eq!(block.page, Some(1));
     assert_eq!(block.bbox, Some(Rect::new(10.0, 30.0, 110.0, 80.0)?));
     assert_eq!(figures[0].1.resource_id.as_deref(), Some("Im0"));
-    assert!(
-        document.warnings.iter().any(|warning| {
-            warning.code == "PDF_XOBJECT_PLACEHOLDER" && warning.page == Some(1)
-        })
-    );
     Ok(())
 }
 
 #[test]
-fn renders_explicit_placeholder_for_undecoded_xobjects() -> Result<(), DocsightError> {
+fn renders_decoded_xobjects_without_placeholder() -> Result<(), DocsightError> {
     let content = "q 100 0 0 50 10 20 cm /Im0 Do Q";
-    let objects = vec![
+    let objects: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
@@ -646,26 +641,21 @@ fn renders_explicit_placeholder_for_undecoded_xobjects() -> Result<(), DocsightE
             .chunks_exact(3)
             .any(|pixel| pixel != [255, 255, 255])
     );
-    assert!(
-        raster.warnings.iter().any(|warning| {
-            warning.code == "PDF_XOBJECT_PLACEHOLDER" && warning.page == Some(1)
-        })
-    );
     Ok(())
 }
 
 #[test]
-fn exposes_inline_images_as_explicit_figure_placeholders() -> Result<(), DocsightError> {
+fn rejects_inline_image_data_fail_closed() -> Result<(), DocsightError> {
     let content = "q 100 0 0 50 10 20 cm BI /W 1 /H 1 /BPC 8 /CS /RGB ID abc EI Q";
     let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
-    let document = PdfDocument::open(&source)?.to_document()?;
-    let figures = document.figures().collect::<Vec<_>>();
-    assert_eq!(figures.len(), 1);
-    assert_eq!(figures[0].1.resource_id.as_deref(), Some("<inline-image>"));
+    let error = PdfDocument::open(&source)?.page(1).err();
     assert!(
-        document.warnings.iter().any(|warning| {
-            warning.code == "PDF_XOBJECT_PLACEHOLDER" && warning.page == Some(1)
-        })
+        matches!(
+            error,
+            Some(DocsightError::UnsupportedFeature { ref feature })
+                if feature.contains("inline image")
+        ),
+        "inline image data must fail closed"
     );
     Ok(())
 }
@@ -753,7 +743,7 @@ fn accepts_negative_and_zero_horizontal_scale() -> Result<(), DocsightError> {
 fn accepts_invisible_text_rendering_modes_for_extraction() -> Result<(), DocsightError> {
     for mode in [0, 1, 2, 3] {
         let content = format!("BT /F1 10 Tf {mode} Tr 20 70 Td (OCR) Tj ET");
-        let source = DocumentSource::from_bytes(build_pdf(&content, "[0 0 200 100]", ""))?;
+        let source = DocumentSource::from_bytes(build_outline_pdf(&content, "[0 0 200 100]"))?;
         let document = PdfDocument::open(&source)?.to_document()?;
         assert_eq!(document.paragraphs().count(), 1, "mode {mode}");
         assert!(
@@ -771,7 +761,7 @@ fn accepts_invisible_text_rendering_modes_for_extraction() -> Result<(), Docsigh
         assert_eq!(painted, mode != 3, "mode {mode}");
     }
     let content = "BT /F1 10 Tf 5 Tr 20 70 Td (Clip) Tj ET";
-    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let source = DocumentSource::from_bytes(build_outline_pdf(content, "[0 0 200 100]"))?;
     let document = PdfDocument::open(&source)?.to_document()?;
     assert_eq!(document.paragraphs().count(), 1);
     assert!(
@@ -924,7 +914,7 @@ fn applies_font_from_ext_graphics_state() -> Result<(), DocsightError> {
 #[test]
 fn accepts_named_color_spaces_for_extraction_with_visual_warning() -> Result<(), DocsightError> {
     let content = "q /C1 cs 0.5 sc 10 10 80 80 re f Q BT /F1 10 Tf 20 70 Td (Hello) Tj ET";
-    let source = DocumentSource::from_bytes(build_pdf(content, "[0 0 200 100]", ""))?;
+    let source = DocumentSource::from_bytes(build_outline_pdf(content, "[0 0 200 100]"))?;
     let document = PdfDocument::open(&source)?.to_document()?;
     assert_eq!(document.paragraphs().count(), 1);
     assert!(document.warnings.iter().any(|warning| {
@@ -981,7 +971,7 @@ fn accepts_type3_fonts_with_tounicode_for_extraction() -> Result<(), DocsightErr
         document
             .warnings
             .iter()
-            .any(|warning| warning.code == "APPROXIMATED_PDF_FONT" && warning.page == Some(1))
+            .any(|warning| warning.code == "PDF_FONT_OUTLINE_MISSING" && warning.page == Some(1))
     );
     Ok(())
 }
@@ -1666,7 +1656,7 @@ fn cff_program_objects(font: &str, extra_font_entries: &str) -> Vec<String> {
 }
 
 #[test]
-fn an_unsupported_embedded_font_program_only_approximates_painting()
+fn an_unsupported_embedded_font_program_only_extracts_text()
 -> Result<(), Box<dyn std::error::Error>> {
     let objects = cff_program_objects("/TrueType", "/Encoding /WinAnsiEncoding ");
     let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
@@ -1677,8 +1667,12 @@ fn an_unsupported_embedded_font_program_only_approximates_painting()
         document
             .warnings
             .iter()
-            .any(|warning| warning.code == "APPROXIMATED_PDF_FONT")
+            .any(|warning| warning.code == "PDF_FONT_OUTLINE_MISSING")
     );
+    assert!(matches!(
+        PdfDocument::open(&source)?.rasterize(1, 72, None),
+        Err(DocsightError::UnsupportedFeature { .. })
+    ));
     Ok(())
 }
 

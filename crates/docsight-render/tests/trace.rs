@@ -82,7 +82,7 @@ fn proof_bundle_verifies_embedded_evidence_and_optional_crop()
 
 #[test]
 fn pdf_trace_replays_complete_applicable_decisions() -> Result<(), Box<dyn std::error::Error>> {
-    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
+    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf_outlined())?;
     let request = RenderRequest {
         target: RenderTarget::Page { page: 1 },
         dpi: 72,
@@ -154,7 +154,7 @@ fn pdf_trace_replays_complete_applicable_decisions() -> Result<(), Box<dyn std::
 #[test]
 fn trace_rejects_decision_records_marked_not_applicable() -> Result<(), Box<dyn std::error::Error>>
 {
-    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf())?;
+    let source = DocumentSource::from_bytes(pdf_fixture::sample_pdf_outlined())?;
     let request = RenderRequest {
         target: RenderTarget::Page { page: 1 },
         dpi: 72,

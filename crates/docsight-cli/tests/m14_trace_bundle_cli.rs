@@ -96,13 +96,25 @@ fn replay_requires_explicit_verification_mode() -> Result<(), Box<dyn std::error
 }
 
 #[test]
-fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Error>> {
+fn renderable_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
-    let input = temporary.path().join("synthetic.pdf");
-    std::fs::copy(fixture("synthetic_table.pdf"), &input)?;
+    let input = temporary.path().join("sample.pdf");
+    std::fs::copy(fixture("sample_render.pdf"), &input)?;
     let trace = temporary.path().join("page.dstrace");
     let render = temporary.path().join("page.png");
     let bundle = temporary.path().join("table.dse");
+    let tables = docsight()
+        .args(["--agent", "tables", input.to_str().ok_or("path")?])
+        .output()?;
+    assert!(
+        tables.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tables.stdout)
+    );
+    let tables: serde_json::Value = serde_json::from_slice(&tables.stdout)?;
+    let table = tables["result"]["tables"][0]["id"]
+        .as_str()
+        .ok_or("table id")?;
     let commands = [
         vec![
             "render",
@@ -120,7 +132,7 @@ fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Er
             "bundle",
             input.to_str().ok_or("path")?,
             "--object",
-            "tbl_4a65916a4d36e2ccc570158c5302585f",
+            table,
             "--dpi",
             "36",
             "--include-crop",
@@ -138,13 +150,6 @@ fn synthetic_pdf_supports_trace_and_proof() -> Result<(), Box<dyn std::error::Er
         assert!(output.stderr.is_empty());
         let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
         assert_eq!(json["schema"], "docsight.agent/v2");
-        assert!(
-            json["warnings"]
-                .as_array()
-                .ok_or("warnings")?
-                .iter()
-                .any(|warning| warning["code"] == "APPROXIMATED_PDF_FONT")
-        );
         assert!(
             json["warnings"]
                 .as_array()

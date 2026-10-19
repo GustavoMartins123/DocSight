@@ -3,7 +3,7 @@
   "id": "workflow-investigate-pdf",
   "title": "Investigate a PDF table from search to visual crop",
   "documents": {
-    "primary": "synthetic_table.pdf",
+    "primary": "sample_render.pdf",
     "reference": null
   },
   "budgets": {
@@ -13,22 +13,52 @@
   "steps": [
     {
       "id": "find",
-      "args": ["find", "{primary}", "EVENT"],
+      "args": [
+        "find",
+        "{primary}",
+        "Latency"
+      ],
       "expect_exit": 0,
-      "require": ["/result/matches/0/object_id", "/result/matches/0/matched/text"],
-      "values": {"/result/matches/0/matched/text": "EVENT"}
+      "require": [
+        "/result/matches/0/object_id",
+        "/result/matches/0/matched/text"
+      ],
+      "values": {
+        "/result/matches/0/matched/text": "Latency"
+      }
     },
     {
       "id": "context",
-      "args": ["context", "{primary}", "{find./result/matches/0/object_id}", "--include", "content,geometry"],
+      "args": [
+        "context",
+        "{primary}",
+        "{find./result/matches/0/object_id}",
+        "--include",
+        "content,geometry"
+      ],
       "expect_exit": 0,
-      "require": ["/result/context", "/result/status"]
+      "require": [
+        "/result/context",
+        "/result/status"
+      ]
     },
     {
       "id": "crop",
-      "args": ["crop", "{primary}", "--object", "{find./result/matches/0/object_id}", "--dpi", "36", "--out", "{scratch}/investigate.png"],
+      "args": [
+        "crop",
+        "{primary}",
+        "--object",
+        "{find./result/matches/0/object_id}",
+        "--dpi",
+        "36",
+        "--out",
+        "{scratch}/investigate.png"
+      ],
       "expect_exit": 0,
-      "require": ["/result/output_sha256", "/result/output_bytes"]
+      "require": [
+        "/result/output_sha256",
+        "/result/output_bytes"
+      ]
     }
   ]
 }

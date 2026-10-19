@@ -90,11 +90,14 @@ pub fn build(password: &[u8]) -> Vec<u8> {
     let key = file_key(password);
     let content = b"BT /F1 12 Tf 20 70 Td (Confidential) Tj ET";
     let encrypted_content = rc4(&object_key(&key, 5), content);
+    let program: &[u8] =
+        include_bytes!("../../../../crates/docsight-fonts/assets/LiberationSans-Regular.ttf");
+    let encrypted_program = rc4(&object_key(&key, 8), program);
     let objects: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_vec(),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /LiberationSans /FontDescriptor 7 0 R /Encoding /WinAnsiEncoding >>".to_vec(),
         {
             let mut stream =
                 format!("<< /Length {} >>\nstream\n", encrypted_content.len()).into_bytes();
@@ -108,6 +111,18 @@ pub fn build(password: &[u8]) -> Vec<u8> {
             escape(&user_value(&key))
         )
         .into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /LiberationSans /Flags 32 /FontBBox [-543 -303 1305 981] /ItalicAngle 0 /Ascent 905 /Descent -212 /CapHeight 729 /StemV 80 /FontFile2 8 0 R >>".to_vec(),
+        {
+            let mut stream = format!(
+                "<< /Length {} /Length1 {} >>\nstream\n",
+                encrypted_program.len(),
+                program.len()
+            )
+            .into_bytes();
+            stream.extend_from_slice(&encrypted_program);
+            stream.extend_from_slice(b"\nendstream");
+            stream
+        },
     ];
     let mut pdf = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();

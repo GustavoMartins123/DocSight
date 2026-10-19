@@ -45,6 +45,9 @@ zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2
 zune-jpeg = { version = "=0.5.15", default-features = false, features = ["std"] }
 rustybuzz = "=0.20.1"
 fontdue = { version = "=0.9.3", default-features = false, features = ["std"] }
+hayro-ccitt = { version = "=0.4.0", default-features = false }
+hayro-jbig2 = { version = "=0.3.1", default-features = false, features = ["std"] }
+hayro-jpeg2000 = { version = "=0.4.1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

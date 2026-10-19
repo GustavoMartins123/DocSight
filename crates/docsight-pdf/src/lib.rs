@@ -2,6 +2,7 @@ mod content;
 mod crypt;
 mod filters;
 mod font;
+mod images;
 mod raster;
 mod reconstruction;
 mod syntax;
@@ -18,7 +19,8 @@ use docsight_core::{
     DocumentSource, ErrorLocation, Hyperlink, IrVersion, ObjectId, Overlay, OverlayKind, Page,
     Rect, SourceSpan, validate_canonical,
 };
-use filters::decode_stream;
+use filters::{decode_stream, decode_stream_without_final_filter};
+use images::ImageColorSpace;
 use raster::{MAX_DPI, MIN_DPI};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -33,10 +35,7 @@ pub const MAX_ANNOTATIONS: u32 = 4_096;
 pub use content::MAX_OPERATIONS as PDF_MAX_CONTENT_OPERATIONS;
 pub use font::MAX_FONT_BYTES as PDF_MAX_FONT_BYTES;
 pub use raster::MIN_DPI as PDF_MIN_DPI;
-pub use raster::{
-    MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS,
-    glyph_coverage as pdf_glyph_coverage,
-};
+pub use raster::{MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PdfPageInfo {
@@ -371,10 +370,7 @@ impl<'a> PdfDocument<'a> {
             .collect::<Result<Vec<_>, DocsightError>>()?;
         let mut warnings = Vec::new();
         if parsed.approximated_font {
-            warnings.push(font_approximation_warning(number));
-        }
-        if parsed.omitted_xobjects {
-            warnings.push(xobject_placeholder_warning(number));
+            warnings.push(font_outline_warning(number));
         }
         if parsed.unmapped_text_codes {
             warnings.push(unmapped_text_warning(number));
@@ -522,19 +518,45 @@ impl<'a> PdfDocument<'a> {
         &self,
         reference: Option<ObjectRef>,
         stream: &StreamValue,
-    ) -> XObjectEntry {
+    ) -> Result<XObjectEntry, DocsightError> {
         if let Some(reference) = reference
             && let Some(cached) = self.image_cache.borrow().get(&reference).cloned()
         {
-            return cached;
+            return Ok(cached);
         }
-        let entry = self.decode_image_xobject(stream);
+        let entry = self.decode_image_xobject(stream)?;
         if let Some(reference) = reference {
             self.image_cache
                 .borrow_mut()
                 .insert(reference, entry.clone());
         }
-        entry
+        Ok(entry)
+    }
+
+    fn resolve_optional_field(
+        &self,
+        dict: &BTreeMap<String, Value>,
+        key: &str,
+    ) -> Result<Option<Value>, DocsightError> {
+        match dict.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => match self.store.resolve(value)? {
+                Value::Null => Ok(None),
+                resolved => Ok(Some(resolved)),
+            },
+        }
+    }
+
+    fn resolve_int_field(
+        &self,
+        dict: &BTreeMap<String, Value>,
+        key: &str,
+    ) -> Result<Option<i64>, DocsightError> {
+        match self.resolve_optional_field(dict, key)? {
+            None => Ok(None),
+            Some(Value::Int(value)) => Ok(Some(value)),
+            Some(_) => Err(malformed(format!("{key} must be an integer"))),
+        }
     }
 
     fn xobject_entries(
@@ -561,15 +583,16 @@ impl<'a> PdfDocument<'a> {
             };
             let resolved = self.store.resolve(&entry)?;
             let Value::Stream(stream) = resolved else {
-                entries.insert(name, XObjectEntry::ImagePlaceholder);
-                continue;
+                return Err(malformed(format!(
+                    "XObject resource {name} does not resolve to a stream"
+                )));
             };
             let subtype = match stream.dict.get("Subtype") {
                 Some(Value::Name(subtype)) => subtype.as_str(),
                 _ => "",
             };
             if subtype != "Form" {
-                let entry = self.image_xobject_entry(reference, &stream);
+                let entry = self.image_xobject_entry(reference, &stream)?;
                 entries.insert(name, entry);
                 continue;
             }
@@ -638,361 +661,700 @@ impl<'a> PdfDocument<'a> {
         Ok(entries)
     }
 
-    fn decode_soft_mask_alpha(
+    fn parse_final_filter(
+        &self,
+        dict: &BTreeMap<String, Value>,
+    ) -> Result<(String, Value), DocsightError> {
+        let filter = self.resolve_optional_field(dict, "Filter")?;
+        let parms = self.resolve_optional_field(dict, "DecodeParms")?;
+        let names: Vec<String> = match filter {
+            None => Vec::new(),
+            Some(Value::Name(name)) => vec![name],
+            Some(Value::Array(values)) => values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Name(name) => Ok(name),
+                    _ => Err(malformed("stream Filter array must contain names")),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            Some(_) => return Err(malformed("stream Filter must be a name or an array")),
+        };
+        let parm_list: Vec<Value> = match parms {
+            None => vec![Value::Null; names.len()],
+            Some(Value::Dict(parm)) if names.len() == 1 => vec![Value::Dict(parm)],
+            Some(Value::Dict(_)) => {
+                return Err(malformed("DecodeParms must match the Filter chain length"));
+            }
+            Some(Value::Array(values)) if values.len() == names.len() => values,
+            Some(Value::Array(_)) => {
+                return Err(malformed("DecodeParms must match the Filter chain length"));
+            }
+            Some(_) => return Err(malformed("DecodeParms must be a dictionary or an array")),
+        };
+        let name = names.last().cloned().unwrap_or_default();
+        let parm = parm_list.last().cloned().unwrap_or(Value::Null);
+        Ok((name, parm))
+    }
+
+    fn resolved_dict(
+        &self,
+        value: &Value,
+        context: &str,
+    ) -> Result<BTreeMap<String, Value>, DocsightError> {
+        match self.store.resolve(value)? {
+            Value::Dict(dict) => Ok(dict),
+            Value::Null => Ok(BTreeMap::new()),
+            _ => Err(malformed(format!("{context} must be a dictionary"))),
+        }
+    }
+
+    fn resolved_number_array(
+        &self,
+        value: &Value,
+        expected: usize,
+        context: &str,
+    ) -> Result<Vec<f32>, DocsightError> {
+        let items = match self.store.resolve(value)? {
+            Value::Array(items) => items,
+            _ => return Err(malformed(format!("{context} must be an array"))),
+        };
+        let mut numbers = Vec::with_capacity(items.len());
+        for item in &items {
+            numbers.push(pdf_number(&self.store.resolve(item)?)?);
+        }
+        if numbers.len() != expected {
+            return Err(malformed(format!("{context} must hold {expected} numbers")));
+        }
+        Ok(numbers)
+    }
+
+    fn number_array_or(
+        &self,
+        dict: &BTreeMap<String, Value>,
+        key: &str,
+        expected: usize,
+        default: &[f32],
+    ) -> Result<Vec<f32>, DocsightError> {
+        match dict.get(key) {
+            None | Some(Value::Null) => Ok(default.to_vec()),
+            Some(value) => self.resolved_number_array(value, expected, key),
+        }
+    }
+
+    fn number_or(
+        &self,
+        dict: &BTreeMap<String, Value>,
+        key: &str,
+        default: f32,
+    ) -> Result<f32, DocsightError> {
+        match dict.get(key) {
+            None | Some(Value::Null) => Ok(default),
+            Some(value) => pdf_number(&self.store.resolve(value)?),
+        }
+    }
+
+    fn named_color_space(&self, name: &str) -> Result<ImageColorSpace, DocsightError> {
+        match name {
+            "DeviceGray" | "G" => Ok(ImageColorSpace::Gray),
+            "DeviceRGB" | "RGB" => Ok(ImageColorSpace::Rgb),
+            "DeviceCMYK" | "CMYK" => Ok(ImageColorSpace::Cmyk),
+            other => Err(images::unsupported_image(format!("color space {other}"))),
+        }
+    }
+
+    fn image_color_space(&self, value: &Value) -> Result<ImageColorSpace, DocsightError> {
+        match value {
+            Value::Ref(_) => self.image_color_space(&self.store.resolve(value)?),
+            Value::Name(name) => self.named_color_space(name),
+            Value::Array(items) => {
+                let first = items
+                    .first()
+                    .ok_or_else(|| malformed("color space array is empty"))?;
+                let family = match first {
+                    Value::Name(name) => name.clone(),
+                    _ => return Err(malformed("color space array must start with a name")),
+                };
+                match family.as_str() {
+                    "DeviceGray" | "G" | "DeviceRGB" | "RGB" | "DeviceCMYK" | "CMYK" => {
+                        self.named_color_space(&family)
+                    }
+                    "Indexed" | "I" => {
+                        let base_value = items
+                            .get(1)
+                            .ok_or_else(|| malformed("Indexed color space has no base"))?;
+                        let base = match self.store.resolve(base_value)? {
+                            Value::Name(name) => self.named_color_space(&name)?,
+                            other => self.image_color_space(&other)?,
+                        };
+                        if let ImageColorSpace::Indexed { .. } = base {
+                            return Err(images::unsupported_image("nested Indexed color space"));
+                        }
+                        let high = match items.get(2).map(|value| self.store.resolve(value)) {
+                            Some(Ok(Value::Int(value))) if (0..=65_535).contains(&value) => {
+                                value as u16
+                            }
+                            _ => {
+                                return Err(malformed(
+                                    "Indexed color space high must be a small integer",
+                                ));
+                            }
+                        };
+                        let lookup = items
+                            .get(3)
+                            .ok_or_else(|| malformed("Indexed color space has no lookup"))?;
+                        let table = match self.store.resolve(lookup)? {
+                            Value::String(bytes) => bytes,
+                            Value::Stream(stream) => decode_stream(&stream)?,
+                            _ => {
+                                return Err(malformed(
+                                    "Indexed color space lookup must be a string or stream",
+                                ));
+                            }
+                        };
+                        let required = (usize::from(high) + 1)
+                            .checked_mul(base.components())
+                            .ok_or_else(images::image_limit)?;
+                        if table.len() < required {
+                            return Err(images::image_error(
+                                "Indexed palette is shorter than its high index",
+                            ));
+                        }
+                        Ok(ImageColorSpace::Indexed {
+                            base: Box::new(base),
+                            high,
+                            table,
+                        })
+                    }
+                    "ICCBased" => Err(images::unsupported_image("ICCBased color space conversion")),
+                    "CalGray" => {
+                        let dict = match items.get(1) {
+                            Some(value) => self.resolved_dict(value, "CalGray parameters")?,
+                            None => BTreeMap::new(),
+                        };
+                        let white =
+                            self.number_array_or(&dict, "WhitePoint", 3, &[0.9505, 1.0, 1.089])?;
+                        let gamma = self.number_or(&dict, "Gamma", 1.0)?;
+                        Ok(ImageColorSpace::CalGray {
+                            white: [white[0], white[1], white[2]],
+                            gamma,
+                        })
+                    }
+                    "CalRGB" => {
+                        let dict = match items.get(1) {
+                            Some(value) => self.resolved_dict(value, "CalRGB parameters")?,
+                            None => BTreeMap::new(),
+                        };
+                        let white =
+                            self.number_array_or(&dict, "WhitePoint", 3, &[0.9505, 1.0, 1.089])?;
+                        let gamma = self.number_array_or(&dict, "Gamma", 3, &[1.0, 1.0, 1.0])?;
+                        let matrix = self.number_array_or(
+                            &dict,
+                            "Matrix",
+                            9,
+                            &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                        )?;
+                        Ok(ImageColorSpace::CalRgb {
+                            white: [white[0], white[1], white[2]],
+                            gamma: [gamma[0], gamma[1], gamma[2]],
+                            matrix: [
+                                matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5],
+                                matrix[6], matrix[7], matrix[8],
+                            ],
+                        })
+                    }
+                    "Lab" => {
+                        let dict = match items.get(1) {
+                            Some(value) => self.resolved_dict(value, "Lab parameters")?,
+                            None => BTreeMap::new(),
+                        };
+                        let white =
+                            self.number_array_or(&dict, "WhitePoint", 3, &[0.9642, 1.0, 0.8249])?;
+                        let range = self.number_array_or(
+                            &dict,
+                            "Range",
+                            4,
+                            &[-100.0, 100.0, -100.0, 100.0],
+                        )?;
+                        Ok(ImageColorSpace::Lab {
+                            white: [white[0], white[1], white[2]],
+                            range: [range[0], range[1], range[2], range[3]],
+                        })
+                    }
+                    "Separation" | "DeviceN" | "N" | "Pattern" => {
+                        Err(images::unsupported_image(format!("color space {family}")))
+                    }
+                    other => Err(images::unsupported_image(format!("color space {other}"))),
+                }
+            }
+            _ => Err(malformed("ColorSpace must be a name or array")),
+        }
+    }
+
+    fn image_color_space_field(
+        &self,
+        dict: &BTreeMap<String, Value>,
+    ) -> Result<Option<ImageColorSpace>, DocsightError> {
+        match self.resolve_optional_field(dict, "ColorSpace")? {
+            None => Ok(None),
+            Some(value) => Ok(Some(self.image_color_space(&value)?)),
+        }
+    }
+
+    fn image_decode_range(
+        &self,
+        dict: &BTreeMap<String, Value>,
+        components: usize,
+        default_max: Option<f32>,
+    ) -> Result<Vec<images::DecodeRange>, DocsightError> {
+        match self.resolve_optional_field(dict, "Decode")? {
+            None => {
+                let mut ranges = images::default_decode_ranges(components);
+                if let Some(max) = default_max
+                    && let Some(first) = ranges.first_mut()
+                {
+                    *first = images::DecodeRange { min: 0.0, max };
+                }
+                Ok(ranges)
+            }
+            Some(Value::Array(items)) => {
+                let values = images::parse_decode_values(&items)?;
+                images::decode_ranges(&values, components)
+            }
+            Some(_) => Err(malformed("Decode must be an array")),
+        }
+    }
+
+    fn decode_alpha_stream(
         &self,
         mask: &StreamValue,
         width: u32,
         height: u32,
-    ) -> Option<Vec<u8>> {
-        let mask_width = match mask.dict.get("Width") {
-            Some(value) => match self.store.resolve(value) {
-                Ok(Value::Int(w)) if w > 0 && w as u32 == width => w as u32,
-                _ => return None,
-            },
-            None => return None,
-        };
-        let mask_height = match mask.dict.get("Height") {
-            Some(value) => match self.store.resolve(value) {
-                Ok(Value::Int(h)) if h > 0 && h as u32 == height => h as u32,
-                _ => return None,
-            },
-            None => return None,
-        };
-        let invert = match mask.dict.get("Decode") {
-            None | Some(Value::Null) => false,
-            Some(value) => match self.store.resolve(value) {
-                Ok(Value::Array(items)) if items.len() == 2 => {
-                    let values = items
-                        .iter()
-                        .map(pdf_number)
-                        .collect::<Result<Vec<_>, _>>()
-                        .ok()?;
-                    if values == [0.0, 1.0] {
-                        false
-                    } else if values == [1.0, 0.0] {
-                        true
-                    } else {
-                        return None;
+    ) -> Result<Vec<u8>, DocsightError> {
+        let mask_width = self
+            .resolve_int_field(&mask.dict, "Width")?
+            .ok_or_else(|| malformed("soft mask has no Width"))?;
+        let mask_height = self
+            .resolve_int_field(&mask.dict, "Height")?
+            .ok_or_else(|| malformed("soft mask has no Height"))?;
+        let (mask_width, mask_height) = images::check_dimensions(mask_width, mask_height)?;
+        if mask_width != width || mask_height != height {
+            return Err(images::image_error(format!(
+                "soft mask is {mask_width}x{mask_height}, image is {width}x{height}"
+            )));
+        }
+        if matches!(
+            self.resolve_optional_field(&mask.dict, "ImageMask")?,
+            Some(Value::Bool(true))
+        ) {
+            return Err(images::unsupported_image(
+                "stencil masks as soft mask sources",
+            ));
+        }
+        let (filter, parms) = self.parse_final_filter(&mask.dict)?;
+        let (samples, max_sample): (Vec<u16>, u16) = match filter.as_str() {
+            "DCTDecode" | "DCT" => {
+                let jpeg = decode_stream_without_final_filter(mask)?;
+                let decoded = docsight_core::decode_jpeg(&jpeg).map_err(|error| {
+                    images::image_error(format!("soft mask DCTDecode failed: {error}"))
+                })?;
+                if decoded.width != width || decoded.height != height {
+                    return Err(images::image_error(
+                        "soft mask JPEG dimensions do not match the image",
+                    ));
+                }
+                (
+                    decoded
+                        .rgba
+                        .chunks_exact(4)
+                        .map(|pixel| u16::from(pixel[0]))
+                        .collect(),
+                    255,
+                )
+            }
+            "JPXDecode" => {
+                let data = decode_stream_without_final_filter(mask)?;
+                let image = images::decode_jpx(&data)?;
+                if image.width != width || image.height != height {
+                    return Err(images::image_error(
+                        "soft mask JPX dimensions do not match the image",
+                    ));
+                }
+                if image.components != 1 {
+                    return Err(images::image_error(
+                        "soft mask JPX image must have a single component",
+                    ));
+                }
+                (image.data.into_iter().map(u16::from).collect(), 255)
+            }
+            "JBIG2Decode" => {
+                let data = decode_stream_without_final_filter(mask)?;
+                let globals = self.jbig2_globals(&parms)?;
+                (
+                    images::decode_jbig2(&data, globals.as_deref(), width, height)?
+                        .data
+                        .into_iter()
+                        .map(u16::from)
+                        .collect(),
+                    255,
+                )
+            }
+            "CCITTFaxDecode" | "CCF" => {
+                let data = decode_stream_without_final_filter(mask)?;
+                let settings = self.ccitt_settings(&parms, width, height)?;
+                (
+                    images::decode_ccitt(&data, settings, width, height)?
+                        .data
+                        .into_iter()
+                        .map(u16::from)
+                        .collect(),
+                    255,
+                )
+            }
+            _ => {
+                let space = self.image_color_space_field(&mask.dict)?;
+                match space {
+                    None | Some(ImageColorSpace::Gray) => {}
+                    Some(_) => {
+                        return Err(images::image_error(
+                            "soft mask color space must be DeviceGray",
+                        ));
                     }
                 }
-                _ => return None,
-            },
-        };
-        let filter_val = match mask.dict.get("Filter") {
-            Some(value) => match self.store.resolve(value) {
-                Ok(v) => v,
-                Err(_) => return None,
-            },
-            None => Value::Null,
-        };
-        let filter_name = match &filter_val {
-            Value::Name(name) => name.as_str(),
-            Value::Null => "",
-            Value::Array(items) => match items.last() {
-                Some(Value::Name(name)) => name.as_str(),
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let mut gray = match filter_name {
-            "DCTDecode" | "DCT" => {
-                let jpeg = filters::decode_stream_without_final_filter(mask).ok()?;
-                let decoded = docsight_core::decode_jpeg(&jpeg).ok()?;
-                if decoded.width != mask_width || decoded.height != mask_height {
-                    return None;
-                }
-                decoded
-                    .rgba
-                    .chunks_exact(4)
-                    .map(|px| px[0])
-                    .collect::<Vec<u8>>()
+                let bits = self
+                    .resolve_int_field(&mask.dict, "BitsPerComponent")?
+                    .unwrap_or(8);
+                let bits = u8::try_from(bits)
+                    .map_err(|_| malformed("soft mask BitsPerComponent is out of range"))?;
+                let decoded = decode_stream(mask)?;
+                (
+                    images::unpack_samples(&decoded, width, height, bits, 1)?,
+                    images::sample_max(bits)?,
+                )
             }
-            "FlateDecode" | "Fl" | "" => {
-                match mask.dict.get("ColorSpace") {
-                    Some(value) => match self.store.resolve(value) {
-                        Ok(Value::Name(ref name))
-                            if matches!(name.as_str(), "DeviceGray" | "G") => {}
-                        Ok(Value::Array(ref items)) if items.len() == 1 => match &items[0] {
-                            Value::Name(name) if matches!(name.as_str(), "DeviceGray" | "G") => {}
-                            _ => return None,
-                        },
-                        _ => return None,
-                    },
-                    None => return None,
-                }
-                match mask
-                    .dict
-                    .get("BitsPerComponent")
-                    .map(|value| self.store.resolve(value))
-                {
-                    Some(Ok(Value::Int(8))) => {}
-                    _ => return None,
-                }
-                let decompressed = decode_stream(mask).ok()?;
-                let count = (mask_width as usize).checked_mul(mask_height as usize)?;
-                if decompressed.len() != count {
-                    return None;
-                }
-                decompressed
-            }
-            _ => return None,
         };
-        if invert {
-            for byte in &mut gray {
-                *byte = 255 - *byte;
-            }
+        let ranges = self.image_decode_range(&mask.dict, 1, None)?;
+        let mut alpha = Vec::with_capacity(samples.len());
+        for sample in samples {
+            alpha.push(images::to_byte(ranges[0].apply(sample, max_sample)));
         }
-        Some(gray)
+        Ok(alpha)
     }
 
-    fn decode_image_xobject(&self, stream: &StreamValue) -> XObjectEntry {
-        let subtype = match stream.dict.get("Subtype") {
-            Some(Value::Name(subtype)) => subtype.as_str(),
-            _ => "",
-        };
-        if subtype != "Image" && !subtype.is_empty() {
-            return XObjectEntry::ImagePlaceholder;
+    fn jbig2_globals(&self, parms: &Value) -> Result<Option<Vec<u8>>, DocsightError> {
+        let dict = self.resolved_dict(parms, "JBIG2 DecodeParms")?;
+        match dict.get("JBIG2Globals") {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => match self.store.resolve(value)? {
+                Value::Stream(stream) => Ok(Some(decode_stream(&stream)?)),
+                _ => Err(malformed("JBIG2Globals must be a stream")),
+            },
         }
-        let smask_value = match stream.dict.get("SMask") {
-            None | Some(Value::Null) => None,
-            Some(value) => match self.store.resolve(value) {
-                Ok(Value::Null) => None,
-                Ok(Value::Name(ref name)) if name == "None" => None,
-                Ok(resolved) => Some(resolved),
-                Err(_) => return XObjectEntry::ImagePlaceholder,
-            },
-        };
-        if stream
-            .dict
-            .get("Mask")
-            .is_some_and(|v| !matches!(v, Value::Null))
-        {
-            return XObjectEntry::ImagePlaceholder;
+    }
+
+    fn ccitt_settings(
+        &self,
+        parms: &Value,
+        width: u32,
+        height: u32,
+    ) -> Result<hayro_ccitt::DecodeSettings, DocsightError> {
+        let dict = self.resolved_dict(parms, "CCITTFaxDecode DecodeParms")?;
+        let columns = self
+            .resolve_int_field(&dict, "Columns")?
+            .unwrap_or(i64::from(width));
+        let rows = self
+            .resolve_int_field(&dict, "Rows")?
+            .unwrap_or(i64::from(height));
+        let columns =
+            u32::try_from(columns).map_err(|_| malformed("CCITT Columns is out of range"))?;
+        let rows = u32::try_from(rows).map_err(|_| malformed("CCITT Rows is out of range"))?;
+        if columns != width || rows != height {
+            return Err(images::image_error(format!(
+                "CCITT Columns/Rows {columns}x{rows} do not match the image {width}x{height}"
+            )));
         }
-        if stream
-            .dict
-            .get("ImageMask")
-            .and_then(|val| self.store.resolve(val).ok())
-            == Some(Value::Bool(true))
-        {
-            return XObjectEntry::ImagePlaceholder;
+        let damaged = self
+            .resolve_int_field(&dict, "DamagedRowsBeforeError")?
+            .unwrap_or(0);
+        if damaged != 0 {
+            return Err(images::unsupported_image("CCITT DamagedRowsBeforeError"));
         }
-        let width = match stream.dict.get("Width") {
-            Some(w_val) => match self.store.resolve(w_val) {
-                Ok(Value::Int(w)) if w > 0 && w <= 16384 => w as u32,
-                _ => return XObjectEntry::ImagePlaceholder,
+        let k = self.resolve_int_field(&dict, "K")?.unwrap_or(0);
+        let encoding = match k {
+            k if k < 0 => hayro_ccitt::EncodingMode::Group4,
+            0 => hayro_ccitt::EncodingMode::Group3_1D,
+            k => hayro_ccitt::EncodingMode::Group3_2D {
+                k: u32::try_from(k).map_err(|_| malformed("CCITT K is out of range"))?,
             },
-            None => return XObjectEntry::ImagePlaceholder,
         };
-        let height = match stream.dict.get("Height") {
-            Some(h_val) => match self.store.resolve(h_val) {
-                Ok(Value::Int(h)) if h > 0 && h <= 16384 => h as u32,
-                _ => return XObjectEntry::ImagePlaceholder,
+        Ok(hayro_ccitt::DecodeSettings {
+            columns,
+            rows,
+            end_of_block: self.bool_field(&dict, "EndOfBlock", true)?,
+            end_of_line: self.bool_field(&dict, "EndOfLine", false)?,
+            rows_are_byte_aligned: self.bool_field(&dict, "EncodedByteAlign", false)?,
+            encoding,
+            invert_black: self.bool_field(&dict, "BlackIs1", false)?,
+        })
+    }
+
+    fn bool_field(
+        &self,
+        dict: &BTreeMap<String, Value>,
+        key: &str,
+        default: bool,
+    ) -> Result<bool, DocsightError> {
+        match dict.get(key) {
+            None | Some(Value::Null) => Ok(default),
+            Some(value) => match self.store.resolve(value)? {
+                Value::Bool(value) => Ok(value),
+                _ => Err(malformed(format!("{key} must be a boolean"))),
             },
-            None => return XObjectEntry::ImagePlaceholder,
-        };
-        let Some(pixels) = (width as u64).checked_mul(height as u64) else {
-            return XObjectEntry::ImagePlaceholder;
-        };
-        if pixels > raster::MAX_RASTER_PIXELS {
-            return XObjectEntry::ImagePlaceholder;
         }
-        let filter_val = match stream.dict.get("Filter") {
-            Some(val) => match self.store.resolve(val) {
-                Ok(v) => v,
-                Err(_) => return XObjectEntry::ImagePlaceholder,
-            },
-            None => Value::Null,
-        };
-        let filter_name = match &filter_val {
-            Value::Name(name) => name.as_str(),
-            Value::Null => "",
-            Value::Array(items) => match items.last() {
-                Some(Value::Name(name)) => name.as_str(),
-                _ => return XObjectEntry::ImagePlaceholder,
-            },
-            _ => return XObjectEntry::ImagePlaceholder,
-        };
-        let mask_alpha = match &smask_value {
+    }
+
+    fn decode_image_xobject(&self, stream: &StreamValue) -> Result<XObjectEntry, DocsightError> {
+        let dict = &stream.dict;
+        match self.resolve_optional_field(dict, "Subtype")? {
+            Some(Value::Name(name)) if name == "Image" => {}
+            Some(_) => {
+                return Err(malformed("XObject resource is neither Form nor Image"));
+            }
+            None => return Err(malformed("image XObject has no Subtype")),
+        }
+        if matches!(
+            self.resolve_optional_field(dict, "ImageMask")?,
+            Some(Value::Bool(true))
+        ) {
+            return Err(images::unsupported_image("stencil masks (ImageMask)"));
+        }
+        let width = self
+            .resolve_int_field(dict, "Width")?
+            .ok_or_else(|| malformed("image XObject has no Width"))?;
+        let height = self
+            .resolve_int_field(dict, "Height")?
+            .ok_or_else(|| malformed("image XObject has no Height"))?;
+        let (width, height) = images::check_dimensions(width, height)?;
+        let smask_alpha = match self.resolve_optional_field(dict, "SMask")? {
             None => None,
-            Some(Value::Stream(mask)) => match self.decode_soft_mask_alpha(mask, width, height) {
-                Some(alpha) => Some(alpha),
-                None => {
-                    return XObjectEntry::ImagePlaceholder;
-                }
-            },
-            Some(_) => return XObjectEntry::ImagePlaceholder,
+            Some(Value::Name(name)) if name == "None" => None,
+            Some(Value::Stream(mask)) => Some(self.decode_alpha_stream(&mask, width, height)?),
+            Some(_) => return Err(malformed("SMask must be a stream or None")),
         };
-        match filter_name {
+        let color_key_values = match self.resolve_optional_field(dict, "Mask")? {
+            None => None,
+            Some(Value::Stream(_)) => {
+                return Err(images::unsupported_image("explicit Mask streams"));
+            }
+            Some(Value::Array(items)) => {
+                let mut values = Vec::with_capacity(items.len());
+                for item in &items {
+                    let Value::Int(value) = self.store.resolve(item)? else {
+                        return Err(malformed("Mask color-key ranges must contain integers"));
+                    };
+                    values.push(
+                        u16::try_from(value)
+                            .map_err(|_| malformed("Mask color-key sample is out of range"))?,
+                    );
+                }
+                if values.len() % 2 != 0 {
+                    return Err(malformed("Mask color-key array must hold pairs"));
+                }
+                Some(values)
+            }
+            Some(_) => return Err(malformed("Mask must be a stream or an array")),
+        };
+        let (filter, parms) = self.parse_final_filter(dict)?;
+        match filter.as_str() {
             "DCTDecode" | "DCT" => {
-                if let Some(cs_val) = stream.dict.get("ColorSpace") {
-                    let Ok(resolved_cs) = self.store.resolve(cs_val) else {
-                        return XObjectEntry::ImagePlaceholder;
-                    };
-                    match resolved_cs {
-                        Value::Name(ref name)
-                            if matches!(
-                                name.as_str(),
-                                "DeviceRGB" | "RGB" | "DeviceGray" | "G"
-                            ) => {}
-                        Value::Array(ref items) if items.len() == 1 => match &items[0] {
-                            Value::Name(name)
-                                if matches!(
-                                    name.as_str(),
-                                    "DeviceRGB" | "RGB" | "DeviceGray" | "G"
-                                ) => {}
-                            _ => return XObjectEntry::ImagePlaceholder,
-                        },
-                        _ => return XObjectEntry::ImagePlaceholder,
-                    }
-                }
-                let Ok(jpeg_bytes) = filters::decode_stream_without_final_filter(stream) else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
-                let Ok(mut decoded) = docsight_core::decode_jpeg(&jpeg_bytes) else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
+                let jpeg = decode_stream_without_final_filter(stream)?;
+                let mut decoded = docsight_core::decode_jpeg(&jpeg)
+                    .map_err(|error| images::image_error(format!("DCTDecode failed: {error}")))?;
                 if decoded.width != width || decoded.height != height {
-                    return XObjectEntry::ImagePlaceholder;
+                    return Err(images::image_error(format!(
+                        "DCTDecode decodes {}x{}, image declares {width}x{height}",
+                        decoded.width, decoded.height
+                    )));
                 }
-                if let Some(alpha) = &mask_alpha {
-                    for (pixel, &a) in decoded.rgba.chunks_exact_mut(4).zip(alpha.iter()) {
-                        pixel[3] = a;
+                if color_key_values.is_some() {
+                    return Err(images::unsupported_image(
+                        "color-key masks on DCTDecode images",
+                    ));
+                }
+                if let Some(values) = self.resolve_optional_field(dict, "Decode")? {
+                    let items = match values {
+                        Value::Array(items) => items,
+                        _ => return Err(malformed("Decode must be an array")),
+                    };
+                    let numbers = images::parse_decode_values(&items)?;
+                    if numbers.chunks_exact(2).any(|pair| pair != [0.0, 1.0]) {
+                        return Err(images::unsupported_image(
+                            "non-identity Decode on DCTDecode images",
+                        ));
                     }
                 }
-                XObjectEntry::Image(std::sync::Arc::new(decoded))
+                if let Some(alpha) = &smask_alpha {
+                    for (pixel, &value) in decoded.rgba.chunks_exact_mut(4).zip(alpha.iter()) {
+                        pixel[3] =
+                            u8::try_from(u32::from(pixel[3]) * u32::from(value) / 255).unwrap_or(0);
+                    }
+                }
+                Ok(XObjectEntry::Image(std::sync::Arc::new(decoded)))
             }
-            "FlateDecode" | "Fl" | "" => {
-                let Some(cs_val) = stream.dict.get("ColorSpace") else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
-                let Ok(resolved_cs) = self.store.resolve(cs_val) else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
-                let is_rgb = match resolved_cs {
-                    Value::Name(ref name) if matches!(name.as_str(), "DeviceRGB" | "RGB") => true,
-                    Value::Name(ref name) if matches!(name.as_str(), "DeviceGray" | "G") => false,
-                    Value::Array(ref items) if items.len() == 1 => match &items[0] {
-                        Value::Name(name) if matches!(name.as_str(), "DeviceRGB" | "RGB") => true,
-                        Value::Name(name) if matches!(name.as_str(), "DeviceGray" | "G") => false,
-                        _ => return XObjectEntry::ImagePlaceholder,
-                    },
-                    _ => return XObjectEntry::ImagePlaceholder,
-                };
-                let Some(bpc_val) = stream.dict.get("BitsPerComponent") else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
-                let Ok(resolved_bpc) = self.store.resolve(bpc_val) else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
-                match resolved_bpc {
-                    Value::Int(8) => {}
-                    _ => return XObjectEntry::ImagePlaceholder,
+            "JPXDecode" => {
+                let data = decode_stream_without_final_filter(stream)?;
+                let image = images::decode_jpx(&data)?;
+                if image.width != width || image.height != height {
+                    return Err(images::image_error(format!(
+                        "JPXDecode decodes {}x{}, image declares {width}x{height}",
+                        image.width, image.height
+                    )));
                 }
-                let Ok(decompressed) = decode_stream(stream) else {
-                    return XObjectEntry::ImagePlaceholder;
-                };
-                let mut invert = false;
-                if let Some(dec_val) = stream.dict.get("Decode") {
-                    let Ok(resolved_dec) = self.store.resolve(dec_val) else {
-                        return XObjectEntry::ImagePlaceholder;
+                if let Some(space) = self.image_color_space_field(dict)?
+                    && space.components() != usize::from(image.components)
+                {
+                    return Err(images::image_error(
+                        "JPXDecode color space does not match the codestream",
+                    ));
+                }
+                if color_key_values.is_some() {
+                    return Err(images::unsupported_image(
+                        "color-key masks on JPXDecode images",
+                    ));
+                }
+                if let Some(values) = self.resolve_optional_field(dict, "Decode")? {
+                    let items = match values {
+                        Value::Array(items) => items,
+                        _ => return Err(malformed("Decode must be an array")),
                     };
-                    match resolved_dec {
-                        Value::Array(items) => {
-                            if is_rgb {
-                                if items.len() == 6 {
-                                    let Ok(nums) =
-                                        items.iter().map(pdf_number).collect::<Result<Vec<_>, _>>()
-                                    else {
-                                        return XObjectEntry::ImagePlaceholder;
-                                    };
-                                    if nums == [0.0, 1.0, 0.0, 1.0, 0.0, 1.0] {
-                                    } else if nums == [1.0, 0.0, 1.0, 0.0, 1.0, 0.0] {
-                                        invert = true;
-                                    } else {
-                                        return XObjectEntry::ImagePlaceholder;
-                                    }
-                                } else {
-                                    return XObjectEntry::ImagePlaceholder;
-                                }
-                            } else if items.len() == 2 {
-                                let Ok(nums) =
-                                    items.iter().map(pdf_number).collect::<Result<Vec<_>, _>>()
-                                else {
-                                    return XObjectEntry::ImagePlaceholder;
-                                };
-                                if nums == [0.0, 1.0] {
-                                } else if nums == [1.0, 0.0] {
-                                    invert = true;
-                                } else {
-                                    return XObjectEntry::ImagePlaceholder;
-                                }
-                            } else {
-                                return XObjectEntry::ImagePlaceholder;
-                            }
-                        }
-                        _ => return XObjectEntry::ImagePlaceholder,
+                    let numbers = images::parse_decode_values(&items)?;
+                    if numbers.chunks_exact(2).any(|pair| pair != [0.0, 1.0]) {
+                        return Err(images::unsupported_image(
+                            "non-identity Decode on JPXDecode images",
+                        ));
                     }
                 }
-                let pixel_count = match (width as usize).checked_mul(height as usize) {
-                    Some(count) => count,
-                    None => return XObjectEntry::ImagePlaceholder,
-                };
-                if is_rgb {
-                    let expected_bytes = match pixel_count.checked_mul(3) {
-                        Some(b) => b,
-                        None => return XObjectEntry::ImagePlaceholder,
-                    };
-                    if decompressed.len() != expected_bytes {
-                        return XObjectEntry::ImagePlaceholder;
-                    }
-                    let expected_rgba = match pixel_count.checked_mul(4) {
-                        Some(b) => b,
-                        None => return XObjectEntry::ImagePlaceholder,
-                    };
-                    let mut rgba = Vec::with_capacity(expected_rgba);
-                    for chunk in decompressed.chunks_exact(3) {
-                        let r = if invert { 255 - chunk[0] } else { chunk[0] };
-                        let g = if invert { 255 - chunk[1] } else { chunk[1] };
-                        let b = if invert { 255 - chunk[2] } else { chunk[2] };
-                        rgba.extend_from_slice(&[r, g, b, 255]);
-                    }
-                    if let Some(alpha) = &mask_alpha {
-                        for (pixel, &a) in rgba.chunks_exact_mut(4).zip(alpha.iter()) {
-                            pixel[3] = a;
-                        }
-                    }
-                    XObjectEntry::Image(std::sync::Arc::new(docsight_core::DecodedImage {
-                        width,
-                        height,
-                        rgba,
-                    }))
-                } else {
-                    if decompressed.len() != pixel_count {
-                        return XObjectEntry::ImagePlaceholder;
-                    }
-                    let expected_rgba = match pixel_count.checked_mul(4) {
-                        Some(b) => b,
-                        None => return XObjectEntry::ImagePlaceholder,
-                    };
-                    let mut rgba = Vec::with_capacity(expected_rgba);
-                    for &byte in &decompressed {
-                        let g = if invert { 255 - byte } else { byte };
-                        rgba.extend_from_slice(&[g, g, g, 255]);
-                    }
-                    if let Some(alpha) = &mask_alpha {
-                        for (pixel, &a) in rgba.chunks_exact_mut(4).zip(alpha.iter()) {
-                            pixel[3] = a;
-                        }
-                    }
-                    XObjectEntry::Image(std::sync::Arc::new(docsight_core::DecodedImage {
-                        width,
-                        height,
-                        rgba,
-                    }))
-                }
+                let combined = combine_alpha(image.alpha.as_deref(), smask_alpha.as_deref())?;
+                let rgba = images::codec_to_rgba(&image, combined.as_deref())?;
+                Ok(XObjectEntry::Image(std::sync::Arc::new(
+                    images::rgba_to_decoded(width, height, rgba)?,
+                )))
             }
-            _ => XObjectEntry::ImagePlaceholder,
+            "JBIG2Decode" => {
+                if let Some(space) = self.image_color_space_field(dict)? {
+                    match space {
+                        ImageColorSpace::Gray => {}
+                        _ => {
+                            return Err(images::image_error(
+                                "JBIG2Decode color space must be DeviceGray",
+                            ));
+                        }
+                    }
+                }
+                let data = decode_stream_without_final_filter(stream)?;
+                let globals = self.jbig2_globals(&parms)?;
+                let image = images::decode_jbig2(&data, globals.as_deref(), width, height)?;
+                let ranges = self.image_decode_range(dict, 1, None)?;
+                let samples: Vec<u16> = image
+                    .data
+                    .iter()
+                    .map(|&value| u16::from(value / 255))
+                    .collect();
+                let color_key = color_key_values
+                    .as_ref()
+                    .map(|values| color_key_ranges(values, 1, 1))
+                    .transpose()?;
+                let rgba = images::rgba_from_samples(images::SampleRender {
+                    width,
+                    height,
+                    samples: &samples,
+                    bits: 1,
+                    space: &ImageColorSpace::Gray,
+                    ranges: &ranges,
+                    alpha: smask_alpha.as_deref(),
+                    color_key: color_key.as_deref(),
+                })?;
+                Ok(XObjectEntry::Image(std::sync::Arc::new(
+                    images::rgba_to_decoded(width, height, rgba)?,
+                )))
+            }
+            "CCITTFaxDecode" | "CCF" => {
+                if let Some(space) = self.image_color_space_field(dict)? {
+                    match space {
+                        ImageColorSpace::Gray => {}
+                        _ => {
+                            return Err(images::image_error(
+                                "CCITTFaxDecode color space must be DeviceGray",
+                            ));
+                        }
+                    }
+                }
+                let data = decode_stream_without_final_filter(stream)?;
+                let settings = self.ccitt_settings(&parms, width, height)?;
+                let image = images::decode_ccitt(&data, settings, width, height)?;
+                let ranges = self.image_decode_range(dict, 1, None)?;
+                let samples: Vec<u16> = image
+                    .data
+                    .iter()
+                    .map(|&value| u16::from(value / 255))
+                    .collect();
+                let color_key = color_key_values
+                    .as_ref()
+                    .map(|values| color_key_ranges(values, 1, 1))
+                    .transpose()?;
+                let rgba = images::rgba_from_samples(images::SampleRender {
+                    width,
+                    height,
+                    samples: &samples,
+                    bits: 1,
+                    space: &ImageColorSpace::Gray,
+                    ranges: &ranges,
+                    alpha: smask_alpha.as_deref(),
+                    color_key: color_key.as_deref(),
+                })?;
+                Ok(XObjectEntry::Image(std::sync::Arc::new(
+                    images::rgba_to_decoded(width, height, rgba)?,
+                )))
+            }
+            "" | "FlateDecode" | "Fl" | "LZWDecode" | "LZW" | "RunLengthDecode" | "RL"
+            | "ASCII85Decode" | "A85" | "ASCIIHexDecode" | "AHx" => {
+                let space = self
+                    .image_color_space_field(dict)?
+                    .ok_or_else(|| malformed("image XObject has no ColorSpace"))?;
+                let components = space.components();
+                let bits = match self.resolve_int_field(dict, "BitsPerComponent")? {
+                    Some(bits) => u8::try_from(bits)
+                        .map_err(|_| malformed("BitsPerComponent is out of range"))?,
+                    None => {
+                        return Err(malformed("image XObject has no BitsPerComponent"));
+                    }
+                };
+                let data = decode_stream(stream)?;
+                let samples = images::unpack_samples(&data, width, height, bits, components)?;
+                let max_sample = images::sample_max(bits)?;
+                let default_max = match &space {
+                    ImageColorSpace::Indexed { .. } => Some(f32::from(max_sample)),
+                    _ => None,
+                };
+                let ranges = self.image_decode_range(dict, components, default_max)?;
+                let color_key = color_key_values
+                    .as_ref()
+                    .map(|values| color_key_ranges(values, components, max_sample))
+                    .transpose()?;
+                let rgba = images::rgba_from_samples(images::SampleRender {
+                    width,
+                    height,
+                    samples: &samples,
+                    bits,
+                    space: &space,
+                    ranges: &ranges,
+                    alpha: smask_alpha.as_deref(),
+                    color_key: color_key.as_deref(),
+                })?;
+                Ok(XObjectEntry::Image(std::sync::Arc::new(
+                    images::rgba_to_decoded(width, height, rgba)?,
+                )))
+            }
+            other => Err(images::unsupported_image(format!("stream filter {other}"))),
         }
     }
 
@@ -1037,21 +1399,16 @@ impl<'a> PdfDocument<'a> {
             let page_record = self.page_record(page_num)?;
             let parsed = self.parse_page(page_num)?;
             if parsed.approximated_font {
-                all_warnings.push(font_approximation_warning(page_num));
-            }
-            if parsed.omitted_xobjects {
-                all_warnings.push(xobject_placeholder_warning(page_num));
+                all_warnings.push(font_outline_warning(page_num));
             }
             if parsed.unmapped_text_codes {
                 all_warnings.push(unmapped_text_warning(page_num));
             }
-            let has_images = parsed.commands.iter().any(|c| {
-                matches!(
-                    c,
-                    DisplayCommand::Figure { .. } | DisplayCommand::Image { .. }
-                )
-            });
-            if parsed.text_runs.is_empty() && (has_images || parsed.omitted_xobjects) {
+            let has_images = parsed
+                .commands
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::Image { .. }));
+            if parsed.text_runs.is_empty() && has_images {
                 all_warnings.push(no_text_layer_warning(page_num));
             }
             let reconstructed = reconstruction::reconstruct_page_semantics(
@@ -1140,10 +1497,7 @@ impl<'a> PdfDocument<'a> {
         let parsed = self.parse_page(number)?;
         let mut warnings = Vec::new();
         if parsed.approximated_font {
-            warnings.push(font_approximation_warning(number));
-        }
-        if parsed.omitted_xobjects {
-            warnings.push(xobject_placeholder_warning(number));
+            warnings.push(font_outline_warning(number));
         }
         if parsed.unmapped_text_codes {
             warnings.push(unmapped_text_warning(number));
@@ -1241,7 +1595,6 @@ impl<'a> PdfDocument<'a> {
             commands: parsed.commands,
             text_runs: parsed.text_runs,
             approximated_font: parsed.approximated_font,
-            omitted_xobjects: parsed.omitted_xobjects,
             page_visual_issues: parsed.page_visual_issues,
             unmapped_text_codes: parsed.unmapped_text_codes,
             trace_resources,
@@ -1347,7 +1700,6 @@ struct ParsedPage {
     commands: Vec<DisplayCommand>,
     text_runs: Vec<TextRun>,
     approximated_font: bool,
-    omitted_xobjects: bool,
     unmapped_text_codes: bool,
     page_visual_issues: Vec<VisualIssue>,
     trace_resources: Vec<PdfTraceResource>,
@@ -1506,13 +1858,7 @@ fn trace_display_operation(command: &DisplayCommand) -> PdfTraceDisplayOperation
             dash_phase_pt: style.dash_phase,
             clips: trace_clips(clips),
         },
-        DisplayCommand::Figure {
-            bbox,
-            resource_name,
-            clips,
-            ..
-        }
-        | DisplayCommand::Image {
+        DisplayCommand::Image {
             bbox,
             resource_name,
             clips,
@@ -1897,6 +2243,56 @@ fn info_unreadable_warning(error: &DocsightError) -> Diagnostic {
     )
 }
 
+fn combine_alpha(
+    base: Option<&[u8]>,
+    extra: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, DocsightError> {
+    match (base, extra) {
+        (None, None) => Ok(None),
+        (Some(values), None) | (None, Some(values)) => Ok(Some(values.to_vec())),
+        (Some(base), Some(extra)) => {
+            if base.len() != extra.len() {
+                return Err(images::image_error(
+                    "alpha buffers have different sample counts",
+                ));
+            }
+            let mut combined = vec![0_u8; base.len()];
+            for (slot, (&left, &right)) in combined.iter_mut().zip(base.iter().zip(extra.iter())) {
+                *slot = u8::try_from(u16::from(left) * u16::from(right) / 255)
+                    .map_err(|_| images::image_error("combined alpha sample is out of range"))?;
+            }
+            Ok(Some(combined))
+        }
+    }
+}
+
+fn color_key_ranges(
+    values: &[u16],
+    components: usize,
+    max_sample: u16,
+) -> Result<Vec<images::ColorKeyRange>, DocsightError> {
+    if values.len() != components * 2 {
+        return Err(malformed(format!(
+            "Mask color-key array must hold {} values",
+            components * 2
+        )));
+    }
+    values
+        .chunks_exact(2)
+        .map(|pair| {
+            if pair[0] > pair[1] || pair[1] > max_sample {
+                return Err(malformed(
+                    "Mask color-key range is outside the sample domain or reversed",
+                ));
+            }
+            Ok(images::ColorKeyRange {
+                min: pair[0],
+                max: pair[1],
+            })
+        })
+        .collect()
+}
+
 fn header_offset_warning(offset: usize) -> Diagnostic {
     Diagnostic::warning(
         "PDF_HEADER_OFFSET",
@@ -1905,26 +2301,16 @@ fn header_offset_warning(offset: usize) -> Diagnostic {
     )
 }
 
-fn font_approximation_warning(page: u32) -> Diagnostic {
+fn font_outline_warning(page: u32) -> Diagnostic {
     Diagnostic {
-        code: "APPROXIMATED_PDF_FONT".to_owned(),
+        code: "PDF_FONT_OUTLINE_MISSING".to_owned(),
         severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} contains text without an embedded TrueType outline"),
-        effect: "the renderer uses the declared deterministic fallback glyph set for that font"
-            .to_owned(),
-        object: None,
-        page: Some(page),
-        occurrences: None,
-    }
-}
-
-fn xobject_placeholder_warning(page: u32) -> Diagnostic {
-    Diagnostic {
-        code: "PDF_XOBJECT_PLACEHOLDER".to_owned(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("page {page} places an image XObject as a figure placeholder"),
-        effect: "the image pixels are not decoded; form XObjects are traversed and their text is extracted"
-            .to_owned(),
+        message: format!(
+            "page {page} contains text whose font program does not provide glyph outlines"
+        ),
+        effect:
+            "the text layer stays exact, but rasterizing this page fails without the font outlines"
+                .to_owned(),
         object: None,
         page: Some(page),
         occurrences: None,
@@ -1972,12 +2358,7 @@ fn graphics_state_visual_warnings(
 fn command_visual_evidence(command: &DisplayCommand) -> (&[VisualIssue], Option<Rect>) {
     match command {
         DisplayCommand::Text(run) => (&run.visual_issues, Some(run.bbox)),
-        DisplayCommand::Figure {
-            bbox,
-            visual_issues,
-            ..
-        }
-        | DisplayCommand::Image {
+        DisplayCommand::Image {
             bbox,
             visual_issues,
             ..
@@ -2189,5 +2570,37 @@ fn destination_name(value: &Value) -> Option<String> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::combine_alpha;
+    use docsight_core::DocsightError;
+
+    #[test]
+    fn alpha_combination_preserves_every_sample() -> Result<(), DocsightError> {
+        let base = [0, 255, 128];
+        let extra = [255, 128, 128];
+        assert_eq!(combine_alpha(None, None)?, None);
+        assert_eq!(combine_alpha(Some(&base), None)?, Some(base.to_vec()));
+        assert_eq!(combine_alpha(None, Some(&extra))?, Some(extra.to_vec()));
+        assert_eq!(
+            combine_alpha(Some(&base), Some(&extra))?,
+            Some(vec![0, 128, 64])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn alpha_combination_rejects_different_sample_counts() {
+        assert!(matches!(
+            combine_alpha(Some(&[255]), Some(&[])),
+            Err(DocsightError::MalformedDocument { .. })
+        ));
+        assert!(matches!(
+            combine_alpha(Some(&[255]), Some(&[0, 255])),
+            Err(DocsightError::MalformedDocument { .. })
+        ));
     }
 }

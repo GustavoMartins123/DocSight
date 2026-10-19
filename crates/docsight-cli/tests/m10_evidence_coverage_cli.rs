@@ -80,15 +80,15 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::Error>> {
-    let pdf_path = fixture("sample_table_ruled.pdf");
+    let pdf_path = fixture("sample_render.pdf");
     let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
+    let object = "p_1051e51c57d96b53d7e64049ee91a305";
 
-    let output = docsight()
-        .args(["evidence", pdf_str, "p_c7f2cbe563d57330ee6d1a3578bfe5d7"])
-        .output()?;
+    let output = docsight().args(["evidence", pdf_str, object]).output()?;
     assert!(output.status.success());
+    assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("Evidence for p_c7f2cbe563d57330ee6d1a3578bfe5d7:"));
+    assert!(stdout.contains(&format!("Evidence for {object}:")));
     assert!(stdout.contains("Kind:              Paragraph"));
     assert!(stdout.contains("Source Path:       pdf::page[1]::content"));
     assert!(stdout.contains("Page:              1"));
@@ -96,17 +96,12 @@ fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::
     assert!(stdout.contains("Render Hash:"));
 
     let json_output = docsight()
-        .args([
-            "evidence",
-            pdf_str,
-            "p_c7f2cbe563d57330ee6d1a3578bfe5d7",
-            "--json",
-        ])
+        .args(["evidence", pdf_str, object, "--json"])
         .output()?;
     assert!(json_output.status.success());
     let val: serde_json::Value = serde_json::from_slice(&json_output.stdout)?;
     let result = &val["result"];
-    assert_eq!(result["object_id"], "p_c7f2cbe563d57330ee6d1a3578bfe5d7");
+    assert_eq!(result["object_id"], object);
     assert!((result["confidence"].as_f64().ok_or("missing")? - 0.85).abs() < 0.01);
     assert_eq!(result["source_path"], "pdf::page[1]::content");
     let offset = result["source_offset"].as_u64().ok_or("missing offset")?;
@@ -116,13 +111,55 @@ fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::
         (structure - 0.85).abs() < 0.01,
         "structure is the inference confidence"
     );
+    assert_eq!(result["fidelity"]["visual"], 1.0);
+    assert!(!result["render_fingerprint"].is_null());
+
+    Ok(())
+}
+
+#[test]
+fn evidence_pdf_without_glyph_outlines_reports_missing_render_fingerprint()
+-> Result<(), Box<dyn std::error::Error>> {
+    let pdf_path = fixture("sample_table_ruled.pdf");
+    let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
+    let object = "p_c7f2cbe563d57330ee6d1a3578bfe5d7";
+
+    let output = docsight().args(["evidence", pdf_str, object]).output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains(&format!("Evidence for {object}:")));
+    assert!(stdout.contains("Confidence:        0.850"));
+    assert!(!stdout.contains("Render Hash:"));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("PDF_FONT_OUTLINE_MISSING"));
+    assert!(stderr.contains("RENDER_FINGERPRINT_UNAVAILABLE"));
+
+    let json_output = docsight()
+        .args(["evidence", pdf_str, object, "--json"])
+        .output()?;
+    assert!(json_output.status.success());
+    let val: serde_json::Value = serde_json::from_slice(&json_output.stdout)?;
+    let result = &val["result"];
+    assert_eq!(result["object_id"], object);
     assert_eq!(result["fidelity"]["visual"], 0.0);
+    assert!(result["render_fingerprint"].is_null());
     assert!(
         result["fidelity"]["reasons"]
             .as_array()
             .ok_or("reasons")?
             .iter()
-            .any(|reason| reason == "APPROXIMATED_PDF_FONT")
+            .any(|reason| reason == "PDF_FONT_OUTLINE_MISSING")
+    );
+    let warnings = val["warnings"].as_array().ok_or("warnings")?;
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning["code"] == "PDF_FONT_OUTLINE_MISSING")
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning["code"] == "RENDER_FINGERPRINT_UNAVAILABLE")
     );
 
     Ok(())

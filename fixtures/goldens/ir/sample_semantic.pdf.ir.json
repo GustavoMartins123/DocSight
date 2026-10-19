@@ -411,9 +411,9 @@
   },
   "warnings": [
     {
-      "code": "APPROXIMATED_PDF_FONT",
-      "effect": "the renderer uses the declared deterministic fallback glyph set for that font",
-      "message": "page 1 contains text without an embedded TrueType outline",
+      "code": "PDF_FONT_OUTLINE_MISSING",
+      "effect": "the text layer stays exact, but rasterizing this page fails without the font outlines",
+      "message": "page 1 contains text whose font program does not provide glyph outlines",
       "page": 1,
       "severity": "warning"
     }

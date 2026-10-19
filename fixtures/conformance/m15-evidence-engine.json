@@ -397,16 +397,16 @@
   ],
   "pdf": {
     "coverage": {
-      "affected_objects_count": 1,
-      "document_sha256": "2487e7c70b23141a5feefa476e1fce061de8093ee9e7d4eb061541871547ad6e",
+      "affected_objects_count": 6,
+      "document_sha256": "2e7ac59813e515ba7adbdd098fe054d56a42d40238d57e91ca05606e6ee7e9d3",
       "format": "pdf",
       "global": {
         "geometry": {
           "reason_codes": [],
-          "score": 0.0,
-          "status": "unsupported"
+          "score": 1.0,
+          "status": "exact"
         },
-        "overall_fidelity": 0.4977499842643738,
+        "overall_fidelity": 0.9728928804397584,
         "page": 0,
         "resource": {
           "reason_codes": [],
@@ -415,7 +415,7 @@
         },
         "structure": {
           "reason_codes": [],
-          "score": 0.99099999666214,
+          "score": 0.8915714621543884,
           "status": "inferred"
         },
         "text": {
@@ -424,28 +424,98 @@
           "status": "exact"
         },
         "visual": {
-          "reason_codes": [
-            "APPROXIMATED_PDF_FONT"
-          ],
-          "score": 0.0,
-          "status": "unsupported"
+          "reason_codes": [],
+          "score": 1.0,
+          "status": "exact"
         }
       },
       "pages": [
         {
           "geometry": {
             "reason_codes": [],
-            "score": 0.0,
-            "status": "unsupported"
+            "score": 1.0,
+            "status": "exact"
           },
-          "overall_fidelity": 0.4977499842643738,
+          "overall_fidelity": 0.9728928804397584,
           "page": 1,
           "regions": [
             {
-              "description": "the page is not backed by source-faithful geometry or rendering",
+              "bbox": {
+                "x0": 50.0,
+                "x1": 341.6000061035156,
+                "y0": 47.5999755859375,
+                "y1": 65.5999755859375
+              },
+              "description": "semantic structure inferred with confidence 0.900",
+              "object_id": "h_b3f0ab785422541f419eb121b35f330e",
               "page": 1,
-              "reason_code": "APPROXIMATED_PDF_FONT",
-              "status": "unsupported"
+              "reason_code": "INFERRED_SEMANTICS",
+              "status": "inferred"
+            },
+            {
+              "bbox": {
+                "x0": 50.0,
+                "x1": 201.20001220703125,
+                "y0": 100.79998779296876,
+                "y1": 114.79998779296876
+              },
+              "description": "semantic structure inferred with confidence 0.900",
+              "object_id": "h_3a3e7e69556490037bb07f078a060c05",
+              "page": 1,
+              "reason_code": "INFERRED_SEMANTICS",
+              "status": "inferred"
+            },
+            {
+              "bbox": {
+                "x0": 50.0,
+                "x1": 464.0000305175781,
+                "y0": 134.0,
+                "y1": 159.0
+              },
+              "description": "semantic structure inferred with confidence 0.850",
+              "object_id": "p_1051e51c57d96b53d7e64049ee91a305",
+              "page": 1,
+              "reason_code": "INFERRED_SEMANTICS",
+              "status": "inferred"
+            },
+            {
+              "bbox": {
+                "x0": 50.0,
+                "x1": 234.8000030517578,
+                "y0": 190.79998779296875,
+                "y1": 204.79998779296875
+              },
+              "description": "semantic structure inferred with confidence 0.900",
+              "object_id": "h_c074967d69086082ac8c6bf2418cc00b",
+              "page": 1,
+              "reason_code": "INFERRED_SEMANTICS",
+              "status": "inferred"
+            },
+            {
+              "bbox": {
+                "x0": 50.0,
+                "x1": 428.0,
+                "y0": 224.0,
+                "y1": 234.0
+              },
+              "description": "semantic structure inferred with confidence 0.850",
+              "object_id": "p_25f793f6ef5a2ebedfdd9c13bf69fe25",
+              "page": 1,
+              "reason_code": "INFERRED_SEMANTICS",
+              "status": "inferred"
+            },
+            {
+              "bbox": {
+                "x0": 50.0,
+                "x1": 530.0,
+                "y0": 394.0,
+                "y1": 404.0
+              },
+              "description": "semantic structure inferred with confidence 0.850",
+              "object_id": "p_744564a95205b538068ace336356aede",
+              "page": 1,
+              "reason_code": "INFERRED_SEMANTICS",
+              "status": "inferred"
             }
           ],
           "resource": {
@@ -455,7 +525,7 @@
           },
           "structure": {
             "reason_codes": [],
-            "score": 0.99099999666214,
+            "score": 0.8915714621543884,
             "status": "inferred"
           },
           "text": {
@@ -464,61 +534,55 @@
             "status": "exact"
           },
           "visual": {
-            "reason_codes": [
-              "APPROXIMATED_PDF_FONT"
-            ],
-            "score": 0.0,
-            "status": "unsupported"
+            "reason_codes": [],
+            "score": 1.0,
+            "status": "exact"
           }
         }
       ],
       "reason_codes": [
-        "APPROXIMATED_PDF_FONT"
+        "INFERRED_SEMANTICS"
       ],
-      "unsupported_feature_count": 1
+      "unsupported_feature_count": 0
     },
     "evidence": {
       "document": {
-        "id": "doc_2487e7c70b23141a5feefa476e1fce06",
-        "sha256": "2487e7c70b23141a5feefa476e1fce061de8093ee9e7d4eb061541871547ad6e"
+        "id": "doc_2e7ac59813e515ba7adbdd098fe054d5",
+        "sha256": "2e7ac59813e515ba7adbdd098fe054d56a42d40238d57e91ca05606e6ee7e9d3"
       },
       "result": {
         "bbox": {
-          "x0": 50.11625671386719,
-          "x1": 741.8837890625,
-          "y0": 53.71624755859375,
-          "y1": 351.6473083496094
+          "x0": 50.0,
+          "x1": 250.0,
+          "y0": 302.0,
+          "y1": 362.0
         },
         "confidence": 0.99099999666214,
-        "document_digest": "2487e7c70b23141a5feefa476e1fce061de8093ee9e7d4eb061541871547ad6e",
+        "document_digest": "2e7ac59813e515ba7adbdd098fe054d56a42d40238d57e91ca05606e6ee7e9d3",
         "fidelity": {
-          "geometry": 0.0,
-          "reasons": [
-            "APPROXIMATED_PDF_FONT"
-          ],
+          "geometry": 1.0,
+          "reasons": [],
           "structure": 0.99099999666214,
           "text": 1.0,
-          "visual": 0.0
+          "visual": 1.0
         },
         "kind": "table",
-        "object_id": "tbl_4a65916a4d36e2ccc570158c5302585f",
+        "object_id": "tbl_3feaa3e9f1be31ac41d788641028bd8a",
         "page": 1,
-        "reading_order": 1,
-        "render_fingerprint": "042d618d1d038bb2890cd3df1f7fc5083d96b8f59d73bff5464982371a9328e4",
+        "reading_order": 6,
+        "render_fingerprint": "e16b9b3b7652caa6db4a8330aec773858b0dbab5f3309cfb152091124b4c1fc4",
         "source_path": "pdf::page[1]::table[0]::ruled",
-        "text_fragment": "\t\tEVENT A: 05/09\tEVENT B: 17/09\t\tEVENT C: 26/09\t\t\nGRUPO:\tORBITA\tLOTE:\t47\t\t\t\t\t\t\t\t\nID\tA1\tR1\tA2\tR2\tA3\tR3\tA4\tR4\tA5\tR5\t\n1\t3,8\t10,0\t8,0\t9,0\t2,9\t14,3\t\t\t\t\t\n2\t18,0\t10,0\t5,2\t4,6\t13,8\t13,0\t\t\t\t\t\n3\t5,9\t7,0\t10,5\t14,7\t4,7\t2,9\t\t\t\t\t\n4\t9,0\t5,7\t17,0\t3,8\t13,0\t14,9\t\t\t\t\t\n5\t6,1\t13,2\t14,8\t13,8\t18,4\t5,9\t\t\t\t\t\n6\t8,2\t15,2\t17,4...",
+        "text_fragment": "Metric\tScore\nLatency\t12ms",
         "z_index": 0
       },
-      "warnings": [
-        "APPROXIMATED_PDF_FONT"
-      ]
+      "warnings": []
     },
     "render": {
       "bbox": {
         "x0": 0.0,
-        "x1": 792.0,
+        "x1": 595.0,
         "y0": 0.0,
-        "y1": 612.0
+        "y1": 842.0
       },
       "decision_coverage": {
         "display_list_operations": "verified",
@@ -528,25 +592,23 @@
         "resolved_resources": "verified",
         "table_sizing": "not_applicable"
       },
-      "display_list_sha256": "40686718fe72f069d798bd4f60c8af49da55286d21e2804af08ad14e5850e5be",
-      "display_operation_count": 183,
+      "display_list_sha256": "ad8b93b0f1e831ee0dd91bef5a795f22edc12b82a83c85a6a95540f879a1c498",
+      "display_operation_count": 17,
       "document": {
-        "id": "doc_2487e7c70b23141a5feefa476e1fce06",
-        "sha256": "2487e7c70b23141a5feefa476e1fce061de8093ee9e7d4eb061541871547ad6e"
+        "id": "doc_2e7ac59813e515ba7adbdd098fe054d5",
+        "sha256": "2e7ac59813e515ba7adbdd098fe054d56a42d40238d57e91ca05606e6ee7e9d3"
       },
       "dpi": 36,
-      "glyph_run_count": 158,
-      "height_px": 306,
+      "glyph_run_count": 11,
+      "height_px": 421,
       "page": 1,
       "pagination_decision_count": 0,
-      "raster_sha256": "6caf9ff8a1810729255450db425619f186562213da234bf950eac1d81c215fec",
-      "resource_count": 4,
+      "raster_sha256": "6509c5a51522627a07fb9d80fde5cefbffc453dc7ffffd43e54b2ec79718d1ce",
+      "resource_count": 2,
       "table_sizing_decision_count": 0,
-      "trace_sha256": "cd57ad25b9d22a0ff01e80d00befe62784b3ec0090536d71a665ee518f294932",
-      "warnings": [
-        "APPROXIMATED_PDF_FONT"
-      ],
-      "width_px": 396
+      "trace_sha256": "ee17724a78c4cd6a0ce1ec7b5a661c9a9c68a3c18679774d8b13a4a75dfd2cc1",
+      "warnings": [],
+      "width_px": 298
     },
     "replay": {
       "decision_coverage": {
@@ -560,9 +622,9 @@
       "target": {
         "bbox": {
           "x0": 0.0,
-          "x1": 792.0,
+          "x1": 595.0,
           "y0": 0.0,
-          "y1": 612.0
+          "y1": 842.0
         },
         "dpi": 36,
         "page": 1,
@@ -573,16 +635,14 @@
       },
       "trace_schema": "docsight.trace/v2",
       "verification": {
-        "display_list_sha256": "40686718fe72f069d798bd4f60c8af49da55286d21e2804af08ad14e5850e5be",
-        "document_sha256": "2487e7c70b23141a5feefa476e1fce061de8093ee9e7d4eb061541871547ad6e",
-        "raster_sha256": "6caf9ff8a1810729255450db425619f186562213da234bf950eac1d81c215fec",
+        "display_list_sha256": "ad8b93b0f1e831ee0dd91bef5a795f22edc12b82a83c85a6a95540f879a1c498",
+        "document_sha256": "2e7ac59813e515ba7adbdd098fe054d56a42d40238d57e91ca05606e6ee7e9d3",
+        "raster_sha256": "6509c5a51522627a07fb9d80fde5cefbffc453dc7ffffd43e54b2ec79718d1ce",
         "schema": "docsight.trace/v2",
-        "trace_sha256": "cd57ad25b9d22a0ff01e80d00befe62784b3ec0090536d71a665ee518f294932",
+        "trace_sha256": "ee17724a78c4cd6a0ce1ec7b5a661c9a9c68a3c18679774d8b13a4a75dfd2cc1",
         "valid": true
       },
-      "warnings": [
-        "APPROXIMATED_PDF_FONT"
-      ]
+      "warnings": []
     }
   },
   "public_schemas": [

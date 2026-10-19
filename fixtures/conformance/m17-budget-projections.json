@@ -67,8 +67,8 @@
       ],
       "returned_items": 6,
       "selected_profile": "compact",
-      "stdout_bytes": 2940,
-      "stdout_sha256": "5ef6893627d00b0e271a94a3266be1b0092f4ddb41e5ca2432bb3be275ab28d7",
+      "stdout_bytes": 2965,
+      "stdout_sha256": "9a9e4bab102b3a3e3693a5a32387d74d39bdcf56834dc0ea9514f59ce9890704",
       "total_items": 7,
       "truncated": true
     }
