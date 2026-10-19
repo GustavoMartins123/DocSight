@@ -243,7 +243,12 @@ fn only_newer_packages_for_the_native_host_are_updates() -> TestResult {
         code(verify(Engine::compatible(), &previous, &previous)),
         Some("NOT_AN_UPDATE")
     );
-    let foreign = fixture.package("aarch64-apple-darwin", "foreign")?;
+    let native = native_target()?;
+    let foreign_target = xtask::release::TARGETS
+        .into_iter()
+        .find(|target| *target != native)
+        .ok_or("foreign release target")?;
+    let foreign = fixture.package(foreign_target, "foreign")?;
     let foreign_candidate = relabel(&foreign, "0.1.5")?;
     assert_eq!(
         code(verify(Engine::compatible(), &foreign, &foreign_candidate)),

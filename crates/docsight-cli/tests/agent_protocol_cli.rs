@@ -94,8 +94,8 @@ fn ndjson_is_honored_by_single_result_commands() -> Result<(), Box<dyn std::erro
     let tables = tables_fixture();
     let headings_str = headings.to_str().ok_or("invalid headings path")?;
     let tables_str = tables.to_str().ok_or("invalid tables path")?;
-    let heading_id = "h_515ad605791c12fc496c1c18d79f6526";
-    let table_id = "tbl_6c22c8dd17adf7e32604b29241d9ab99";
+    let heading_id = "h_11ff36836ef204cec23ee89837654132";
+    let table_id = "tbl_6fde9f50d14887bd230e213c487c1941";
     let temp_dir = tempfile::tempdir()?;
 
     assert_ndjson_event(
@@ -720,7 +720,7 @@ fn max_bytes_never_emits_oversized_single_item() -> Result<(), Box<dyn std::erro
         let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
         assert!(value["limits"]["truncated"] == true);
         assert!(value["limits"]["warnings_truncated"] == true);
-        assert_eq!(value["limits"]["total_warnings"], 2);
+        assert_eq!(value["limits"]["total_warnings"], 1);
     } else {
         assert_eq!(out.status.code(), Some(2));
     }
@@ -745,11 +745,11 @@ fn max_bytes_truncates_warnings_without_losing_single_result()
     let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
     assert_eq!(value["limits"]["truncated"], false);
     assert_eq!(value["limits"]["warnings_truncated"], true);
-    assert_eq!(value["limits"]["total_warnings"], 2);
+    assert_eq!(value["limits"]["total_warnings"], 1);
     let returned = value["limits"]["returned_warnings"]
         .as_u64()
         .ok_or("returned_warnings")?;
-    assert!(returned < 2, "warnings must be dropped under the byte cap");
+    assert!(returned < 1, "warnings must be dropped under the byte cap");
     assert!(
         value["result"]["format"].is_string(),
         "the single result must survive warning truncation"
@@ -843,7 +843,7 @@ fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::err
     assert_eq!(done["type"], "done");
     assert_eq!(done["limits"]["truncated"], true);
     assert_eq!(done["limits"]["warnings_truncated"], true);
-    assert_eq!(done["limits"]["total_warnings"], 2);
+    assert_eq!(done["limits"]["total_warnings"], 1);
     let returned = done["limits"]["returned_warnings"]
         .as_u64()
         .ok_or("returned_warnings")?;
@@ -851,7 +851,7 @@ fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::err
         .iter()
         .filter(|record| record["type"] == "warning")
         .count();
-    assert!(returned < 2, "warnings must be dropped under the byte cap");
+    assert!(returned < 1, "warnings must be dropped under the byte cap");
     assert_eq!(
         returned, emitted as u64,
         "returned_warnings must match the warning records actually streamed"

@@ -845,16 +845,16 @@ fn rejects_non_numeric_paragraph_measurements() -> Result<(), Box<dyn std::error
 }
 
 #[test]
-fn reports_contextual_spacing_as_an_unapplied_declaration() -> Result<(), Box<dyn std::error::Error>>
-{
+fn preserves_contextual_spacing_for_layout() -> Result<(), Box<dyn std::error::Error>> {
     let document = format!(
         r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:contextualSpacing/></w:pPr><w:r><w:t>Tight</w:t></w:r></w:p></w:body></w:document>"#
     );
     let source = DocumentSource::from_bytes(package(&document, None, None)?)?;
     let parsed = parse_docx(&source)?;
 
+    assert_eq!(parsed.blocks[0].format.contextual_spacing, Some(true));
     assert!(
-        parsed
+        !parsed
             .warnings
             .iter()
             .any(|warning| warning.code == "DOCX_CONTEXTUAL_SPACING_IGNORED")
@@ -894,7 +894,7 @@ fn a_png_figure_is_not_reported_as_a_placeholder() -> Result<(), Box<dyn std::er
         !parsed
             .warnings
             .iter()
-            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+            .any(|warning| warning.code == "DOCX_IMAGE_RASTER_UNAVAILABLE")
     );
     Ok(())
 }
@@ -912,7 +912,7 @@ fn a_supported_jpeg_figure_is_not_reported_as_a_placeholder()
         !parsed
             .warnings
             .iter()
-            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER")
+            .any(|warning| warning.code == "DOCX_IMAGE_RASTER_UNAVAILABLE")
     );
     Ok(())
 }

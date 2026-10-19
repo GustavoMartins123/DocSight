@@ -151,14 +151,15 @@ pub fn render_contact_sheet_with_password(
                     .ok_or_else(|| DocsightError::ObjectNotFound {
                         object: format!("page {page}"),
                     })?;
-                let mut warnings = laid_out.document.warnings.clone();
-                let images = crate::decode_page_images(source, page_record, &mut warnings);
+                let warnings = laid_out.document.warnings.clone();
+                let images = crate::decode_page_images(source, page_record)?;
                 crate::docx_raster::rasterize_docx_page(
                     page_record,
                     request.dpi,
                     None,
                     warnings,
                     &images,
+                    &laid_out.fonts,
                 )
             })
         }

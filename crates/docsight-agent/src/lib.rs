@@ -141,6 +141,8 @@ pub struct AgentErrorRecord {
     pub object: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<ErrorLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_font: Option<docsight_core::FontRequirement>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -168,6 +170,7 @@ impl AgentErrorEnvelope {
                 effect: diag.effect,
                 object,
                 location,
+                required_font: error.font_requirement().cloned(),
             },
         }
     }
@@ -1408,8 +1411,8 @@ mod tests {
                 Some(1),
                 Some("p_d"),
             ),
-            diagnostic("DOCX_FONT_SUBSTITUTED", "font", None, Some("h_1")),
-            diagnostic("DOCX_FONT_SUBSTITUTED", "font", None, Some("h_1")),
+            diagnostic("DOCX_LAYOUT_PAGINATED", "font", None, Some("h_1")),
+            diagnostic("DOCX_LAYOUT_PAGINATED", "font", None, Some("h_1")),
         ];
         let merged = consolidate_warnings(warnings);
         let summary: Vec<WarningSummary<'_>> = merged
@@ -1429,7 +1432,7 @@ mod tests {
                 ("PDF_EXTGSTATE_IGNORED", Some(1), Some(3), None),
                 ("APPROXIMATED_PDF_FONT", Some(1), None, None),
                 ("PDF_EXTGSTATE_IGNORED", Some(2), None, Some("p_c")),
-                ("DOCX_FONT_SUBSTITUTED", None, Some(2), Some("h_1")),
+                ("DOCX_LAYOUT_PAGINATED", None, Some(2), Some("h_1")),
             ]
         );
         assert_eq!(consolidate_warnings(merged.clone()), merged);

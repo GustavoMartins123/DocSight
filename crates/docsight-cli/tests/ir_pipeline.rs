@@ -9,18 +9,18 @@ fn docsight() -> Command {
     Command::new(env!("CARGO_BIN_EXE_docsight"))
 }
 
-fn specification() -> PathBuf {
+fn report() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("Projeto_DOCSIGHT_Especificacao.docx")
+        .join("fixtures/validation/sample_report.docx")
 }
 
 #[test]
 fn text_command_works_on_both_docx_and_pdf() -> Result<(), Box<dyn std::error::Error>> {
-    let spec_path = specification();
-    let spec_str = spec_path.to_str().ok_or("invalid specification path")?;
-    let docx_text = docsight().args(["text", spec_str, "--json"]).output()?;
+    let report_path = report();
+    let report_str = report_path.to_str().ok_or("invalid report path")?;
+    let docx_text = docsight().args(["text", report_str, "--json"]).output()?;
     assert!(docx_text.status.success());
     let docx_json: serde_json::Value = serde_json::from_slice(&docx_text.stdout)?;
     let docx_blocks = docx_json["result"]["blocks"]
@@ -72,9 +72,9 @@ fn outline_and_tables_commands_work_on_pdf() -> Result<(), Box<dyn std::error::E
 
 #[test]
 fn table_formats_csv_tsv_html_markdown() -> Result<(), Box<dyn std::error::Error>> {
-    let spec_path = specification();
-    let spec_str = spec_path.to_str().ok_or("invalid specification path")?;
-    let tables = docsight().args(["tables", spec_str, "--json"]).output()?;
+    let report_path = report();
+    let report_str = report_path.to_str().ok_or("invalid report path")?;
+    let tables = docsight().args(["tables", report_str, "--json"]).output()?;
     let tables_json: serde_json::Value = serde_json::from_slice(&tables.stdout)?;
     let table_entry = tables_json["result"]["tables"]
         .as_array()
@@ -85,28 +85,28 @@ fn table_formats_csv_tsv_html_markdown() -> Result<(), Box<dyn std::error::Error
     let first_table_id = table_entry["id"].as_str().ok_or("table id missing")?;
 
     let markdown = docsight()
-        .args(["table", spec_str, first_table_id, "--format", "markdown"])
+        .args(["table", report_str, first_table_id, "--format", "markdown"])
         .output()?;
     assert!(markdown.status.success());
     let md_str = String::from_utf8(markdown.stdout)?;
     assert!(md_str.contains('|'));
 
     let csv = docsight()
-        .args(["table", spec_str, first_table_id, "--format", "csv"])
+        .args(["table", report_str, first_table_id, "--format", "csv"])
         .output()?;
     assert!(csv.status.success());
     let csv_str = String::from_utf8(csv.stdout)?;
     assert!(csv_str.contains(','));
 
     let tsv = docsight()
-        .args(["table", spec_str, first_table_id, "--format", "tsv"])
+        .args(["table", report_str, first_table_id, "--format", "tsv"])
         .output()?;
     assert!(tsv.status.success());
     let tsv_str = String::from_utf8(tsv.stdout)?;
     assert!(tsv_str.contains('\t'));
 
     let html = docsight()
-        .args(["table", spec_str, first_table_id, "--format", "html"])
+        .args(["table", report_str, first_table_id, "--format", "html"])
         .output()?;
     assert!(html.status.success());
     let html_str = String::from_utf8(html.stdout)?;
@@ -117,10 +117,10 @@ fn table_formats_csv_tsv_html_markdown() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn page_command_on_docx_returns_paginated_spans() -> Result<(), Box<dyn std::error::Error>> {
-    let spec_path = specification();
-    let spec_str = spec_path.to_str().ok_or("invalid specification path")?;
+    let report_path = report();
+    let report_str = report_path.to_str().ok_or("invalid report path")?;
     let output = docsight()
-        .args(["page", spec_str, "1", "--json"])
+        .args(["page", report_str, "1", "--json"])
         .output()?;
     assert_eq!(output.status.code(), Some(0));
     let page: serde_json::Value = serde_json::from_slice(&output.stdout)?;

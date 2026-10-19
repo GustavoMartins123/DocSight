@@ -246,7 +246,7 @@ fn fingerprint_command_matches_specification_contract() -> Result<(), Box<dyn st
             .is_empty()
     );
     let source = DocumentSource::open(&doc_path)?;
-    let expected = reproduction_fingerprint(&source);
+    let expected = reproduction_fingerprint(&source)?;
     assert_eq!(result["engine"], expected.engine);
     assert_eq!(result["ooxml_engine"], expected.ooxml_engine);
     assert_eq!(result["pdf_engine"], expected.pdf_engine);
@@ -460,10 +460,26 @@ fn sandbox_memory_limit_kills_worker_as_backend_failure() -> Result<(), Box<dyn 
 #[test]
 fn sandbox_output_limit_drains_worker_without_deadlock() -> Result<(), Box<dyn std::error::Error>> {
     let worker_exe = find_worker_binary()?;
-    let doc_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("Projeto_DOCSIGHT_Especificacao.docx");
+    let directory = tempfile::tempdir()?;
+    let doc_path = directory.path().join("large-output.docx");
+    let paragraphs = (0..384)
+        .map(|index| {
+            format!(
+                "<w:p><w:r><w:t>block-{index:03} {}</w:t></w:r></w:p>",
+                "bounded evidence ".repeat(12)
+            )
+        })
+        .collect::<String>();
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{paragraphs}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="360"/></w:sectPr></w:body></w:document>"#
+    );
+    std::fs::write(&doc_path, package(&xml, None)?)?;
+    let baseline = Command::new(&worker_exe)
+        .arg("text")
+        .arg(&doc_path)
+        .output()?;
+    assert!(baseline.status.success());
+    assert!(baseline.stdout.len() > 65_536);
     let policy = SandboxPolicy {
         max_output_bytes: 1024,
         ..SandboxPolicy::default()
@@ -478,7 +494,11 @@ fn sandbox_output_limit_drains_worker_without_deadlock() -> Result<(), Box<dyn s
             "1".to_owned(),
         )],
     );
-    assert!(start.elapsed() < Duration::from_secs(5));
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "elapsed: {:?}, result: {result:?}",
+        start.elapsed()
+    );
     assert!(
         matches!(
             &result,
@@ -502,7 +522,7 @@ fn sandbox_runs_every_subcommand_through_isolation() -> Result<(), Box<dyn std::
         vec![
             "focus",
             doc_str,
-            "h_515ad605791c12fc496c1c18d79f6526",
+            "h_11ff36836ef204cec23ee89837654132",
             "--json",
         ],
     ] {

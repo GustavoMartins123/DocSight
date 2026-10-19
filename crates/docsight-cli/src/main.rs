@@ -5470,7 +5470,7 @@ fn build_context_package(
     let fidelity = if include.contains(&ContextInclude::Fidelity) {
         match resolved.anchor_block() {
             Some(_) => {
-                let glyph_coverage = docsight_render::document_glyph_coverage(document, source);
+                let glyph_coverage = docsight_render::document_glyph_coverage(document, source)?;
                 let evidence = compute_evidence(document, source, target_id, None, glyph_coverage)?;
                 Some(ContextFidelity {
                     available: true,
@@ -5841,7 +5841,7 @@ fn fingerprint(
     max_document_bytes: u64,
 ) -> Result<(), DocsightError> {
     let source = DocumentSource::open_with_limit(path, max_document_bytes)?;
-    let fingerprint = reproduction_fingerprint(&source);
+    let fingerprint = reproduction_fingerprint(&source)?;
     let record = FingerprintRecord {
         file_sha256: source.sha256().to_owned(),
         engine: fingerprint.engine,
@@ -5920,7 +5920,7 @@ fn object_evidence(
                 None
             }
         };
-    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source);
+    let glyph_coverage = docsight_render::document_glyph_coverage(&document, &source)?;
     let record = compute_evidence(
         &document,
         &source,
@@ -6036,7 +6036,7 @@ struct CoverageArgs<'a> {
 fn coverage(args: CoverageArgs<'_>) -> Result<(), DocsightError> {
     let source = args.loader.open_source(args.path)?;
     let doc = args.loader.load(&source)?;
-    let glyph_coverage = docsight_render::document_glyph_coverage(&doc, &source);
+    let glyph_coverage = docsight_render::document_glyph_coverage(&doc, &source)?;
     let report = compute_coverage(&doc, &source, args.page, args.regions, glyph_coverage)?;
     let scope = continuation_scope(
         "coverage",

@@ -162,6 +162,7 @@ pub(crate) fn reconstruct_page_semantics(
                 format: Default::default(),
                 confidence: 0.85,
                 continuations: Vec::new(),
+                inline_runs: Vec::new(),
                 content: BlockContent::Paragraph(ParagraphBlock {
                     text,
                     style_id: None,
@@ -227,6 +228,7 @@ pub(crate) fn reconstruct_page_semantics(
                 format: Default::default(),
                 confidence: 0.90,
                 continuations: Vec::new(),
+                inline_runs: Vec::new(),
                 content: BlockContent::Heading(HeadingBlock {
                     level,
                     text: line.text.clone(),
@@ -310,6 +312,7 @@ pub(crate) fn reconstruct_page_semantics(
             format: Default::default(),
             confidence: 0.75,
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Figure(FigureBlock {
                 alt_text: None,
                 caption: None,

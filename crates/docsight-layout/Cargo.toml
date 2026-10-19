@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 sha2.workspace = true
 docsight-core = { path = "../docsight-core" }
+docsight-fonts = { path = "../docsight-fonts" }
 serde = { workspace = true }
 
 [dev-dependencies]

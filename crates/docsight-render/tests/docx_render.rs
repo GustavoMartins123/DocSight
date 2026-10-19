@@ -95,8 +95,14 @@ fn renders_bounded_contact_sheet_deterministically() -> Result<(), Box<dyn std::
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    let golden: serde_json::Value =
+    let mut golden: serde_json::Value =
         serde_json::from_slice(&std::fs::read(contact_sheet_golden())?)?;
+    if std::env::var("DOCSIGHT_UPDATE_GOLDENS").is_ok_and(|value| value == "1") {
+        golden["output_sha256"] = serde_json::json!(output_sha256);
+        let mut bytes = serde_json::to_vec_pretty(&golden)?;
+        bytes.push(b'\n');
+        std::fs::write(contact_sheet_golden(), bytes)?;
+    }
     assert_eq!(golden["pages"], serde_json::json!([1]));
     assert_eq!(golden["dpi"], 72);
     assert_eq!(golden["width_px"], 280);

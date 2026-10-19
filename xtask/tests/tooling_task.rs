@@ -11,8 +11,8 @@ use xtask::task::{RECEIPT_SCHEMA, RunOptions, SCENARIO_SCHEMA, run_with};
 use xtask::tooling::common::{self, digest, json_bytes, workspace_root};
 use xtask::tooling::process::{ProcessLimits, ProcessResult};
 
-const TABLE_ID: &str = "tbl_6c22c8dd17adf7e32604b29241d9ab99";
-const CELL_ID: &str = "cell_a1932a3e62fdc00c3e9528c5b008b5bc";
+const TABLE_ID: &str = "tbl_6fde9f50d14887bd230e213c487c1941";
+const CELL_ID: &str = "cell_40ec85c90d3f0d6fac41ad1db44c74c0";
 
 fn command_name(arguments: &[OsString]) -> Option<String> {
     let mut skip_binary = true;

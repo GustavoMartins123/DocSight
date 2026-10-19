@@ -3,7 +3,11 @@
   "$id": "https://docsight.dev/schemas/v2/error-envelope.json",
   "title": "AgentErrorEnvelope",
   "type": "object",
-  "required": ["schema", "engine", "error"],
+  "required": [
+    "schema",
+    "engine",
+    "error"
+  ],
   "properties": {
     "schema": {
       "type": "string",
@@ -14,23 +18,76 @@
     },
     "error": {
       "type": "object",
-      "required": ["code", "exit_code", "message", "effect"],
+      "required": [
+        "code",
+        "exit_code",
+        "message",
+        "effect"
+      ],
       "properties": {
-        "code": { "type": "string" },
-        "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
-        "message": { "type": "string" },
-        "effect": { "type": "string" },
-        "object": { "type": ["string", "null"] },
+        "code": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "message": {
+          "type": "string"
+        },
+        "effect": {
+          "type": "string"
+        },
+        "object": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "location": {
           "type": "object",
           "properties": {
-            "page": { "type": "integer", "minimum": 1 },
-            "object": { "type": "string", "minLength": 1 },
-            "operator": { "type": "string", "minLength": 1 },
-            "offset": { "type": "integer", "minimum": 0 }
+            "page": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "object": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
           "minProperties": 1,
           "additionalProperties": false
+        },
+        "required_font": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "bold",
+            "italic"
+          ],
+          "properties": {
+            "family": {
+              "type": "string",
+              "minLength": 1
+            },
+            "bold": {
+              "type": "boolean"
+            },
+            "italic": {
+              "type": "boolean"
+            }
+          }
         }
       },
       "additionalProperties": false

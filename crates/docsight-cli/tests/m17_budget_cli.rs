@@ -38,7 +38,7 @@ fn context_args(path: &str) -> Vec<&str> {
         "--agent",
         "context",
         path,
-        "tbl_6c22c8dd17adf7e32604b29241d9ab99",
+        "tbl_6fde9f50d14887bd230e213c487c1941",
         "--include",
         "content,neighbors,geometry,fidelity,provenance,heading,related",
     ]
@@ -142,9 +142,9 @@ fn adaptive_budget_selects_richest_fitting_profile_in_serialized_bytes()
     let path = fixture("sample_tables.docx");
     let path = path.to_str().ok_or("fixture path")?;
     for (budget, expected, bytes) in [
-        ("24kb", "rich", 24 * 1024),
+        ("128kb", "rich", 128 * 1024),
         ("4kb", "balanced", 4 * 1024),
-        ("3kb", "compact", 3 * 1024),
+        ("2500", "compact", 2500),
     ] {
         let mut args = context_args(path);
         args.extend(["--budget", budget]);
@@ -212,15 +212,15 @@ fn invalid_or_unfulfillable_budget_requests_fail_closed() -> Result<(), Box<dyn 
             "--agent",
             "context",
             path,
-            "tbl_6c22c8dd17adf7e32604b29241d9ab99",
+            "tbl_6fde9f50d14887bd230e213c487c1941",
             "--budget",
-            "2kb",
+            "1kb",
         ],
         vec![
             "--agent",
             "context",
             path,
-            "tbl_6c22c8dd17adf7e32604b29241d9ab99",
+            "tbl_6fde9f50d14887bd230e213c487c1941",
             "--budget",
             "4kb",
             "--budget-profile",
@@ -289,11 +289,11 @@ fn budget_envelopes_match_the_cross_platform_golden() -> Result<(), Box<dyn std:
     let path = fixture("sample_tables.docx");
     let path = path.to_str().ok_or("fixture path")?;
     let mut rich = context_args(path);
-    rich.extend(["--budget", "24kb"]);
+    rich.extend(["--budget", "128kb"]);
     let mut balanced = context_args(path);
     balanced.extend(["--budget", "4kb"]);
     let mut compact = context_args(path);
-    compact.extend(["--budget", "3kb"]);
+    compact.extend(["--budget", "2500"]);
     let peek = ["--agent", "peek", path, "--page", "1", "--budget", "4kb"];
     let pdf_path = fixture("sample_semantic.pdf");
     let pdf_path = pdf_path.to_str().ok_or("PDF fixture path")?;
@@ -303,13 +303,13 @@ fn budget_envelopes_match_the_cross_platform_golden() -> Result<(), Box<dyn std:
     let actual = serde_json::json!({
         "schema": "docsight.budget-conformance/v1",
         "fixtures": {
-            "sample_tables.docx": "ae83cc0410fa35a70f9cac1c19d25e1cf59d6f05822ecf2de05d4b28982611ae",
+            "sample_tables.docx": "965064d320a000219fe1e093379b477f8a04cb05f3c43e20d5bcac0e0a831470",
             "sample_semantic.pdf": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05"
         },
         "runs": [
-            conformance_record("context-rich-24kb", &rich)?,
+            conformance_record("context-rich-128kb", &rich)?,
             conformance_record("context-balanced-4kb", &balanced)?,
-            conformance_record("context-compact-3kb", &compact)?,
+            conformance_record("context-compact-2500b", &compact)?,
             conformance_record("peek-docx-compact-4kb", &peek)?,
             conformance_record("peek-pdf-compact-3kb", &pdf_peek)?
         ]

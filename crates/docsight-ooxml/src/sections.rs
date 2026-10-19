@@ -19,6 +19,7 @@ pub(crate) const SECTIONPAGES_PLACEHOLDER: &str = "[SECTIONPAGES]";
 pub(crate) struct HeaderFooterPart {
     pub text: String,
     pub cached_fields: BTreeSet<String>,
+    pub paragraphs: Vec<Vec<(usize, String)>>,
 }
 
 pub(crate) struct SectionInputs<'a> {
@@ -66,16 +67,18 @@ pub(crate) fn even_and_odd_headers(settings: Option<&str>) -> Result<bool, Docsi
         .is_some_and(|flag| on_off_value(word_value(flag).as_deref())))
 }
 
-fn header_footer_part(xml: &str) -> Result<HeaderFooterPart, DocsightError> {
+pub(crate) fn header_footer_part(xml: &str) -> Result<HeaderFooterPart, DocsightError> {
     let document = parse_xml(xml)?;
     let mut fields: Vec<OpenField> = Vec::new();
     let mut cached_fields = BTreeSet::new();
     let mut paragraphs = Vec::new();
+    let mut paragraph_tokens = Vec::new();
     for paragraph in document
         .descendants()
         .filter(|node| node.has_tag_name((W_NS, "p")))
     {
         let mut text = String::new();
+        let mut tokens = Vec::new();
         for node in paragraph
             .descendants()
             .filter(|node| node.is_element() && owning_paragraph(*node) == Some(paragraph))
@@ -83,6 +86,7 @@ fn header_footer_part(xml: &str) -> Result<HeaderFooterPart, DocsightError> {
             if is_deleted(node, paragraph) || inside_placeholder_simple_field(node, paragraph) {
                 continue;
             }
+            let previous_length = text.len();
             match node.tag_name().name() {
                 "fldSimple" if node.tag_name().namespace() == Some(W_NS) => {
                     let instruction = node.attribute((W_NS, "instr")).unwrap_or_default();
@@ -114,8 +118,16 @@ fn header_footer_part(xml: &str) -> Result<HeaderFooterPart, DocsightError> {
                 }
                 _ => {}
             }
+            if text.len() > previous_length {
+                let source = node
+                    .ancestors()
+                    .find(|ancestor| ancestor.has_tag_name((W_NS, "r")))
+                    .unwrap_or(node);
+                tokens.push((source.range().start, text[previous_length..].to_owned()));
+            }
         }
         paragraphs.push(text);
+        paragraph_tokens.push(tokens);
     }
     if !fields.is_empty() {
         return Err(DocsightError::MalformedDocument {
@@ -125,6 +137,7 @@ fn header_footer_part(xml: &str) -> Result<HeaderFooterPart, DocsightError> {
     Ok(HeaderFooterPart {
         text: paragraphs.join("\n"),
         cached_fields,
+        paragraphs: paragraph_tokens,
     })
 }
 
@@ -247,6 +260,8 @@ pub(crate) fn parse_section(
         header_distance_pt: None,
         footer_distance_pt: None,
         columns: section_columns(node)?,
+        column_spacing_pt: None,
+        gutter_pt: 0.0,
         page_number_start: None,
         page_number_format: None,
         headers_footers: Vec::new(),
@@ -254,7 +269,11 @@ pub(crate) fn parse_section(
     };
     let mut missing = Vec::new();
     read_page_size(node, &mut section, &mut missing)?;
-    read_page_margins(node, &mut section, &mut missing, warnings)?;
+    read_page_margins(node, &mut section, &mut missing)?;
+    section.column_spacing_pt = child_element(node, "cols")
+        .map(|columns| optional_points(Some(columns), "space", "section column spacing"))
+        .transpose()?
+        .flatten();
     read_page_numbering(node, &mut section)?;
     section.headers_footers = section_headers_footers(node, &id, previous, inputs, warnings)?;
     section.header_text = default_text(&section, HeaderFooterKind::Header);
@@ -281,17 +300,6 @@ pub(crate) fn parse_section(
                 missing.join(", ")
             ),
             "omitted page size uses Letter 612x792 pt, omitted margins use 72 pt and omitted header or footer distances use 36 pt",
-        ));
-    }
-    if section.columns > 1 {
-        warnings.push(section_warning(
-            "DOCX_SECTION_COLUMNS_UNSUPPORTED",
-            &id,
-            format!(
-                "section {} declares {} text columns",
-                location.index, section.columns
-            ),
-            "the section is laid out as a single column, so line breaks, pagination and geometry differ from Word",
         ));
     }
     Ok(section)
@@ -321,6 +329,8 @@ pub(crate) fn defaulted_section(
         header_distance_pt: None,
         footer_distance_pt: None,
         columns: 1,
+        column_spacing_pt: None,
+        gutter_pt: 0.0,
         page_number_start: None,
         page_number_format: None,
         headers_footers: Vec::new(),
@@ -350,7 +360,7 @@ fn section_columns(node: Node<'_, '_>) -> Result<u32, DocsightError> {
         return Ok(1);
     };
     match value.trim().parse::<u32>() {
-        Ok(columns) if columns >= 1 => Ok(columns),
+        Ok(columns) if (1..=64).contains(&columns) => Ok(columns),
         _ => Err(DocsightError::MalformedDocument {
             message: format!("section column count {value} is not a positive integer"),
         }),
@@ -378,7 +388,6 @@ fn read_page_margins(
     node: Node<'_, '_>,
     section: &mut Section,
     missing: &mut Vec<&'static str>,
-    warnings: &mut Vec<Diagnostic>,
 ) -> Result<(), DocsightError> {
     let margins = child_element(node, "pgMar");
     section.margin_top_pt = optional_points(margins, "top", "section top margin")?.map(f32::abs);
@@ -398,18 +407,11 @@ fn read_page_margins(
             missing.push(name);
         }
     }
-    if let Some(gutter) = optional_points(margins, "gutter", "section gutter")?
-        && gutter > 0.0
-    {
-        warnings.push(section_warning(
-            "DOCX_SECTION_GUTTER_IGNORED",
-            &section.id,
-            format!(
-                "section {} declares a {gutter} pt binding gutter",
-                section.section_index
-            ),
-            "the gutter is not added to the page margins, so the text area is wider than in Word",
-        ));
+    section.gutter_pt = optional_points(margins, "gutter", "section gutter")?.unwrap_or(0.0);
+    if section.gutter_pt < 0.0 {
+        return Err(DocsightError::MalformedDocument {
+            message: "section gutter must not be negative".to_owned(),
+        });
     }
     Ok(())
 }
@@ -499,6 +501,7 @@ fn section_headers_footers(
                 part: format!("/{part_name}"),
                 text: content.text.clone(),
                 inherited: false,
+                blocks: Vec::new(),
             },
         );
         if replaced.is_some() {
@@ -517,6 +520,7 @@ fn section_headers_footers(
                 .entry((inherited.kind, inherited.variant))
                 .or_insert_with(|| SectionHeaderFooter {
                     inherited: true,
+                    blocks: Vec::new(),
                     ..inherited.clone()
                 });
         }

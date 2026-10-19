@@ -35,7 +35,7 @@
       "id": "sample-headings-inspect",
       "operation": "inspect",
       "origin": "synthetic",
-      "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+      "sha256": "89aa6f7d4892688948d929eef3975729421dbd0cfdf9091e84b08d73bca0b8ff"
     },
     {
       "class": "pdf-structured",
@@ -121,7 +121,7 @@
       "id": "sample-tables-inspect",
       "operation": "inspect",
       "origin": "synthetic",
-      "sha256": "ae83cc0410fa35a70f9cac1c19d25e1cf59d6f05822ecf2de05d4b28982611ae"
+      "sha256": "965064d320a000219fe1e093379b477f8a04cb05f3c43e20d5bcac0e0a831470"
     },
     {
       "class": "pdf-tabular",
@@ -138,7 +138,7 @@
       "id": "synthetic-table-inspect",
       "operation": "inspect",
       "origin": "synthetic",
-      "sha256": "9074f729c7f4a39c0f6753300b7b4c081735a86c07f8d54d9d7bedf757e66362"
+      "sha256": "2487e7c70b23141a5feefa476e1fce061de8093ee9e7d4eb061541871547ad6e"
     },
     {
       "class": "unsupported-format",
@@ -170,7 +170,7 @@
       "id": "sample-headings-render",
       "operation": "render",
       "origin": "synthetic",
-      "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+      "sha256": "89aa6f7d4892688948d929eef3975729421dbd0cfdf9091e84b08d73bca0b8ff"
     },
     {
       "class": "pdf-structured",
@@ -204,9 +204,9 @@
       "origin": "synthetic",
       "reference": {
         "file": "fixtures/validation/sample_headings.docx",
-        "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+        "sha256": "89aa6f7d4892688948d929eef3975729421dbd0cfdf9091e84b08d73bca0b8ff"
       },
-      "sha256": "4a59107057e1bfd3a83fd83fff868f8b74cf0e96898accc396d13d6d8bf5e061"
+      "sha256": "89aa6f7d4892688948d929eef3975729421dbd0cfdf9091e84b08d73bca0b8ff"
     },
     {
       "class": "malformed-container",

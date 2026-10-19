@@ -102,7 +102,7 @@ fn locate_table() -> Result<ScenarioRun, Box<dyn std::error::Error>> {
     assert_eq!(value["result"]["status"], "resolved");
     assert_eq!(
         value["result"]["candidates"][0]["object"]["id"],
-        "tbl_6c22c8dd17adf7e32604b29241d9ab99"
+        "tbl_6fde9f50d14887bd230e213c487c1941"
     );
     assert!(value["result"]["candidates"][0]["matched_range"].is_object());
     assert!(
@@ -154,14 +154,14 @@ fn locate_pdf_table() -> Result<ScenarioRun, Box<dyn std::error::Error>> {
 }
 
 fn read_merged_cells() -> Result<ScenarioRun, Box<dyn std::error::Error>> {
-    let path = fixture("sample_tables.docx");
+    let path = fixture("sample_table_merged.docx");
     let path = path.to_str().ok_or("DOCX fixture path")?;
     let mut run = ScenarioRun::default();
     let value = run.invoke(&[
         "--agent",
         "context",
         path,
-        "tbl_6c22c8dd17adf7e32604b29241d9ab99",
+        "tbl_b7118b68835396a4eca6331ea218e9ce",
         "--include",
         "content",
         "--budget",
@@ -235,7 +235,7 @@ fn verify_visual_region(directory: &Path) -> Result<ScenarioRun, Box<dyn std::er
         "bundle",
         path,
         "--object",
-        "h_515ad605791c12fc496c1c18d79f6526",
+        "h_11ff36836ef204cec23ee89837654132",
         "--dpi",
         "72",
         "--include-crop",

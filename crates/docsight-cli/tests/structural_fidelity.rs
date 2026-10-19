@@ -96,8 +96,11 @@ fn unsupported_feature_count_matches_the_reported_diagnostics()
         );
         if coverage.unsupported_feature_count == 0 {
             assert!(
-                coverage.reason_codes.is_empty(),
-                "{name} reports reason codes without counting an unsupported feature"
+                coverage
+                    .reason_codes
+                    .iter()
+                    .all(|code| code == "DOCX_LAYOUT_PAGINATED"),
+                "{name} reports unsupported reason codes without counting an unsupported feature"
             );
         }
     }
@@ -119,7 +122,7 @@ fn resource_coverage_is_exact_for_a_rasterizable_figure() -> Result<(), Box<dyn 
         !document
             .warnings
             .iter()
-            .any(|warning| warning.code == "DOCX_FIGURE_RASTER_PLACEHOLDER"),
+            .any(|warning| warning.code == "DOCX_IMAGE_RASTER_UNAVAILABLE"),
         "a PNG figure must not be reported as a placeholder"
     );
     assert_eq!(coverage.global.resource.status, CoverageStatus::Exact);

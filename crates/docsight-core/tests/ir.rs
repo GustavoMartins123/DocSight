@@ -20,6 +20,9 @@ fn sample_document() -> Document {
         row_span: 1,
         column_span: 1,
         bbox: None,
+        page: None,
+        continuations: Vec::new(),
+        format: Default::default(),
         text: "Header A".to_owned(),
         blocks: Vec::new(),
         source: SourceSpan::new("/body/tbl[1]/r[1]/c[1]"),
@@ -31,6 +34,9 @@ fn sample_document() -> Document {
         row_span: 1,
         column_span: 1,
         bbox: None,
+        page: None,
+        continuations: Vec::new(),
+        format: Default::default(),
         text: "Header B".to_owned(),
         blocks: Vec::new(),
         source: SourceSpan::new("/body/tbl[1]/r[1]/c[2]"),
@@ -58,6 +64,7 @@ fn sample_document() -> Document {
             flags: Default::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Heading(HeadingBlock {
                 level: 1,
                 text: "Introduction".to_owned(),
@@ -76,6 +83,7 @@ fn sample_document() -> Document {
             flags: Default::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Paragraph(ParagraphBlock {
                 text: "This is a paragraph.".to_owned(),
                 style_id: None,
@@ -93,6 +101,7 @@ fn sample_document() -> Document {
             flags: Default::default(),
             format: Default::default(),
             continuations: Vec::new(),
+            inline_runs: Vec::new(),
             content: BlockContent::Table(table_block),
         },
     ];

@@ -1,16 +1,16 @@
 {
   "fixtures": {
     "sample_semantic.pdf": "a518b8cc3eb674dfc63dd83e6b85c7769d736203c7626960bc3dca69e06fea05",
-    "sample_tables.docx": "ae83cc0410fa35a70f9cac1c19d25e1cf59d6f05822ecf2de05d4b28982611ae"
+    "sample_tables.docx": "965064d320a000219fe1e093379b477f8a04cb05f3c43e20d5bcac0e0a831470"
   },
   "runs": [
     {
-      "name": "context-rich-24kb",
+      "name": "context-rich-128kb",
       "omitted_evidence": [],
       "returned_items": 0,
       "selected_profile": "rich",
-      "stdout_bytes": 23715,
-      "stdout_sha256": "3e4813b67b2fefd4c9662f89a9fd540dce1e8012434d988cf062772ee7309265",
+      "stdout_bytes": 84589,
+      "stdout_sha256": "986a74e4c3ea52dbd41495410ccf57ea6d7995fbaa438eb25c6e149a9c60f360",
       "total_items": 0,
       "truncated": false
     },
@@ -23,13 +23,13 @@
       ],
       "returned_items": 0,
       "selected_profile": "balanced",
-      "stdout_bytes": 3701,
-      "stdout_sha256": "ff85e255ed4f5e0e9ea87b21d7b41fde6c38f2e6e21499539b651f53ff989bcf",
+      "stdout_bytes": 2958,
+      "stdout_sha256": "03fce1a3f45e31f25508a87cd776f4503507c33276b1384370009a3443409385",
       "total_items": 0,
       "truncated": false
     },
     {
-      "name": "context-compact-3kb",
+      "name": "context-compact-2500b",
       "omitted_evidence": [
         "extended_snippets",
         "full_content",
@@ -42,8 +42,8 @@
       ],
       "returned_items": 0,
       "selected_profile": "compact",
-      "stdout_bytes": 2252,
-      "stdout_sha256": "bfa47c31e48dab80502c185d298a14e8dfdd87eff848faf3a191275b95c735c4",
+      "stdout_bytes": 1568,
+      "stdout_sha256": "3d9f309d0f81c45727fa6821b8908c57b3b521d71d0890c155ff63add32c61d9",
       "total_items": 0,
       "truncated": false
     },
@@ -52,11 +52,11 @@
       "omitted_evidence": [
         "relationship_hints"
       ],
-      "returned_items": 7,
+      "returned_items": 8,
       "selected_profile": "compact",
-      "stdout_bytes": 4051,
-      "stdout_sha256": "f9206152b624baa3e1d529679950debc381a40ea27f10b8ebfb12c145370d662",
-      "total_items": 30,
+      "stdout_bytes": 3719,
+      "stdout_sha256": "b3c3a8c249e2d690d13ebf3ee13bfee1dcc7caf5934d88fb11c30e80decb1d89",
+      "total_items": 28,
       "truncated": true
     },
     {

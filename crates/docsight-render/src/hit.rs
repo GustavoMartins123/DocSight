@@ -189,7 +189,18 @@ pub fn hit_test(
                 })?;
 
         for cell in &entry.cells {
-            if let Some(cell_box) = cell.bbox {
+            if let Some(cell_box) = cell
+                .page
+                .or(block.page)
+                .filter(|page| *page == page_number)
+                .and(cell.bbox)
+                .or_else(|| {
+                    cell.continuations
+                        .iter()
+                        .find(|fragment| fragment.page == page_number)
+                        .map(|fragment| fragment.bbox)
+                })
+            {
                 let cell_hit = match query {
                     HitQuery::Point(x, y) => cell_box.contains_point(*x, *y),
                     HitQuery::BBox(rect) => cell_box.intersects(*rect),
@@ -202,7 +213,11 @@ pub fn hit_test(
                         column_span: cell.column_span,
                         bbox: Some(cell_box),
                     });
-                    snippet = cell.text.clone();
+                    snippet = cell.text_on_page(page_number, block.page)?.ok_or_else(|| {
+                        DocsightError::MalformedDocument {
+                            message: format!("cell {} has fragment geometry without text", cell.id),
+                        }
+                    })?;
                     break;
                 }
             }

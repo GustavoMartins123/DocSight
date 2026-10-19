@@ -2,7 +2,7 @@ use crate::{Diagnostic, DocsightError, DocumentFormat, ObjectId, Rect};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const IR_SCHEMA_VERSION: &str = "1.3";
+pub const IR_SCHEMA_VERSION: &str = "1.4";
 pub const IR_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -83,6 +83,10 @@ pub struct HeadingBlock {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ListItemBlock {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_format: Option<RunFormat>,
     pub level: u8,
     pub marker: Option<String>,
     pub format: Option<String>,
@@ -100,12 +104,84 @@ pub struct TableCell {
     pub row_span: u32,
     pub column_span: u32,
     pub bbox: Option<Rect>,
+    #[serde(default)]
+    pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub continuations: Vec<BlockContinuation>,
+    #[serde(default)]
+    pub format: CellFormat,
     pub text: String,
     pub blocks: Vec<Block>,
     pub source: SourceSpan,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CellBorder {
+    pub width_pt: f32,
+    pub color_argb: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CellFormat {
+    pub padding_pt: [f32; 4],
+    pub fill_argb: Option<u32>,
+    pub borders: [Option<CellBorder>; 4],
+}
+
+impl Default for CellFormat {
+    fn default() -> Self {
+        Self {
+            padding_pt: [0.0, 5.4, 0.0, 5.4],
+            fill_argb: None,
+            borders: [None; 4],
+        }
+    }
+}
+
 impl TableCell {
+    pub fn text_on_page(
+        &self,
+        page: u32,
+        table_page: Option<u32>,
+    ) -> Result<Option<String>, DocsightError> {
+        let Some(first) = self.page.or(table_page) else {
+            return Ok(None);
+        };
+        let length = self.text.chars().count();
+        let (start, end) = if first == page {
+            (
+                0,
+                self.continuations
+                    .first()
+                    .map_or(length, |fragment| fragment.text_start_char),
+            )
+        } else {
+            let Some(index) = self
+                .continuations
+                .iter()
+                .position(|fragment| fragment.page == page)
+            else {
+                return Ok(None);
+            };
+            (
+                self.continuations[index].text_start_char,
+                self.continuations
+                    .get(index + 1)
+                    .map_or(length, |fragment| fragment.text_start_char),
+            )
+        };
+        if start > end || end > length {
+            return Err(DocsightError::MalformedDocument {
+                message: format!(
+                    "cell {} has an invalid continuation range {start}..{end} for {length} characters on page {page}",
+                    self.id
+                ),
+            });
+        }
+        Ok(Some(
+            self.text.chars().skip(start).take(end - start).collect(),
+        ))
+    }
     pub fn nested_tables(&self) -> impl Iterator<Item = (&Block, &TableBlock)> {
         self.blocks.iter().filter_map(|block| match &block.content {
             BlockContent::Table(table) => Some((block, table)),
@@ -188,6 +264,12 @@ pub enum TextAlignment {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ParagraphFormat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contextual_spacing: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height_pt: Option<f32>,
+    #[serde(default)]
+    pub exact_line_height: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment: Option<TextAlignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space_before_pt: Option<f32>,
@@ -246,6 +328,8 @@ pub struct Block {
     pub format: ParagraphFormat,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub continuations: Vec<BlockContinuation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inline_runs: Vec<InlineRun>,
     pub content: BlockContent,
 }
 
@@ -297,6 +381,27 @@ impl Block {
     }
 
     pub fn text_on_page(&self, page: u32) -> Result<Option<String>, DocsightError> {
+        if let BlockContent::Table(table) = &self.content {
+            if !self.occupies_page(page) {
+                return Ok(None);
+            }
+            let mut rows = Vec::new();
+            for row in 0..table.rows {
+                let texts = table
+                    .cells
+                    .iter()
+                    .filter(|cell| cell.row == row)
+                    .map(|cell| cell.text_on_page(page, self.page))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                if !texts.is_empty() {
+                    rows.push(texts.join("\t"));
+                }
+            }
+            return Ok(Some(rows.join("\n")));
+        }
         if self.bbox_on_page(page).is_none() {
             return Ok(None);
         }
@@ -434,13 +539,15 @@ pub enum HeaderFooterVariant {
     Even,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SectionHeaderFooter {
     pub kind: HeaderFooterKind,
     pub variant: HeaderFooterVariant,
     pub part: String,
     pub text: String,
     pub inherited: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -467,6 +574,10 @@ pub struct Section {
     pub footer_distance_pt: Option<f32>,
     #[serde(default = "default_section_columns")]
     pub columns: u32,
+    #[serde(default)]
+    pub column_spacing_pt: Option<f32>,
+    #[serde(default)]
+    pub gutter_pt: f32,
     #[serde(default)]
     pub page_number_start: Option<u32>,
     #[serde(default)]
@@ -502,6 +613,24 @@ pub struct Style {
     pub font_size_pt: Option<f32>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunFormat {
+    pub font_family: Option<String>,
+    pub font_size_pt: Option<f32>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color_argb: Option<u32>,
+    #[serde(default)]
+    pub underline: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InlineRun {
+    pub text: String,
+    pub format: RunFormat,
+    pub source: SourceSpan,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

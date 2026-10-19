@@ -2,12 +2,11 @@ use crate::geometry::{SectionGeometry, SectionRange};
 use crate::layout::MAX_LAYOUT_PAGES;
 use crate::measure::{Measured, TextMetrics};
 use docsight_core::{
-    BlockKind, Diagnostic, DiagnosticSeverity, DocsightError, Document, ObjectId, SectionStart,
+    Diagnostic, DiagnosticSeverity, DocsightError, Document, ObjectId, SectionStart,
 };
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-const LINE_FIT_TOLERANCE: f32 = 0.001;
 const MINIMUM_SPLIT_LINES: usize = 2;
 const KEEP_CHAIN_FAST_GUARD: f32 = 0.01;
 
@@ -26,6 +25,8 @@ pub(crate) struct Fragment {
     pub page: u32,
     pub top: f32,
     pub lines: Range<usize>,
+    pub table_slice: Option<(f32, f32)>,
+    pub column: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +61,9 @@ struct Paginator<'a> {
     bottom: f32,
     has_content: bool,
     pending_break: bool,
+    column: u32,
+    fonts: &'a docsight_fonts::FontBook,
+    hints: &'a crate::headers::LayoutHints,
 }
 
 pub(crate) fn paginate(
@@ -67,6 +71,8 @@ pub(crate) fn paginate(
     ranges: &[SectionRange],
     geometries: &[SectionGeometry],
     measured: &[Measured],
+    fonts: &docsight_fonts::FontBook,
+    hints: &crate::headers::LayoutHints,
 ) -> Result<Pagination, DocsightError> {
     let keep_chains = build_keep_chains(document, measured, ranges);
     let mut paginator = Paginator {
@@ -82,6 +88,9 @@ pub(crate) fn paginate(
         bottom: 0.0,
         has_content: false,
         pending_break: false,
+        column: 0,
+        fonts,
+        hints,
     };
     let last_range = ranges.len().saturating_sub(1);
     for (position, range) in ranges.iter().enumerate() {
@@ -144,6 +153,7 @@ fn build_keep_chains(
                             1
                         }) as f64
                     }
+                    Measured::Table(table) => table.height as f64,
                     Measured::Atomic { height } => *height as f64,
                 };
             }
@@ -193,22 +203,14 @@ impl Paginator<'_> {
                 self.open_page(section, true)
             }
             SectionStart::NextColumn => {
-                let page = current.number;
-                let section_record = &self.document.sections[section];
-                self.warnings.push(Diagnostic {
-                    code: "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED".to_owned(),
-                    severity: DiagnosticSeverity::Warning,
-                    message: format!(
-                        "section {} starts at the next text column on page {page}",
-                        section_record.section_index
-                    ),
-                    effect: "the section starts on a new page because multi-column flow is not supported"
-                        .to_owned(),
-                    object: Some(section_record.id.clone()),
-                    page: Some(page),
-                    occurrences: None,
-                });
-                self.open_page(section, true)
+                if self.column + 1 < geometry.columns && same_page_size {
+                    if let Some(current) = self.pages.last_mut() {
+                        current.sections.insert(section);
+                    }
+                    self.continue_on_new_page(section)
+                } else {
+                    self.open_page(section, true)
+                }
             }
             SectionStart::NextPage | SectionStart::Continuous => self.open_page(section, true),
         }
@@ -239,23 +241,40 @@ impl Paginator<'_> {
             .ok_or_else(page_limit)?;
         let geometry = self.geometries[section];
         let display_number = self.next_display_number(section, first_of_section)?;
-        self.pages.push(PageRecord {
+        let mut record = PageRecord {
             number,
             display_number,
             section,
             sections: BTreeSet::from([section]),
             geometry,
             first_of_section,
-        });
+        };
+        record.geometry = crate::headers::content_geometry(
+            &self.document.sections[section],
+            &record,
+            self.document,
+            self.fonts,
+            self.hints,
+        )?;
+        let geometry = record.geometry;
+        self.pages.push(record);
         self.cursor = geometry.margin_top;
         self.top = geometry.margin_top;
         self.bottom = geometry.content_bottom();
         self.has_content = false;
         self.pending_break = false;
+        self.column = 0;
         Ok(())
     }
 
     fn continue_on_new_page(&mut self, section: usize) -> Result<(), DocsightError> {
+        let geometry = self.geometries[section];
+        if self.column + 1 < geometry.columns {
+            self.column += 1;
+            self.cursor = self.top;
+            self.has_content = false;
+            return Ok(());
+        }
         self.open_page(section, false)
     }
 
@@ -283,7 +302,7 @@ impl Paginator<'_> {
         let block = &document.blocks[index];
         let flags = block.flags;
         if self.pending_break || (flags.page_break_before && self.has_content) {
-            self.continue_on_new_page(range.section)?;
+            self.open_page(range.section, false)?;
         }
         if flags.keep_with_next {
             self.apply_keep_chain(index, range)?;
@@ -296,9 +315,8 @@ impl Paginator<'_> {
                 &block.id,
                 range,
             )?,
-            Measured::Atomic { height } => {
-                self.place_atomic(*height, block.kind, &block.id, range)?
-            }
+            Measured::Table(table) => self.place_table(table, range)?,
+            Measured::Atomic { height } => self.place_atomic(*height, &block.id, range)?,
         };
         self.placements.push(Placement {
             section: range.section,
@@ -351,6 +369,7 @@ impl Paginator<'_> {
                         1
                     })
                 }
+                Measured::Table(table) => table.height,
                 Measured::Atomic { height } => *height,
             };
         }
@@ -382,13 +401,15 @@ impl Paginator<'_> {
             } else {
                 0.0
             };
-            let fitting = lines_that_fit(self.remaining() - before, metrics.line_height);
+            let fitting = metrics.lines_fitting(start, self.remaining() - before);
             let rest = total - start;
             if fitting >= rest {
                 fragments.push(Fragment {
                     page: self.current_page()?,
                     top: self.cursor,
                     lines: start..total,
+                    table_slice: None,
+                    column: self.column,
                 });
                 self.cursor += metrics.fragment_height(&(start..total));
                 self.has_content = true;
@@ -432,6 +453,8 @@ impl Paginator<'_> {
                         page,
                         top: self.cursor,
                         lines: start..total,
+                        table_slice: None,
+                        column: self.column,
                     });
                     self.cursor += metrics.fragment_height(&(start..total));
                     self.has_content = true;
@@ -443,31 +466,83 @@ impl Paginator<'_> {
                 page: self.current_page()?,
                 top: self.cursor,
                 lines: start..end,
+                table_slice: None,
+                column: self.column,
             });
             start = end;
             self.continue_on_new_page(range.section)?;
         }
     }
 
+    fn place_table(
+        &mut self,
+        table: &crate::tables::TableMetrics,
+        range: &SectionRange,
+    ) -> Result<Vec<Fragment>, DocsightError> {
+        let mut start = 0.0_f32;
+        let mut fragments = Vec::new();
+        while start < table.height - 0.001 {
+            let limit = start + self.remaining();
+            let mut end = table
+                .rows
+                .iter()
+                .copied()
+                .rfind(|boundary| *boundary > start + 0.001 && *boundary <= limit + 0.001);
+            if table.height <= limit + 0.001 {
+                end = Some(table.height);
+            }
+            if end.is_none() && self.has_content {
+                self.continue_on_new_page(range.section)?;
+                continue;
+            }
+            let end = match end {
+                Some(end) => end,
+                None => table
+                    .emitted
+                    .runs
+                    .iter()
+                    .map(|run| run.bbox.y1)
+                    .filter(|cut| {
+                        *cut > start + 0.001
+                            && *cut <= limit
+                            && !table
+                                .emitted
+                                .runs
+                                .iter()
+                                .any(|run| run.bbox.y0 < *cut - 0.001 && run.bbox.y1 > *cut + 0.001)
+                    })
+                    .max_by(f32::total_cmp)
+                    .ok_or_else(|| DocsightError::UnsupportedFeature {
+                        feature:
+                            "DOCX table row has no legal line boundary within the page content area"
+                                .to_owned(),
+                    })?,
+            };
+            fragments.push(Fragment {
+                page: self.current_page()?,
+                top: self.cursor,
+                lines: 0..0,
+                table_slice: Some((start, end)),
+                column: self.column,
+            });
+            self.cursor += end - start;
+            self.has_content = true;
+            start = end;
+            if start < table.height - 0.001 {
+                self.continue_on_new_page(range.section)?;
+            }
+        }
+        Ok(fragments)
+    }
+
     fn place_atomic(
         &mut self,
         height: f32,
-        kind: BlockKind,
         id: &ObjectId,
         range: &SectionRange,
     ) -> Result<Vec<Fragment>, DocsightError> {
         if self.has_content && height > self.remaining() {
             self.continue_on_new_page(range.section)?;
-            if kind == BlockKind::Table {
-                let page = self.current_page()?;
-                self.warnings.push(object_warning(
-                    "DOCX_PAGINATION_BLOCK_GRANULAR",
-                    id,
-                    page,
-                    format!("table {id} does not fit the remaining space and moved to page {page} as a whole"),
-                    "tables are not split between rows, so the previous page ends earlier than in Word",
-                ));
-            }
         }
         let page = self.current_page()?;
         if height > self.content_height() {
@@ -483,24 +558,12 @@ impl Paginator<'_> {
             page,
             top: self.cursor,
             lines: 0..0,
+            table_slice: None,
+            column: self.column,
         };
         self.cursor += height;
         self.has_content = true;
         Ok(vec![fragment])
-    }
-}
-
-fn lines_that_fit(available: f32, line_height: f32) -> usize {
-    if !available.is_finite() || available <= 0.0 || line_height <= 0.0 {
-        return 0;
-    }
-    let count = (available / line_height + LINE_FIT_TOLERANCE).floor();
-    if count <= 0.0 {
-        0
-    } else if count >= usize::MAX as f32 {
-        usize::MAX
-    } else {
-        count as usize
     }
 }
 

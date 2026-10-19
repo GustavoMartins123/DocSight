@@ -1,43 +1,19 @@
-pub fn char_width(c: char, size_pt: f32) -> f32 {
-    let units = match c {
-        ' ' => 250,
-        '0'..='9' => 500,
-        'i' | 'l' => 222,
-        'f' | 'j' | 'r' | 't' => 333,
-        'm' => 833,
-        'w' => 722,
-        'a'..='z' => 500,
-        'I' => 278,
-        'J' => 333,
-        'M' => 833,
-        'W' => 944,
-        'B' | 'E' | 'F' | 'L' | 'P' | 'S' | 'Z' => 556,
-        'A'..='Z' => 667,
-        '.' | ',' | ':' | ';' | '!' | '\'' => 222,
-        '(' | ')' | '[' | ']' | '-' | '_' | '/' | '\\' => 333,
-        '?' | '"' => 444,
-        _ => 500,
-    };
-    (units as f32 / 1000.0) * size_pt
+use docsight_core::DocsightError;
+use docsight_fonts::{DEFAULT_FAMILY, FontBook, FontFace};
+
+pub fn font_fingerprint() -> Result<String, DocsightError> {
+    Ok(FontBook::load()?.fingerprint())
 }
 
-pub fn font_fingerprint() -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"docsight-layout-font-table-v1");
-    for code in 32_u32..127 {
-        let character = char::from_u32(code);
-        hasher.update(code.to_le_bytes());
-        if let Some(character) = character {
-            hasher.update(char_width(character, 1000.0).to_le_bytes());
-        }
-    }
-    let digest = hasher.finalize();
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+pub fn char_width(character: char, size_pt: f32) -> Result<f32, DocsightError> {
+    text_width(&character.to_string(), size_pt)
 }
 
-pub fn text_width(text: &str, size_pt: f32) -> f32 {
-    text.chars().map(|c| char_width(c, size_pt)).sum()
+pub fn text_width(text: &str, size_pt: f32) -> Result<f32, DocsightError> {
+    Ok(FontBook::bundled()?
+        .resolve(DEFAULT_FAMILY, false, false)?
+        .shape(text, size_pt)?
+        .width)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,78 +22,83 @@ pub struct WrappedLine {
     pub start_char: usize,
 }
 
-pub fn wrap_text(text: &str, size_pt: f32, max_width: f32) -> Vec<String> {
-    wrap_text_indexed(text, size_pt, max_width, max_width)
+pub fn wrap_text(text: &str, size_pt: f32, max_width: f32) -> Result<Vec<String>, DocsightError> {
+    Ok(wrap_text_indexed(text, size_pt, max_width, max_width)?
         .into_iter()
         .map(|line| line.text)
-        .collect()
+        .collect())
 }
 
 pub fn wrap_text_indexed(
     text: &str,
     size_pt: f32,
-    first_line_width: f32,
-    line_width: f32,
-) -> Vec<WrappedLine> {
-    let space_width = char_width(' ', size_pt);
-    let mut lines: Vec<WrappedLine> = Vec::new();
-    let mut segment_start = 0_usize;
-    for segment in text.split('\n') {
-        let segment_chars = segment.chars().count();
-        if segment.is_empty() {
-            lines.push(WrappedLine {
-                text: String::new(),
-                start_char: segment_start,
-            });
-            segment_start += 1;
-            continue;
-        }
-        let mut current = String::new();
-        let mut current_width = 0.0_f32;
-        let mut current_start = segment_start;
-        let mut word_start = segment_start;
-        for word in segment.split(' ') {
-            let word_chars = word.chars().count();
-            if !word.is_empty() {
-                let word_width = text_width(word, size_pt);
-                let limit = if lines.is_empty() {
-                    first_line_width
-                } else {
-                    line_width
-                };
-                if current.is_empty() {
-                    current.push_str(word);
-                    current_width = word_width;
-                    current_start = word_start;
-                } else if current_width + space_width + word_width <= limit {
-                    current.push(' ');
-                    current.push_str(word);
-                    current_width += space_width + word_width;
-                } else {
-                    lines.push(WrappedLine {
-                        text: std::mem::take(&mut current),
-                        start_char: current_start,
-                    });
-                    current.push_str(word);
-                    current_width = word_width;
-                    current_start = word_start;
-                }
-            }
-            word_start += word_chars + 1;
-        }
-        if !current.is_empty() {
-            lines.push(WrappedLine {
-                text: current,
-                start_char: current_start,
-            });
-        }
-        segment_start += segment_chars + 1;
-    }
-    if lines.is_empty() {
-        lines.push(WrappedLine {
-            text: String::new(),
-            start_char: 0,
+    first_width: f32,
+    width: f32,
+) -> Result<Vec<WrappedLine>, DocsightError> {
+    let face = FontBook::bundled()?.resolve(DEFAULT_FAMILY, false, false)?;
+    wrap_with_face(text, size_pt, first_width, width, &face)
+}
+
+pub(crate) fn wrap_with_face(
+    text: &str,
+    size: f32,
+    first_width: f32,
+    width: f32,
+    face: &FontFace,
+) -> Result<Vec<WrappedLine>, DocsightError> {
+    if !width.is_finite() || width <= 0.0 || !first_width.is_finite() || first_width <= 0.0 {
+        return Err(DocsightError::MalformedDocument {
+            message: "text line widths must be finite and positive".to_owned(),
         });
     }
-    lines
+    let mut lines = Vec::new();
+    let mut char_start = 0;
+    for segment in text.split('\n') {
+        let characters: Vec<char> = segment.chars().collect();
+        let offsets: Vec<usize> = segment.char_indices().map(|(offset, _)| offset).collect();
+        let mut advances = vec![0.0_f32; characters.len()];
+        for glyph in face.shape(segment, size)?.glyphs {
+            let index = offsets
+                .partition_point(|offset| *offset <= glyph.cluster as usize)
+                .saturating_sub(1);
+            if let Some(advance) = advances.get_mut(index) {
+                *advance += glyph.advance;
+            }
+        }
+        let mut start = 0;
+        if characters.is_empty() {
+            lines.push(WrappedLine {
+                text: String::new(),
+                start_char: char_start,
+            });
+        }
+        while start < characters.len() {
+            let limit = if lines.is_empty() { first_width } else { width };
+            let mut end = start;
+            let mut last_break = None;
+            let mut measured_width = 0.0;
+            while end < characters.len() {
+                if measured_width + advances[end] > limit && end > start {
+                    break;
+                }
+                if characters[end].is_whitespace() && characters[end] != '\u{a0}' {
+                    last_break = Some(end + 1);
+                }
+                measured_width += advances[end];
+                end += 1;
+            }
+            if end < characters.len()
+                && let Some(boundary) = last_break
+            {
+                end = boundary;
+            }
+            lines.push(WrappedLine {
+                text: characters[start..end].iter().collect(),
+                start_char: char_start + start,
+            });
+            start = end;
+        }
+        char_start += characters.len() + 1;
+    }
+    Ok(lines)
 }

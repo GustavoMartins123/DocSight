@@ -105,7 +105,7 @@ fn resolve_is_explainable_deterministic_and_ambiguity_preserving()
     assert_eq!(first["result"]["status"], "resolved");
     assert_eq!(
         first["result"]["candidates"][0]["object"]["id"],
-        "h_515ad605791c12fc496c1c18d79f6526"
+        "h_11ff36836ef204cec23ee89837654132"
     );
     assert_eq!(
         first["result"]["candidates"][0]["matched_range"]["text"],
@@ -169,7 +169,7 @@ fn context_aggregates_full_typed_evidence_and_one_call_find()
 -> Result<(), Box<dyn std::error::Error>> {
     let tables = fixture("sample_tables.docx");
     let tables = tables.to_str().ok_or("tables path")?;
-    let table_id = "tbl_6c22c8dd17adf7e32604b29241d9ab99";
+    let table_id = "tbl_6fde9f50d14887bd230e213c487c1941";
     let explicit = agent_json(&[
         "--agent",
         "context",
@@ -222,7 +222,7 @@ fn context_aggregates_full_typed_evidence_and_one_call_find()
     assert_eq!(found["result"]["selection"]["mode"], "find");
     assert_eq!(
         found["result"]["selection"]["chosen_object"],
-        "h_515ad605791c12fc496c1c18d79f6526"
+        "h_11ff36836ef204cec23ee89837654132"
     );
     assert_eq!(
         found["result"]["selection"]["matched_range"]["text"],
@@ -271,7 +271,7 @@ fn interaction_ndjson_errors_capabilities_and_schemas_are_typed()
             "--page",
             "1",
             "--object",
-            "h_515ad605791c12fc496c1c18d79f6526",
+            "h_11ff36836ef204cec23ee89837654132",
         ])
         .output()?;
     assert_eq!(invalid.status.code(), Some(2));
@@ -328,15 +328,15 @@ fn interaction_ndjson_errors_capabilities_and_schemas_are_typed()
 #[test]
 fn interaction_limits_fail_closed_at_declared_boundaries() -> Result<(), Box<dyn std::error::Error>>
 {
-    let specification = workspace().join("Projeto_DOCSIGHT_Especificacao.docx");
-    let specification = specification.to_str().ok_or("specification path")?;
+    let report = workspace().join("fixtures/validation/sample_report.docx");
+    let report = report.to_str().ok_or("report path")?;
     let eight_pages = docsight()
         .args([
             "--agent",
             "--max-items",
             "1",
             "peek",
-            specification,
+            report,
             "--pages",
             "1..8",
         ])
@@ -345,7 +345,7 @@ fn interaction_limits_fail_closed_at_declared_boundaries() -> Result<(), Box<dyn
     assert!(eight_pages.stderr.is_empty());
 
     let nine_pages = docsight()
-        .args(["--agent", "peek", specification, "--pages", "1..9"])
+        .args(["--agent", "peek", report, "--pages", "1..9"])
         .output()?;
     assert_eq!(nine_pages.status.code(), Some(13));
     assert!(nine_pages.stdout.is_empty());
@@ -354,26 +354,14 @@ fn interaction_limits_fail_closed_at_declared_boundaries() -> Result<(), Box<dyn
 
     let allowed = "a".repeat(4096);
     let allowed_output = docsight()
-        .args([
-            "--agent",
-            "resolve",
-            specification,
-            "--text",
-            allowed.as_str(),
-        ])
+        .args(["--agent", "resolve", report, "--text", allowed.as_str()])
         .output()?;
     assert!(allowed_output.status.success());
     assert!(allowed_output.stderr.is_empty());
 
     let rejected = "a".repeat(4097);
     let rejected_output = docsight()
-        .args([
-            "--agent",
-            "resolve",
-            specification,
-            "--text",
-            rejected.as_str(),
-        ])
+        .args(["--agent", "resolve", report, "--text", rejected.as_str()])
         .output()?;
     assert_eq!(rejected_output.status.code(), Some(13));
     assert!(rejected_output.stdout.is_empty());
@@ -381,7 +369,7 @@ fn interaction_limits_fail_closed_at_declared_boundaries() -> Result<(), Box<dyn
     assert_eq!(error["error"]["code"], "RESOURCE_LIMIT");
 
     let zero_section = docsight()
-        .args(["--agent", "peek", specification, "--section", "0"])
+        .args(["--agent", "peek", report, "--section", "0"])
         .output()?;
     assert_eq!(zero_section.status.code(), Some(2));
     let error: Value = serde_json::from_slice(&zero_section.stderr)?;
@@ -407,7 +395,7 @@ fn interaction_commands_run_through_the_sandbox() -> Result<(), Box<dyn std::err
         vec![
             "context",
             path,
-            "h_515ad605791c12fc496c1c18d79f6526",
+            "h_11ff36836ef204cec23ee89837654132",
             "--include",
             "geometry,provenance",
         ],

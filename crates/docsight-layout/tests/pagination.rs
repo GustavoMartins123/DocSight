@@ -31,6 +31,8 @@ fn section(index: u32, width: f32, height: f32) -> Section {
         header_distance_pt: Some(36.0),
         footer_distance_pt: Some(36.0),
         columns: 1,
+        column_spacing_pt: None,
+        gutter_pt: 0.0,
         page_number_start: None,
         page_number_format: None,
         headers_footers: Vec::new(),
@@ -45,6 +47,7 @@ fn entry(kind: HeaderFooterKind, variant: HeaderFooterVariant, text: &str) -> Se
         part: format!("/word/{text}.xml").replace(' ', "_"),
         text: text.to_owned(),
         inherited: false,
+        blocks: Vec::new(),
     }
 }
 
@@ -62,6 +65,7 @@ fn paragraph(index: u32, text: &str, flags: LayoutFlags) -> Block {
         flags,
         format: Default::default(),
         continuations: Vec::new(),
+        inline_runs: Vec::new(),
         content: BlockContent::Paragraph(ParagraphBlock {
             text: text.to_owned(),
             style_id: None,
@@ -89,7 +93,18 @@ fn widow(enabled: bool) -> LayoutFlags {
     }
 }
 
-fn document(blocks: Vec<Block>, sections: Vec<Section>) -> Document {
+fn document(blocks: Vec<Block>, mut sections: Vec<Section>) -> Document {
+    for section in &mut sections {
+        for entry in &mut section.headers_footers {
+            let mut block = paragraph(1, &entry.text, LayoutFlags::default());
+            block.source = SourceSpan::new(entry.part.clone());
+            block.id = ObjectId::new("hp", DIGEST, &entry.part);
+            block.format.line_height_pt = Some(12.0);
+            block.format.exact_line_height = true;
+            block.format.space_after_pt = Some(0.0);
+            entry.blocks = vec![block];
+        }
+    }
     Document {
         version: IrVersion::current(),
         id: "doc_pagination".to_owned(),
@@ -418,21 +433,15 @@ fn odd_and_even_page_sections_insert_blank_pages_only_when_needed() -> TestResul
 }
 
 #[test]
-fn next_column_sections_start_a_page_with_an_explicit_diagnostic() -> TestResult {
+fn next_column_sections_with_one_column_start_the_next_page() -> TestResult {
     let mut next_column = section(2, 612.0, 792.0);
     next_column.start = SectionStart::NextColumn;
     let laid_out = two_section_document(next_column)?;
     assert_eq!(laid_out.document.blocks[2].page, Some(2));
-    let warning = laid_out
-        .document
-        .warnings
-        .iter()
-        .find(|warning| warning.code == "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED")
-        .ok_or("next column warning")?;
-    assert_eq!(
-        warning.object.as_ref(),
-        Some(&laid_out.document.sections[1].id)
-    );
+    assert!(!has_warning(
+        &laid_out,
+        "DOCX_NEXT_COLUMN_SECTION_UNSUPPORTED"
+    ));
     Ok(())
 }
 
@@ -480,6 +489,7 @@ fn page_fields_resolve_restarts_formats_and_totals_per_page() -> TestResult {
     body.page_number_format = Some("lowerLetter".to_owned());
     body.headers_footers.push(SectionHeaderFooter {
         inherited: true,
+        blocks: Vec::new(),
         ..entry(
             HeaderFooterKind::Footer,
             HeaderFooterVariant::Default,
@@ -491,7 +501,7 @@ fn page_fields_resolve_restarts_formats_and_totals_per_page() -> TestResult {
         overlay_texts(&laid_out, OverlayKind::Footer),
         vec!["I of 3 (1)", "a of 3 (2)", "b of 3 (2)"]
     );
-    assert!(has_warning(
+    assert!(!has_warning(
         &laid_out,
         "DOCX_HEADER_FOOTER_LAYOUT_APPROXIMATED"
     ));
@@ -532,7 +542,7 @@ fn section_page_totals_include_a_shared_continuous_page() -> TestResult {
 }
 
 #[test]
-fn unsupported_page_number_formats_are_rendered_decimal_and_diagnosed_once() -> TestResult {
+fn unsupported_page_number_formats_fail_closed() -> TestResult {
     let blocks = vec![
         paragraph(1, "one", LayoutFlags::default()),
         paragraph(
@@ -551,18 +561,9 @@ fn unsupported_page_number_formats_are_rendered_decimal_and_diagnosed_once() -> 
         HeaderFooterVariant::Default,
         "[PAGE]",
     ));
-    let laid_out = laid(blocks, vec![numbered])?;
-    assert_eq!(
-        overlay_texts(&laid_out, OverlayKind::Footer),
-        vec!["1", "2"]
+    assert!(
+        matches!(laid(blocks, vec![numbered]), Err(error) if error.to_string().contains("chineseCounting"))
     );
-    let count = laid_out
-        .document
-        .warnings
-        .iter()
-        .filter(|warning| warning.code == "DOCX_PAGE_NUMBER_FORMAT_UNSUPPORTED")
-        .count();
-    assert_eq!(count, 1);
     Ok(())
 }
 
@@ -619,7 +620,7 @@ fn title_page_and_even_page_variants_are_selected_per_page() -> TestResult {
 }
 
 #[test]
-fn header_distance_positions_overlays_and_overlaps_are_diagnosed() -> TestResult {
+fn header_distance_positions_overlays_and_reserves_body_space() -> TestResult {
     let mut placed = section(1, 612.0, 792.0);
     placed.header_distance_pt = Some(20.0);
     placed.footer_distance_pt = Some(30.0);
@@ -646,12 +647,21 @@ fn header_distance_positions_overlays_and_overlaps_are_diagnosed() -> TestResult
     assert_eq!((footer.y0, footer.y1), (750.0, 762.0));
     assert!(!has_warning(&laid_out, "DOCX_HEADER_FOOTER_OVERLAPS_BODY"));
 
-    placed.headers_footers[0].text = lines(6);
+    placed.headers_footers[0] = entry(
+        HeaderFooterKind::Header,
+        HeaderFooterVariant::Default,
+        &lines(6),
+    );
     let laid_out = laid(
         vec![paragraph(1, "body", LayoutFlags::default())],
         vec![placed],
     )?;
-    assert!(has_warning(&laid_out, "DOCX_HEADER_FOOTER_OVERLAPS_BODY"));
+    let header = laid_out.document.pages[0].overlays[0]
+        .bbox
+        .ok_or("header bbox")?;
+    let body = laid_out.document.blocks[0].bbox.ok_or("body bbox")?;
+    assert!(body.y0 >= header.y1);
+    assert!(!has_warning(&laid_out, "DOCX_HEADER_FOOTER_OVERLAPS_BODY"));
 
     let mut outside = section(1, 612.0, 792.0);
     outside.footer_distance_pt = Some(800.0);
@@ -660,11 +670,13 @@ fn header_distance_positions_overlays_and_overlaps_are_diagnosed() -> TestResult
         HeaderFooterVariant::Default,
         "Footer",
     ));
-    let laid_out = laid(
-        vec![paragraph(1, "body", LayoutFlags::default())],
-        vec![outside],
-    )?;
-    assert!(has_warning(&laid_out, "DOCX_HEADER_FOOTER_OUTSIDE_PAGE"));
+    assert!(
+        laid(
+            vec![paragraph(1, "body", LayoutFlags::default())],
+            vec![outside]
+        )
+        .is_err()
+    );
     Ok(())
 }
 

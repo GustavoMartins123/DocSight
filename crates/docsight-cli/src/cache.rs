@@ -579,7 +579,7 @@ fn engine_identity(executable: &Path) -> Result<EngineIdentity, DocsightError> {
     EngineIdentity::for_executable(
         executable,
         LAYOUT_PROFILE,
-        &docsight_layout::font_fingerprint(),
+        &docsight_layout::font_fingerprint()?,
     )
 }
 

@@ -5,17 +5,17 @@ fn docsight() -> Command {
     Command::new(env!("CARGO_BIN_EXE_docsight"))
 }
 
-fn specification() -> PathBuf {
+fn report() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("Projeto_DOCSIGHT_Especificacao.docx")
+        .join("fixtures/validation/sample_report.docx")
 }
 
 #[test]
-fn parses_the_project_specification_structure() -> Result<(), Box<dyn std::error::Error>> {
-    let path = specification();
-    let path = path.to_str().ok_or("invalid specification path")?;
+fn parses_the_generic_report_structure() -> Result<(), Box<dyn std::error::Error>> {
+    let path = report();
+    let path = path.to_str().ok_or("invalid report path")?;
     let inspect = docsight().args(["inspect", path, "--json"]).output()?;
     assert!(inspect.status.success());
     let inspect_json: serde_json::Value = serde_json::from_slice(&inspect.stdout)?;
@@ -29,7 +29,7 @@ fn parses_the_project_specification_structure() -> Result<(), Box<dyn std::error
     let outline_json: serde_json::Value = serde_json::from_slice(&outline.stdout)?;
     assert_eq!(
         outline_json["result"]["headings"][0]["text"],
-        "1. Problem statement"
+        "1. Survey overview"
     );
 
     let tables = docsight().args(["tables", path, "--json"]).output()?;
@@ -53,12 +53,12 @@ fn parses_the_project_specification_structure() -> Result<(), Box<dyn std::error
 
 #[test]
 fn missing_table_returns_object_not_found() -> Result<(), Box<dyn std::error::Error>> {
-    let path = specification();
+    let path = report();
     let output = docsight()
         .args([
             "--json-errors",
             "table",
-            path.to_str().ok_or("invalid specification path")?,
+            path.to_str().ok_or("invalid report path")?,
             "tbl_missing",
             "--format",
             "json",

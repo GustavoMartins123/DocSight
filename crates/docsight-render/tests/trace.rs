@@ -38,7 +38,7 @@ fn docx_trace_replays_from_its_embedded_source_deterministically()
     assert_eq!(bytes, repeated);
     assert_eq!(
         trace.manifest.fingerprint,
-        reproduction_fingerprint(&source)
+        reproduction_fingerprint(&source)?
     );
     assert!(!trace.manifest.glyph_runs.is_empty());
     assert_eq!(
@@ -64,7 +64,7 @@ fn proof_bundle_verifies_embedded_evidence_and_optional_crop()
     let source = DocumentSource::open(fixture("sample_headings.docx"))?;
     let request = RenderRequest {
         target: RenderTarget::Object {
-            id: "h_515ad605791c12fc496c1c18d79f6526".to_owned(),
+            id: "h_11ff36836ef204cec23ee89837654132".to_owned(),
         },
         dpi: 72,
     };
@@ -216,7 +216,7 @@ fn fuzz_proof_bundle_bytes_fail_closed_without_panicking() -> Result<(), Box<dyn
     let source = DocumentSource::open(fixture("sample_headings.docx"))?;
     let request = RenderRequest {
         target: RenderTarget::Object {
-            id: "h_515ad605791c12fc496c1c18d79f6526".to_owned(),
+            id: "h_11ff36836ef204cec23ee89837654132".to_owned(),
         },
         dpi: 72,
     };

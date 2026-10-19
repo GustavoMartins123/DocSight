@@ -307,8 +307,8 @@ fn ingested_documents_satisfy_the_published_ir_schema() -> Result<(), Box<dyn st
         let document = ingest(&fixture(name))?;
         validate_against_schema(&schema, &document, name)?;
     }
-    let document = ingest(&repository_root().join("Projeto_DOCSIGHT_Especificacao.docx"))?;
-    validate_against_schema(&schema, &document, "Projeto_DOCSIGHT_Especificacao.docx")?;
+    let document = ingest(&repository_root().join("fixtures/validation/sample_report.docx"))?;
+    validate_against_schema(&schema, &document, "fixtures/validation/sample_report.docx")?;
     Ok(())
 }
 
