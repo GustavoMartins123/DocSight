@@ -518,7 +518,10 @@ enum Command {
         json: bool,
     },
     #[command(about = SUMMARY_MCP)]
-    Mcp,
+    Mcp {
+        #[arg(long, help = "Path to the mandatory docsight.mcp-policy/v1 policy")]
+        policy: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1249,26 +1252,6 @@ fn read_pdf_password(path: &Path) -> Result<PdfPassword, DocsightError> {
     Ok(password)
 }
 
-fn parse_direct_password(secret: &str) -> Result<PdfPassword, DocsightError> {
-    if secret.is_empty() {
-        return Err(DocsightError::InvalidArgument {
-            message: "PDF password must not be empty".to_owned(),
-        });
-    }
-    if secret.contains('\n') || secret.contains('\r') {
-        return Err(DocsightError::InvalidArgument {
-            message: "PDF password must contain exactly one line".to_owned(),
-        });
-    }
-    if secret.len() > MAX_PDF_PASSWORD_BYTES {
-        return Err(DocsightError::ResourceLimit {
-            resource: "PDF password bytes".to_owned(),
-            limit: MAX_PDF_PASSWORD_BYTES as u64,
-        });
-    }
-    Ok(PdfPassword(secret.as_bytes().to_vec()))
-}
-
 fn print_build_identity() -> Result<(), DocsightError> {
     let executable_sha256 = cache::running_executable_sha256()?;
     let stdout = io::stdout();
@@ -1337,6 +1320,16 @@ fn main() -> ExitCode {
         let exit_code = error.exit_code();
         return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope()).is_ok() {
             ExitCode::from(exit_code)
+        } else {
+            ExitCode::from(40)
+        };
+    }
+    if cli.sandbox && matches!(cli.command, Command::Mcp { .. }) {
+        let error = DocsightError::InvalidArgument {
+            message: "MCP always isolates each call; use --policy instead of --sandbox".to_owned(),
+        };
+        return if emit_error(&error, cli.structured_errors(), cli.agent_error_envelope()).is_ok() {
+            ExitCode::from(2)
         } else {
             ExitCode::from(40)
         };
@@ -1524,7 +1517,7 @@ fn cached_document_path(command: &Command) -> Option<&Path> {
         | Command::Replay { .. }
         | Command::Verify { .. }
         | Command::Cache { .. }
-        | Command::Mcp => None,
+        | Command::Mcp { .. } => None,
     }
 }
 
@@ -1613,6 +1606,18 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
         });
     }
     let is_diff = matches!(cli.command, Command::Diff { .. });
+    let is_mcp = matches!(cli.command, Command::Mcp { .. });
+    if is_mcp
+        && (cli.has_machine_output_limits()
+            || cli.max_document_bytes.is_some()
+            || cli.sandbox
+            || cli.ndjson)
+    {
+        return Err(DocsightError::InvalidArgument {
+            message: "MCP limits and mandatory per-call isolation are configured through --policy"
+                .to_owned(),
+        });
+    }
     if is_diff && !cli.ndjson && (cli.max_items.is_some() || cli.continue_token.is_some()) {
         return Err(DocsightError::InvalidArgument {
             message: "diff pagination with --max-items or --continue requires --ndjson streaming"
@@ -1625,9 +1630,12 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
                 .to_owned(),
         });
     }
-    if !is_diff && (cli.password_before_file.is_some() || cli.password_after_file.is_some()) {
+    if !is_diff
+        && !is_mcp
+        && (cli.password_before_file.is_some() || cli.password_after_file.is_some())
+    {
         return Err(DocsightError::InvalidArgument {
-            message: "--password-before-file and --password-after-file apply only to diff"
+            message: "--password-before-file and --password-after-file apply only to diff or MCP host configuration"
                 .to_owned(),
         });
     }
@@ -1649,7 +1657,11 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
     let primary_storage: Option<PdfPassword>;
     let before_storage: Option<PdfPassword>;
     let after_storage: Option<PdfPassword>;
-    if is_diff {
+    if is_mcp {
+        primary_storage = None;
+        before_storage = None;
+        after_storage = None;
+    } else if is_diff {
         primary_storage = None;
         before_storage = cli
             .password_before_file
@@ -2131,7 +2143,7 @@ fn execute(cli: &Cli) -> Result<(), DocsightError> {
             quiet,
             json_errors,
         }),
-        Command::Mcp => mcp::run_mcp_server(&loader),
+        Command::Mcp { policy } => mcp::run_mcp_server(cli, policy),
     }
 }
 
@@ -2607,7 +2619,7 @@ fn capabilities(json: bool, ndjson: bool) -> Result<(), DocsightError> {
             CommandCapability {
                 name: "mcp",
                 summary: SUMMARY_MCP,
-                invocation: "mcp",
+                invocation: "mcp --policy <file>",
                 formats: DOCX_PDF_FORMATS,
                 ndjson: false,
                 ndjson_events: &[],

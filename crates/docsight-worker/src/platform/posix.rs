@@ -34,6 +34,7 @@ pub fn spawn_isolated(
     _policy: &SandboxPolicy,
 ) -> Result<IsolatedChild, DocsightError> {
     let mut command = Command::new(request.binary);
+    command.env_clear();
     command.args(request.args);
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());

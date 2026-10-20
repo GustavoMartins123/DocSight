@@ -143,7 +143,12 @@ fn seatbelt_profile() -> Result<String, DocsightError> {
     }
     for path in &read_paths {
         let canonical = canonical_existing(Path::new(path))?;
-        profile.push_str(&format!("    (literal {})\n", quote_path(&canonical)?));
+        let rule = if canonical.is_dir() {
+            "subpath"
+        } else {
+            "literal"
+        };
+        profile.push_str(&format!("    ({rule} {})\n", quote_path(&canonical)?));
     }
     profile.push_str(")\n");
 

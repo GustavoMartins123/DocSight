@@ -65,7 +65,8 @@ fn collect_codes(
 
 fn is_diagnostic_code(literal: &str) -> bool {
     const PREFIXES: [&str; 6] = ["DOCX_", "PDF_", "DIFF_", "CONTEXT_", "TRACE_", "CACHE_"];
-    const EXACT: [&str; 7] = [
+    const EXACT: [&str; 8] = [
+        "ACCESS_DENIED",
         "PDF_FONT_OUTLINE_MISSING",
         "INFERRED_SEMANTICS",
         "INFERRED_TABLE",

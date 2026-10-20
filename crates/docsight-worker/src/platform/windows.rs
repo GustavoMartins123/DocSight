@@ -873,7 +873,7 @@ fn writable_directory(path: &Path) -> Result<PathBuf, DocsightError> {
 }
 
 fn environment_block(overrides: &[(String, String)]) -> Result<Vec<u16>, DocsightError> {
-    let mut variables: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+    let mut variables: Vec<(OsString, OsString)> = Vec::new();
     let overrides: Vec<(OsString, OsString)> = overrides
         .iter()
         .map(|(key, value)| (OsString::from(key), OsString::from(value)))

@@ -43,7 +43,25 @@ pub struct SpawnRequest<'a> {
 
 impl SpawnRequest<'_> {
     pub fn child_environment(&self) -> Result<Vec<(String, String)>, DocsightError> {
-        let mut environment = self.environment.to_vec();
+        let mut environment = Vec::new();
+        for key in [
+            "SystemRoot",
+            "WINDIR",
+            "HOME",
+            "USERPROFILE",
+            "DOCSIGHT_FONT_DIR",
+            "LANG",
+            "LC_ALL",
+            "TZ",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                let value = value.into_string().map_err(|_| {
+                    sandbox_failure("a worker environment value is not valid UTF-8")
+                })?;
+                environment.push((key.to_owned(), value));
+            }
+        }
+        environment.extend_from_slice(self.environment);
         environment.push((
             crate::SANDBOX_READ_PATHS_ENV.to_owned(),
             serialize_paths(crate::SANDBOX_READ_PATHS_ENV, self.read_paths)?,

@@ -87,7 +87,7 @@ DocSight accepts PDF passwords only through `--password-file`. For `diff`, pass 
 | Comparison | `diff` | Compare package, semantic and visual changes with lineage. |
 | Caching | `cache` | Report, verify, prune or clear the opt-in document IR cache. |
 | Interactive setup | `completions` | Generate a completion script for Bash, Elvish, Fish, PowerShell or Zsh. |
-| Agent integration | `mcp` | Run Model Context Protocol (MCP) server on stdio. |
+| Agent integration | `mcp` | Run the isolated MCP server on stdio; `--policy <file>` is mandatory. |
 
 Use `docsight <command> --help` for human-readable flags. Use the machine contract for integrations; command names, schemas, units, ordering and exit codes are public contracts.
 
@@ -171,3 +171,9 @@ Aptos is available separately from Microsoft's official [Aptos font package](htt
 The normalized IR is version 1.4 and preserves inline run formatting, cell formatting and continuation geometry, structured header/footer content, contextual/line spacing and section columns/gutters. DOCX pagination remains computed evidence, not a claim of Word-identical rendering.
 
 Validation documents contain generic fictional data only, never project specifications, implementation phases, milestone records or internal plans. The long-form regression/benchmark document `fixtures/validation/sample_report.docx` describes a fictional facilities survey with tables, lists, headings and page fields, using only bundled Liberation fonts. It is authored independently of the project specification and needs no proprietary fonts or network access in CI.
+
+### Safe agent integration
+
+MCP requires an operator-supplied `docsight.mcp-policy/v1` file: `docsight mcp --policy operator-policy.json`. Its allowlist controls input roots, tools, optional artifact outputs and per-call quotas. Every document call is isolated; there is no unrestricted MCP route. Passwords are supplied only through host credential-file flags, never tool arguments. See [the MCP security contract](AGENT_PROTOCOL.md#mcp-security-contract-v2) for the policy format and changed machine contract.
+
+The local `docsight-inspect` skill is provided in `.agents/skills/docsight-inspect/SKILL.md` for repository-scoped discovery. It helps an agent navigate and verify evidence without treating document text as instructions. It does not replace host permissions or authorize sending confidential content to a remote model.

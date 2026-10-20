@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/mcp-tool-error.json",
+  "title": "McpToolError",
+  "type": "object",
+  "required": [
+    "schema",
+    "error"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "docsight.mcp/v2"
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "exit_code",
+        "message",
+        "effect"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "message": {
+          "type": "string"
+        },
+        "effect": {
+          "type": "string"
+        },
+        "object": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": "object",
+          "properties": {
+            "page": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "object": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "minProperties": 1,
+          "additionalProperties": false
+        },
+        "required_font": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "bold",
+            "italic"
+          ],
+          "properties": {
+            "family": {
+              "type": "string",
+              "minLength": 1
+            },
+            "bold": {
+              "type": "boolean"
+            },
+            "italic": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
