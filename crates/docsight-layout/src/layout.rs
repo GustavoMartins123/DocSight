@@ -60,7 +60,7 @@ pub struct LaidOutDocument {
 }
 
 pub fn layout_docx(doc: Document) -> Result<LaidOutDocument, DocsightError> {
-    let fonts = docsight_fonts::FontBook::load()?;
+    let fonts = docsight_fonts::FontBook::normalized()?;
     let mut hints = crate::headers::LayoutHints {
         total: 1,
         sections: vec![1; doc.sections.len()],
@@ -149,6 +149,11 @@ fn layout_pass(
         page: None,
         occurrences: None,
     }];
+    warnings.push(Diagnostic::warning(
+        "DOCX_FONT_NORMALIZED",
+        format!("DOCX visual text uses bundled DejaVu Sans, Liberation Serif and Liberation Mono under {}", docsight_fonts::NORMALIZED_PROFILE),
+        "source font names remain in the IR; line breaks, pagination and geometry describe the normalized view, not the authoring application's appearance",
+    ));
     warnings.extend(pagination_warnings);
 
     let mut laid_pages: Vec<LaidOutPage> = Vec::with_capacity(records.len());
@@ -437,9 +442,11 @@ fn layout_pass(
         sections: section_counts,
     };
     let mut used = std::collections::BTreeSet::new();
-    for page in &laid_pages {
-        for run in &page.runs {
+    for page in &mut laid_pages {
+        for run in &mut page.runs {
             let face = fonts.resolve(&run.font_family, run.bold, run.italic)?;
+            run.text = face.decoded_text(&run.text)?;
+            run.font_family = face.family.clone();
             if used.insert(face.sha256.clone()) {
                 let target = format!("opentype:{}", face.sha256);
                 doc.resources.push(docsight_core::Resource {

@@ -2,7 +2,7 @@ use crate::{Diagnostic, DocsightError, DocumentFormat, ObjectId, Rect};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const IR_SCHEMA_VERSION: &str = "1.4";
+pub const IR_SCHEMA_VERSION: &str = "1.5";
 pub const IR_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

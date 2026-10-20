@@ -3,6 +3,7 @@ mod crypt;
 mod filters;
 mod font;
 mod images;
+mod postscript;
 mod raster;
 mod reconstruction;
 mod syntax;
@@ -30,10 +31,12 @@ use syntax::{ObjectRef, StreamValue, Value, Xref, XrefEntry, malformed, parse_ob
 
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const FONT_BACKEND_ID: &str = "truetype-native-v1/hayro-font-0.3.0/ps-outlines-v1";
 pub const MAX_PAGES: u32 = 10_000;
 pub const MAX_ANNOTATIONS: u32 = 4_096;
 pub use content::MAX_OPERATIONS as PDF_MAX_CONTENT_OPERATIONS;
 pub use font::MAX_FONT_BYTES as PDF_MAX_FONT_BYTES;
+pub const PDF_MAX_GLYPH_OUTLINE_POINTS: usize = postscript::MAX_POINTS;
 pub use raster::MIN_DPI as PDF_MIN_DPI;
 pub use raster::{MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS};
 
@@ -562,9 +565,14 @@ impl<'a> PdfDocument<'a> {
     fn xobject_entries(
         &self,
         resources: &BTreeMap<String, Value>,
+        content_bytes: &[u8],
         depth: usize,
         visited: &mut BTreeSet<ObjectRef>,
     ) -> Result<BTreeMap<String, XObjectEntry>, DocsightError> {
+        let uses = content::xobject_uses(content_bytes)?;
+        if uses.is_empty() {
+            return Ok(BTreeMap::new());
+        }
         let Some(value) = resources.get("XObject") else {
             return Ok(BTreeMap::new());
         };
@@ -576,7 +584,11 @@ impl<'a> PdfDocument<'a> {
         }
         let dictionary = self.store.resolve_dict(value)?;
         let mut entries = BTreeMap::new();
-        for (name, entry) in dictionary {
+        for name in uses {
+            let entry = dictionary
+                .get(&name)
+                .ok_or_else(|| malformed(format!("XObject resource {name} is unavailable")))?
+                .clone();
             let reference = match entry {
                 Value::Ref(reference) => Some(reference),
                 _ => None,
@@ -641,7 +653,7 @@ impl<'a> PdfDocument<'a> {
                 },
                 &self.font_cache,
             )?;
-            let xobjects = self.xobject_entries(&nested_resources, depth + 1, visited)?;
+            let xobjects = self.xobject_entries(&nested_resources, &content, depth + 1, visited)?;
             if let Some(reference) = reference {
                 visited.remove(&reference);
             }
@@ -1561,8 +1573,9 @@ impl<'a> PdfDocument<'a> {
             },
             &self.font_cache,
         )?;
+        let content = self.read_content_streams(&page.contents)?;
         let mut visited = BTreeSet::new();
-        let xobject_entries = self.xobject_entries(&resources, 0, &mut visited)?;
+        let xobject_entries = self.xobject_entries(&resources, &content.bytes, 0, &mut visited)?;
         let xobjects: BTreeSet<String> = xobject_entries.keys().cloned().collect();
         let trace_resources = trace_resources(&fonts, &xobjects, &graphics_states.states);
         let content_resources = ContentResources {
@@ -1570,7 +1583,6 @@ impl<'a> PdfDocument<'a> {
             xobjects: xobject_entries,
             ext_graphics_states: graphics_states.states,
         };
-        let content = self.read_content_streams(&page.contents)?;
         let parsed = parse_content(
             &content.bytes,
             page.media_box.x0,

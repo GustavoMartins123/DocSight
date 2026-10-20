@@ -147,3 +147,47 @@ fn declared_limits_match_the_enforced_constants() {
         Some(docsight_core::MAX_JPEG_SCANS as u64)
     );
 }
+
+#[test]
+fn semantic_ingestion_and_layout_keep_source_identity_and_fonts_separate()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = DocumentSource::open(fixture("sample_headings.docx"))?;
+    let semantic = docsight_ingest::ingest_semantic_with_password(&source, b"")?;
+    assert!(semantic.pages.is_empty());
+    assert!(
+        semantic
+            .blocks
+            .iter()
+            .all(|block| block.page.is_none() && block.bbox.is_none())
+    );
+    let laid = ingest_docx(&source)?;
+    assert_eq!(
+        semantic
+            .blocks
+            .iter()
+            .map(|b| (&b.id, b.text(), &b.inline_runs))
+            .collect::<Vec<_>>(),
+        laid.document
+            .blocks
+            .iter()
+            .map(|b| (&b.id, b.text(), &b.inline_runs))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        laid.pages
+            .iter()
+            .flat_map(|page| &page.runs)
+            .all(|run| matches!(
+                run.font_family.as_str(),
+                "DejaVu Sans" | "Liberation Serif" | "Liberation Mono"
+            ))
+    );
+    assert!(
+        laid.document
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "DOCX_FONT_NORMALIZED")
+    );
+    assert!(canonical_violations(&semantic).is_empty());
+    Ok(())
+}

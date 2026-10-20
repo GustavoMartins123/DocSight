@@ -271,19 +271,27 @@ impl Canvas {
         let units_per_em = run
             .glyphs
             .first()
-            .map(|glyph| glyph.units_per_em)
-            .unwrap_or(1000.0);
+            .ok_or_else(|| DocsightError::MalformedDocument {
+                message: "PDF outline text has no glyphs".to_owned(),
+            })?
+            .units_per_em;
+        if !units_per_em.is_finite() || units_per_em <= 0.0 {
+            return Err(DocsightError::MalformedDocument {
+                message: "PDF outline font has invalid units per em".to_owned(),
+            });
+        }
         let nominal_scale = run.font_size / units_per_em;
         let advance = run
             .glyphs
             .iter()
             .map(|glyph| glyph.advance * nominal_scale)
             .sum::<f32>();
-        let horizontal_scale = if advance > 0.0 {
-            run.bbox.width() / advance
-        } else {
-            1.0
-        };
+        if !advance.is_finite() || advance <= 0.0 {
+            return Err(DocsightError::UnsupportedFeature {
+                feature: "PDF outline text without a positive finite glyph advance".to_owned(),
+            });
+        }
+        let horizontal_scale = run.bbox.width() / advance;
         let direction = if run.mirrored_x { -1.0 } else { 1.0 };
         let mut cursor = if run.mirrored_x {
             run.bbox.x1

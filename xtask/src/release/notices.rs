@@ -173,7 +173,7 @@ pub fn generate(metadata: Value, lock_path: &Path) -> Result<String> {
     let members: BTreeSet<_> = metadata.workspace_members.into_iter().collect();
     let mut seen = BTreeSet::new();
     let mut packages = Vec::new();
-    let mut font_license = None;
+    let mut font_licenses = Vec::new();
     for package in metadata.packages {
         require(
             seen.insert(package.id.clone()),
@@ -189,7 +189,12 @@ pub fn generate(metadata: Value, lock_path: &Path) -> Result<String> {
                         ToolError::new("INVALID_CARGO_METADATA", "Font manifest has no parent")
                     })?
                     .canonicalize()?;
-                font_license = Some(license_path(&root, Path::new("assets/LICENSE-Liberation"))?);
+                for (name, license, file) in [
+                    ("Liberation", "SIL-OFL-1.1", "assets/LICENSE-Liberation"),
+                    ("DejaVu", "Bitstream-Vera", "assets/LICENSE-DejaVu"),
+                ] {
+                    font_licenses.push((name, license, license_path(&root, Path::new(file))?));
+                }
             }
             continue;
         }
@@ -267,9 +272,11 @@ pub fn generate(metadata: Value, lock_path: &Path) -> Result<String> {
             ));
         }
     }
-    if let Some(path) = font_license {
+    for (name, license, path) in font_licenses {
         let bytes = read_bytes(&path, MAX_JSON_BYTES)?;
-        output.push_str("## Bundled Liberation fonts\n\nDeclared license: SIL-OFL-1.1\n\n");
+        output.push_str(&format!(
+            "## Bundled {name} fonts\n\nDeclared license: {license}\n\n"
+        ));
         output.push_str(text(&bytes)?);
         output.push('\n');
     }

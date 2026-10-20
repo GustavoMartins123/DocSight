@@ -21,6 +21,12 @@ DocSight is designed as a local, headless evidence layer for inspecting DOCX and
 - **Magic Byte Verification:** Document formats are identified by magic byte signatures; file extensions are never used as a trust indicator.
 - **Safe Memory and Isolated Execution:** The core engine is built in memory-safe Rust with `unsafe_code` denied across the workspace. For untrusted hostile input, DocSight provides an optional `--sandbox` mode that delegates parsing to an isolated child worker process constrained by OS-level sandbox primitives and strict filesystem access policies.
 
+## Font isolation and distribution
+
+DOCX's `docx-normalized-v1` profile uses only digest-bound fonts embedded in the executable. Source font names are evidence, not filesystem paths or download requests. No system/user font directory is granted to workers. Semantic DOCX `text` ingestion does not invoke layout or source-font resolution. Missing glyphs fail explicitly; the runtime never retries with another font.
+
+PDF font decoding remains inside the isolated native pipeline. The dedicated pure-Rust `hayro-font` adapter is pinned to `0.3.0` (Apache-2.0), not used as a PDF interpreter or renderer. It reads embedded Type 1/CFF programs, with bounded input bytes and outline points plus worker CPU/memory limits; it does not execute arbitrary PostScript documents. The published 0.3.0 package includes its license text, which the existing notice gate verifies. The 0.4.0 package was reviewed but not selected because its archive omitted license texts; no notice-check exception was added.
+
 ## Password and Secret Handling
 
 For password-protected PDFs:

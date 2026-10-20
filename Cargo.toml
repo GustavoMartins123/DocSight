@@ -48,6 +48,7 @@ fontdue = { version = "=0.9.3", default-features = false, features = ["std"] }
 hayro-ccitt = { version = "=0.4.0", default-features = false }
 hayro-jbig2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 hayro-jpeg2000 = { version = "=0.4.1", default-features = false, features = ["std"] }
+hayro-font = "=0.3.0"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

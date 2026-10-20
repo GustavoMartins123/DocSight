@@ -138,8 +138,10 @@ pub(crate) fn reconstruct_page_semantics(
                            digest: &str| {
         if let Some((text, bbox, _, source_offset, source_end)) = current.take() {
             let anchor_length = source_end.saturating_sub(source_offset).max(1);
-            let anchor_path =
-                format!("pdf::page[{page_num}]::p[{source_offset}_{anchor_length}]::{text}");
+            let anchor_path = format!(
+                "pdf::page[{page_num}]::p[{source_offset}_{anchor_length}]::text-block[{}]::{text}",
+                blocks.len() + 1
+            );
             let p_id = ObjectId::new("p", digest, &anchor_path);
             blocks.push(Block {
                 id: p_id,
@@ -202,8 +204,10 @@ pub(crate) fn reconstruct_page_semantics(
                 "h",
                 document_digest,
                 &format!(
-                    "pdf::page[{page}]::h[{}_{anchor_length}]::{}",
-                    line.source_offset, line.text
+                    "pdf::page[{page}]::h[{}_{anchor_length}]::text-block[{}]::{}",
+                    line.source_offset,
+                    text_blocks.len() + 1,
+                    line.text
                 ),
             );
 

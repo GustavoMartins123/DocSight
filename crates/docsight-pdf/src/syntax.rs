@@ -466,9 +466,13 @@ impl<'a> Parser<'a> {
             }
             let key = self.parse_name()?;
             let value = self.parse_value(depth + 1)?;
-            if dict.insert(key, value).is_some() {
-                return Err(malformed("duplicate PDF dictionary key"));
+            if dict.contains_key(&key) {
+                return Err(malformed(format!(
+                    "duplicate PDF dictionary key /{key} at parser-buffer byte {}",
+                    self.cursor
+                )));
             }
+            dict.insert(key, value);
         }
         self.skip_space_and_comments();
         if !self.consume_keyword(b"stream") {

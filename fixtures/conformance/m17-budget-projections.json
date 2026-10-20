@@ -9,8 +9,8 @@
       "omitted_evidence": [],
       "returned_items": 0,
       "selected_profile": "rich",
-      "stdout_bytes": 84589,
-      "stdout_sha256": "986a74e4c3ea52dbd41495410ccf57ea6d7995fbaa438eb25c6e149a9c60f360",
+      "stdout_bytes": 84950,
+      "stdout_sha256": "4d552015b6351e3859bd213ec4ceceb5a54cdc9f18b6420d9ee1a08b7c0ab6a6",
       "total_items": 0,
       "truncated": false
     },
@@ -23,8 +23,8 @@
       ],
       "returned_items": 0,
       "selected_profile": "balanced",
-      "stdout_bytes": 2958,
-      "stdout_sha256": "03fce1a3f45e31f25508a87cd776f4503507c33276b1384370009a3443409385",
+      "stdout_bytes": 3309,
+      "stdout_sha256": "e3a6609125ae82c0d5d241fcdb15d25a57ab1ffaba9a62a6f5ed9ce030e69568",
       "total_items": 0,
       "truncated": false
     },
@@ -42,8 +42,8 @@
       ],
       "returned_items": 0,
       "selected_profile": "compact",
-      "stdout_bytes": 1568,
-      "stdout_sha256": "3d9f309d0f81c45727fa6821b8908c57b3b521d71d0890c155ff63add32c61d9",
+      "stdout_bytes": 1895,
+      "stdout_sha256": "84232a2b0205e498ebbb198ac846b3c6f6404cad511a405e2d32b27fd4bc9e99",
       "total_items": 0,
       "truncated": false
     },
@@ -54,9 +54,9 @@
       ],
       "returned_items": 8,
       "selected_profile": "compact",
-      "stdout_bytes": 3719,
-      "stdout_sha256": "b3c3a8c249e2d690d13ebf3ee13bfee1dcc7caf5934d88fb11c30e80decb1d89",
-      "total_items": 28,
+      "stdout_bytes": 4045,
+      "stdout_sha256": "17ad444563d2f04d7637d5d04a46aef3c1aeabfde875b6f388d816f9f430a371",
+      "total_items": 27,
       "truncated": true
     },
     {
@@ -68,7 +68,7 @@
       "returned_items": 6,
       "selected_profile": "compact",
       "stdout_bytes": 2965,
-      "stdout_sha256": "9a9e4bab102b3a3e3693a5a32387d74d39bdcf56834dc0ea9514f59ce9890704",
+      "stdout_sha256": "8e4a53c37cff57883e7d9bb636bd9e7bcc98052d0bad2caba360b41aafc05bf4",
       "total_items": 7,
       "truncated": true
     }

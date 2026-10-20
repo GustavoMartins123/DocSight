@@ -49,7 +49,6 @@ impl SpawnRequest<'_> {
             "WINDIR",
             "HOME",
             "USERPROFILE",
-            "DOCSIGHT_FONT_DIR",
             "LANG",
             "LC_ALL",
             "TZ",

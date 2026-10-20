@@ -1,0 +1,93 @@
+[
+  {
+    "id": "think-python-2",
+    "title": "Think Python, Second Edition",
+    "format": "pdf",
+    "url": "https://greenteapress.com/thinkpython2/thinkpython2.pdf",
+    "source": "https://greenteapress.com/wp/think-python-2e/",
+    "rights": "CC BY-NC 3.0, as linked by publisher",
+    "file": "documents/think-python-2.pdf",
+    "sha256": "6033000bac3f9268ad75ee041bf8e5d9a3bc8a33bb156399cbd014918cb59f94",
+    "bytes": 907689,
+    "resolved_url": "https://greenteapress.com/thinkpython2/thinkpython2.pdf",
+    "download_status": "ok"
+  },
+  {
+    "id": "think-stats-2",
+    "title": "Think Stats, Second Edition",
+    "format": "pdf",
+    "url": "https://greenteapress.com/thinkstats2/thinkstats2.pdf",
+    "source": "https://greenteapress.com/wp/think-stats-2e/",
+    "rights": "Creative Commons; publisher permits attributed noncommercial distribution",
+    "file": "documents/think-stats-2.pdf",
+    "sha256": "5dbea9094f3606472087e16dc920ae6b87d680f5cff3f3142e6a58a78d9cf567",
+    "bytes": 2088824,
+    "resolved_url": "https://greenteapress.com/thinkstats2/thinkstats2.pdf",
+    "download_status": "ok"
+  },
+  {
+    "id": "forallx-calgary",
+    "title": "forall x: Calgary, An Introduction to Formal Logic",
+    "format": "pdf",
+    "url": "https://forallx.openlogicproject.org/forallxyyc.pdf",
+    "source": "https://forallx.openlogicproject.org/",
+    "rights": "CC BY 4.0, confirmed by publisher source page",
+    "file": "documents/forallx-calgary.pdf",
+    "sha256": "9eca9e08ad6380b00a783536f8a16abc94d13d9561f05baa7fc0a2b762e48ef0",
+    "bytes": 1561563,
+    "resolved_url": "https://forallx.openlogicproject.org/forallxyyc.pdf",
+    "download_status": "ok"
+  },
+  {
+    "id": "nist-security-template",
+    "title": "NIST CUI System Security Plan Template",
+    "format": "docx",
+    "url": "https://csrc.nist.gov/files/pubs/sp/800/171/r2/upd1/final/docs/cui-ssp-template-final.docx",
+    "source": "https://csrc.nist.gov/pubs/sp/800/171/r2/upd1/final",
+    "rights": "US federal government public publication; local validation only",
+    "file": "documents/nist-security-template.docx",
+    "sha256": "341a8cad3fc26efa567ac304097e0cabd8191925ce743169bb2e9bd1b41341a4",
+    "bytes": 73119,
+    "resolved_url": "https://csrc.nist.gov/files/pubs/sp/800/171/r2/upd1/final/docs/cui-ssp-template-final.docx",
+    "download_status": "ok"
+  },
+  {
+    "id": "nist-action-template",
+    "title": "NIST CUI Plan of Action Template",
+    "format": "docx",
+    "url": "https://csrc.nist.gov/files/pubs/sp/800/171/r2/upd1/final/docs/cui-plan-of-action-template-final.docx",
+    "source": "https://csrc.nist.gov/pubs/sp/800/171/r2/upd1/final",
+    "rights": "US federal government public publication; local validation only",
+    "file": "documents/nist-action-template.docx",
+    "sha256": "0aa3cbb67eb49f8e74e74df2789403bc030b19b7b2964c2f3a1dc0b4f886f7dd",
+    "bytes": 30683,
+    "resolved_url": "https://csrc.nist.gov/files/pubs/sp/800/171/r2/upd1/final/docs/cui-plan-of-action-template-final.docx",
+    "download_status": "ok"
+  },
+  {
+    "id": "model-contract-front",
+    "title": "Model Services Contract Front Sheet, England and Wales v2.2",
+    "format": "docx",
+    "url": "https://assets.publishing.service.gov.uk/media/67b487584e79a175a4c2fe02/MSC_-_Front_Sheet_-_E_W_-_Word_v2.2_2025.DOCX",
+    "source": "https://www.gov.uk/government/publications/the-model-services-contract-front-sheet-england-wales",
+    "rights": "UK Open Government Licence v3, subject to publication exceptions",
+    "file": "documents/model-contract-front.docx",
+    "sha256": "2721b26a1de384e20c3cce18faa5db64b4eba407494d54c841cb658bd7b33b6f",
+    "bytes": 5813692,
+    "resolved_url": "https://assets.publishing.service.gov.uk/media/67b487584e79a175a4c2fe02/MSC_-_Front_Sheet_-_E_W_-_Word_v2.2_2025.DOCX",
+    "download_status": "ok"
+  },
+  {
+    "id": "model-contract-core",
+    "title": "Model Services Contract Core Terms, England and Wales v2.2A",
+    "format": "docx",
+    "url": "https://assets.publishing.service.gov.uk/media/68af256b969253904d1558e5/MSC_-_Core_Terms_-_E_W_-_Word_v2.2A_2025.DOCX",
+    "source": "https://www.gov.uk/government/publications/the-model-services-contract-core-terms-england-wales",
+    "rights": "UK Open Government Licence v3, subject to publication exceptions",
+    "file": "documents/model-contract-core.docx",
+    "sha256": "43c7e8b70daf21779253921143b6bc71419ec3b59dba1071469cdc5f557a7f8e",
+    "bytes": 177274,
+    "resolved_url": "https://assets.publishing.service.gov.uk/media/68af256b969253904d1558e5/MSC_-_Core_Terms_-_E_W_-_Word_v2.2A_2025.DOCX",
+    "download_status": "ok"
+  }
+]

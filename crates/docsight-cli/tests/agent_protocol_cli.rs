@@ -719,8 +719,8 @@ fn max_bytes_never_emits_oversized_single_item() -> Result<(), Box<dyn std::erro
         assert!(out.stdout.len() <= 700, "stdout exceeded the hard cap");
         let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
         assert!(value["limits"]["truncated"] == true);
-        assert!(value["limits"]["warnings_truncated"] == true);
-        assert_eq!(value["limits"]["total_warnings"], 1);
+        assert!(value["warnings"].as_array().ok_or("warnings")?.is_empty());
+        assert!(value["limits"].get("warnings_truncated").is_none());
     } else {
         assert_eq!(out.status.code(), Some(2));
     }
@@ -745,11 +745,11 @@ fn max_bytes_truncates_warnings_without_losing_single_result()
     let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
     assert_eq!(value["limits"]["truncated"], false);
     assert_eq!(value["limits"]["warnings_truncated"], true);
-    assert_eq!(value["limits"]["total_warnings"], 1);
+    assert_eq!(value["limits"]["total_warnings"], 2);
     let returned = value["limits"]["returned_warnings"]
         .as_u64()
         .ok_or("returned_warnings")?;
-    assert!(returned < 1, "warnings must be dropped under the byte cap");
+    assert!(returned < 2, "warnings must be dropped under the byte cap");
     assert!(
         value["result"]["format"].is_string(),
         "the single result must survive warning truncation"
@@ -843,7 +843,7 @@ fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::err
     assert_eq!(done["type"], "done");
     assert_eq!(done["limits"]["truncated"], true);
     assert_eq!(done["limits"]["warnings_truncated"], true);
-    assert_eq!(done["limits"]["total_warnings"], 1);
+    assert_eq!(done["limits"]["total_warnings"], 2);
     let returned = done["limits"]["returned_warnings"]
         .as_u64()
         .ok_or("returned_warnings")?;
@@ -851,7 +851,7 @@ fn ndjson_reports_warning_truncation_separately() -> Result<(), Box<dyn std::err
         .iter()
         .filter(|record| record["type"] == "warning")
         .count();
-    assert!(returned < 1, "warnings must be dropped under the byte cap");
+    assert!(returned < 2, "warnings must be dropped under the byte cap");
     assert_eq!(
         returned, emitted as u64,
         "returned_warnings must match the warning records actually streamed"

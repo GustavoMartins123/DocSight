@@ -284,6 +284,10 @@ fn notices_include_the_bundled_font_license_from_the_workspace_member() -> TestR
         fonts.join("assets/LICENSE-Liberation"),
         "Bundled font license text\n",
     )?;
+    fs::write(
+        fonts.join("assets/LICENSE-DejaVu"),
+        "DejaVu font license text\n",
+    )?;
     let mut data = metadata(vec![package(
         &dependency,
         "dependency",
@@ -311,6 +315,8 @@ fn notices_include_the_bundled_font_license_from_the_workspace_member() -> TestR
     let output = generate(data, &lock)?;
     assert!(output.contains("## Bundled Liberation fonts\n\nDeclared license: SIL-OFL-1.1"));
     assert!(output.contains("Bundled font license text"));
+    assert!(output.contains("## Bundled DejaVu fonts\n\nDeclared license: Bitstream-Vera"));
+    assert!(output.contains("DejaVu font license text"));
     assert!(!output.contains(registry.root.to_string_lossy().as_ref()));
     Ok(())
 }

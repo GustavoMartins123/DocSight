@@ -118,9 +118,9 @@ fn runs_use_real_metrics_faces_colors_and_antialiased_pixels() -> TestResult {
     );
     let source = package(&body, STYLES, None)?;
     let laid = ingest_docx(&source)?;
-    assert_eq!(laid.document.version.schema_version, "1.4");
+    assert_eq!(laid.document.version.schema_version, "1.5");
     let run = laid.pages[0].runs.first().ok_or("missing glyph run")?;
-    assert_eq!(run.font_family, "Liberation Sans");
+    assert_eq!(run.font_family, "DejaVu Sans");
     assert_eq!(run.font_size, 20.0);
     assert!(run.bold && run.italic);
     assert_eq!(run.color_argb, 0xff163c7a);
@@ -311,7 +311,7 @@ fn columns_and_gutters_use_page_local_geometry_without_losing_text() -> TestResu
 }
 
 #[test]
-fn missing_fonts_return_typed_requirements_and_publish_no_artifact() -> TestResult {
+fn source_font_names_are_normalized_without_loading_external_fonts() -> TestResult {
     let directory = tempfile::tempdir()?;
     let source = package(
         &format!(
@@ -330,16 +330,35 @@ fn missing_fonts_return_typed_requirements_and_publish_no_artifact() -> TestResu
         .args(["--page", "1", "--out"])
         .arg(&png)
         .output()?;
-    assert_eq!(output.status.code(), Some(30));
-    assert!(output.stdout.is_empty() && !png.exists());
-    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
-    assert_eq!(error["error"]["code"], "FONT_UNAVAILABLE");
     assert_eq!(
-        error["error"]["required_font"]["family"],
-        "DocSight Missing Face"
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(error["error"]["required_font"]["bold"], true);
-    assert!(error["error"]["location"]["object"].as_str().is_some());
+    assert!(output.stderr.is_empty() && png.is_file());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert!(
+        result["warnings"]
+            .as_array()
+            .ok_or("warnings")?
+            .iter()
+            .any(|warning| warning["code"] == "DOCX_FONT_NORMALIZED")
+    );
+    let laid = ingest_docx(&source)?;
+    assert_eq!(
+        laid.document.blocks[0].inline_runs[0]
+            .format
+            .font_family
+            .as_deref(),
+        Some("DocSight Missing Face")
+    );
+    assert!(
+        laid.pages[0]
+            .runs
+            .iter()
+            .all(|run| run.font_family == "DejaVu Sans")
+    );
     Ok(())
 }
 
@@ -469,6 +488,107 @@ fn inherited_underlines_can_be_disabled_and_mixed_runs_share_a_baseline() -> Tes
                     ..
                 }
             ))
+    );
+    Ok(())
+}
+
+#[test]
+fn semantic_text_extraction_does_not_invoke_layout_or_font_discovery() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let source = package(
+        &format!("<w:p><w:r><w:t>Sample \u{10ffff}</w:t></w:r></w:p>{SECTION}"),
+        STYLES,
+        None,
+    )?;
+    let path = directory.path().join("unrenderable.docx");
+    std::fs::write(&path, source.bytes())?;
+    let text = Command::new(env!("CARGO_BIN_EXE_docsight"))
+        .env("DOCSIGHT_FONT_DIR", directory.path().join("nonexistent"))
+        .args(["--agent", "--sandbox", "text"])
+        .arg(&path)
+        .output()?;
+    assert_eq!(
+        text.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    assert!(text.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&text.stdout)?;
+    assert_eq!(value["result"]["blocks"][0]["text"], "Sample \u{10ffff}");
+    assert!(
+        !value["warnings"]
+            .as_array()
+            .ok_or("warnings")?
+            .iter()
+            .any(|warning| warning["code"] == "DOCX_LAYOUT_PAGINATED")
+    );
+    let png = directory.path().join("page.png");
+    let render = Command::new(env!("CARGO_BIN_EXE_docsight"))
+        .args(["--agent", "--sandbox", "render"])
+        .arg(&path)
+        .args(["--page", "1", "--out"])
+        .arg(&png)
+        .output()?;
+    assert_eq!(render.status.code(), Some(20));
+    assert!(render.stdout.is_empty() && !png.exists());
+    Ok(())
+}
+
+#[test]
+fn static_header_content_controls_preserve_text_and_fields() -> TestResult {
+    let section = SECTION.replace(
+        "<w:sectPr>",
+        "<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rHeader\"/>",
+    );
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdt><w:sdtPr><w:alias w:val="Sample header"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Page </w:t></w:r><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p></w:sdtContent></w:sdt></w:hdr>"#;
+    let source = package(
+        &format!("<w:p><w:r><w:t>Sample body</w:t></w:r></w:p>{section}"),
+        STYLES,
+        Some(header),
+    )?;
+    let laid = ingest_docx(&source)?;
+    assert!(laid.pages[0].runs.iter().any(|run| run.text == "Page "));
+    assert!(laid.pages[0].runs.iter().any(|run| run.text == "1"));
+    let bound = header.replace(
+        "<w:alias w:val=\"Sample header\"/>",
+        "<w:dataBinding w:storeItemID=\"sample\" w:xpath=\"/sample\"/>",
+    );
+    let source = package(
+        &format!("<w:p><w:r><w:t>Sample body</w:t></w:r></w:p>{section}"),
+        STYLES,
+        Some(&bound),
+    )?;
+    assert!(matches!(
+        ingest_docx(&source),
+        Err(docsight_core::DocsightError::UnsupportedFeature { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn empty_table_paragraphs_anchor_once_when_rows_continue() -> TestResult {
+    let rows = (0..80).map(|index| {
+        let text = "Sample recorded condition. ".repeat(1+index%9);
+        format!("<w:tr><w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:pPr><w:spacing w:line=\"600\" w:lineRule=\"exact\"/></w:pPr></w:p></w:tc></w:tr>")
+    }).collect::<String>();
+    let table = format!(
+        "<w:tbl><w:tblGrid><w:gridCol w:w=\"4200\"/><w:gridCol w:w=\"4200\"/></w:tblGrid>{rows}</w:tbl>{SECTION}"
+    );
+    let source = package(&table, STYLES, None)?;
+    let laid = ingest_docx(&source)?;
+    assert!(laid.pages.len() > 1);
+    assert!(canonical_violations(&laid.document).is_empty());
+    let BlockContent::Table(table) = &laid.document.blocks[0].content else {
+        return Err("table".into());
+    };
+    assert!(
+        table
+            .cells
+            .iter()
+            .flat_map(|cell| &cell.blocks)
+            .filter(|block| block.text().is_empty())
+            .all(|block| block.page.is_some() && block.continuations.is_empty())
     );
     Ok(())
 }
