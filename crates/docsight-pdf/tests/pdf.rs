@@ -1845,3 +1845,108 @@ fn reconstructs_titles_and_multiword_cells_without_word_columns()
     );
     Ok(())
 }
+
+#[test]
+fn identical_catalog_and_trailer_entries_are_diagnosed_without_blocking_reading()
+-> Result<(), Box<dyn std::error::Error>> {
+    let bytes = build_outline_pdf(
+        "BT /F1 12 Tf 20 70 Td (Generic reading sample) Tj ET",
+        "[0 0 300 100]",
+    );
+    let mut bytes = bytes;
+    let trailer = bytes
+        .windows(7)
+        .rposition(|window| window == b"trailer")
+        .ok_or("trailer missing")?;
+    let suffix = String::from_utf8(bytes.split_off(trailer))?
+        .replace("/Root 1 0 R", "/Root 1 0 R /Root 1 0 R");
+    bytes.extend_from_slice(suffix.as_bytes());
+    let source = DocumentSource::from_bytes(bytes)?;
+    let pdf = PdfDocument::open(&source)?;
+    let first = pdf.to_document()?;
+    assert_eq!(first.pages.len(), 1);
+    assert!(
+        first
+            .blocks
+            .iter()
+            .any(|block| block.text().contains("Generic reading sample"))
+    );
+    assert_eq!(
+        first
+            .warnings
+            .iter()
+            .filter(|warning| warning.code == "PDF_DICTIONARY_DUPLICATE_NORMALIZED")
+            .count(),
+        1
+    );
+    assert_eq!(first, pdf.to_document()?);
+    let page = pdf.page(1)?;
+    assert!(
+        page.warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_DICTIONARY_DUPLICATE_NORMALIZED")
+    );
+    let raster = pdf.rasterize(1, 72, None)?;
+    assert!(
+        raster
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "PDF_DICTIONARY_DUPLICATE_NORMALIZED")
+    );
+    assert!(!raster.png.is_empty());
+    Ok(())
+}
+
+#[test]
+fn conflicting_metadata_dictionary_entries_are_not_downgraded_to_optional_metadata_warnings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let content = "BT /F1 12 Tf 20 70 Td (Generic sample) Tj ET";
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream",content.len()),
+        "<< /Title (First) /Title (Second) >>".to_owned(),
+    ];
+    let mut bytes = build_pdf_with_objects(&objects);
+    let trailer = bytes
+        .windows(7)
+        .rposition(|window| window == b"trailer")
+        .ok_or("trailer missing")?;
+    let suffix = String::from_utf8(bytes.split_off(trailer))?
+        .replace("/Root 1 0 R", "/Root 1 0 R /Info 6 0 R");
+    bytes.extend_from_slice(suffix.as_bytes());
+    let source = DocumentSource::from_bytes(bytes)?;
+    let pdf = PdfDocument::open(&source)?;
+    assert!(
+        matches!(pdf.to_document(), Err(DocsightError::MalformedDocumentAt { location, .. }) if location.object.as_deref() == Some("6 0 R"))
+    );
+    Ok(())
+}
+
+#[test]
+fn identical_catalog_entries_are_normalized_but_transparency_group_conflicts_are_rejected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /ViewerPreferences << /DisplayDocTitle true >> /ViewerPreferences<</DisplayDocTitle true>> >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Resources << >> >>".to_owned(),
+    ];
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let document = PdfDocument::open(&source)?.to_document()?;
+    let warning = document
+        .warnings
+        .iter()
+        .find(|warning| warning.code == "PDF_DICTIONARY_DUPLICATE_NORMALIZED")
+        .ok_or("normalization warning missing")?;
+    assert!(warning.message.contains("ViewerPreferences"));
+    assert!(warning.message.contains("1 0 R"));
+    let mut conflicting = objects;
+    conflicting[2] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Group << /S /Transparency /I false >> /Group << /S /Transparency /I true >> /Resources << >> >>".to_owned();
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&conflicting))?;
+    assert!(
+        matches!(PdfDocument::open(&source), Err(DocsightError::MalformedDocumentAt { location, .. }) if location.object.as_deref() == Some("3 0 R"))
+    );
+    Ok(())
+}

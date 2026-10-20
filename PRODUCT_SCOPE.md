@@ -51,6 +51,8 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 
 - A native parser with no third-party document engine at runtime: cross-reference tables, cross-reference streams, hybrid `XRefStm`, object streams and `Prev` chains.
 - Stream filters, page tree, page resources and content streams.
+- Identical dictionary duplicates are explicitly normalized with source-position diagnostics. Conflicting values remain typed errors; real-valued duplicates require source identity rather than approximate floating-point equality. The normalization budget is bounded to 1024 distinct source occurrences.
+- `PDF_DICTIONARY_DUPLICATE_NORMALIZED` records that identical entries were retained as one dictionary value without modifying source bytes or selecting a conflicting interpretation.
 - Text extraction with encoding and `ToUnicode` resolution, embedded TrueType, Type 1 and supported CFF outlines, `Identity-H` CID fonts and CID-to-GID mapping. Simple embedded fonts use declared PDF widths.
 - Paragraph and heading reconstruction with per-object confidence.
 - Table inference with an explicit detector name and confidence score.

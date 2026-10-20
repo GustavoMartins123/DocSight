@@ -517,7 +517,7 @@ fn execute_tool(
     after_password: &[u8],
 ) -> Result<ToolOutput, DocsightError> {
     match name {
-        "inspect_document" => Ok(ToolOutput::primary(tool_inspect(arguments, loader)?)),
+        "inspect_document" => tool_inspect(arguments, loader),
         "search_document" => Ok(ToolOutput::primary(tool_search(arguments, loader)?)),
         "get_page" => Ok(ToolOutput::primary(tool_get_page(arguments, loader)?)),
         "get_region" => Ok(ToolOutput::primary(tool_get_region(arguments, loader)?)),
@@ -546,12 +546,19 @@ fn execute_tool(
     }
 }
 
-fn tool_inspect(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, DocsightError> {
+fn tool_inspect(
+    arguments: &Value,
+    loader: &DocumentLoader<'_>,
+) -> Result<ToolOutput, DocsightError> {
     let path_str = required_string(arguments, "path")?;
     let path = PathBuf::from(path_str);
     let source = loader.open_source(&path)?;
-    let (result, _warnings) = crate::inspect_source(&source, loader)?;
-    serde_json::to_value(result).map_err(serialization_error)
+    let (result, diagnostics) = crate::inspect_source(&source, loader)?;
+    Ok(ToolOutput {
+        value: serde_json::to_value(result).map_err(serialization_error)?,
+        diagnostics,
+        artifact: None,
+    })
 }
 
 fn tool_search(arguments: &Value, loader: &DocumentLoader<'_>) -> Result<Value, DocsightError> {

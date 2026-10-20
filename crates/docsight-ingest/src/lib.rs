@@ -157,6 +157,13 @@ pub const INGESTION_LIMITS: &[IngestionLimit] = &[
         effect: "the embedded Type1 or CFF glyph is rejected when its flattened outline, including closure vertices, exceeds the limit",
     },
     IngestionLimit {
+        name: "pdf_identical_dictionary_duplicates",
+        applies_to: "pdf",
+        value: docsight_pdf::PDF_MAX_DICTIONARY_NORMALIZATIONS as u64,
+        unit: "source_occurrences",
+        effect: "normalization stops at the limit; conflicting duplicate values remain malformed-document errors",
+    },
+    IngestionLimit {
         name: "pdf_inferred_table_cells",
         applies_to: "pdf",
         value: docsight_pdf::PDF_MAX_INFERRED_TABLE_CELLS as u64,

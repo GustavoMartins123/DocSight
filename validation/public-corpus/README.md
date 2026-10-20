@@ -1,5 +1,9 @@
 # Public-document compatibility validation
 
+Latest syntax correction: [identical dictionary normalization](PDF_DICTIONARY_NORMALIZATION.md).
+The original book now passes the identical preference duplicate and exposes a
+separate conflicting transparency group; this is not a whole-document success.
+
 Latest PDF correction: [table-inference follow-up](PDF_ALIGNMENT_V2.md), with
 unchanged source inputs and separately recorded observations.
 

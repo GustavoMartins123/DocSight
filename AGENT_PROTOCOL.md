@@ -176,6 +176,12 @@ PDF reconstruction now declares `pdf-native-v3/alignment-v2` in reproduction fin
 
 `pdf_inferred_table_cells` limits each candidate to 262144 grid positions before cell allocation. Ruled and unruled inference return a typed `RESOURCE_LIMIT` rather than publishing an oversized or partial grid. The Rust `docsight_tables::detect_tables` API returns `Result<Vec<InferredTable>, DocsightError>`; consumers must propagate failures. Public JSON shapes remain unchanged.
 
+PDF syntax policy `dictionary-normalization-v1` is included in reproduction profile `pdf-native-v4/alignment-v2/dictionary-normalization-v1`. Repeated dictionary names with identical parsed values are normalized to one value and emit `PDF_DICTIONARY_DUPLICATE_NORMALIZED`. Diagnostics identify the containing indirect object, dictionary position and both key positions, distinguishing PDF-header-relative bytes from decoded object-stream bytes. Source bytes remain unchanged. Values are compared structurally without dereferencing different references or coercing numeric types. Real-valued duplicates additionally require identical source spellings to prevent floating-point rounding from equating different numbers. This is one explicit parsing rule, not a permissive retry or first/last-value policy.
+
+Conflicting or unproven-identical values return `MALFORMED_DOCUMENT` with a typed object/offset location. Such conflicts in indirect metadata also remain errors, not optional-metadata warnings. `pdf_identical_dictionary_duplicates` permits at most 1024 distinct source occurrences across parsed xref sections and objects; repeated reads of the same occurrence do not consume the budget again. Exceeding it returns `RESOURCE_LIMIT`, never silently omitted diagnostics. Existing JSON shapes are unchanged.
+
+MCP `inspect_document` retains inspection diagnostics as additional text content records after its primary inspection result, using the existing diagnostic-content convention. It does not discard normalization warnings; the primary inspection schema and MCP envelope version remain unchanged.
+
 ## MCP security contract v2
 
 Launch the stdio server with an operator-owned policy file:

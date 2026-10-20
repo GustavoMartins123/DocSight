@@ -32,13 +32,14 @@ use syntax::{ObjectRef, StreamValue, Value, Xref, XrefEntry, malformed, parse_ob
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const FONT_BACKEND_ID: &str = "truetype-native-v1/hayro-font-0.3.0/ps-outlines-v1";
-pub const RECONSTRUCTION_ID: &str = "pdf-native-v3/alignment-v2";
+pub const RECONSTRUCTION_ID: &str = "pdf-native-v4/alignment-v2/dictionary-normalization-v1";
 pub use docsight_tables::MAX_INFERRED_TABLE_CELLS as PDF_MAX_INFERRED_TABLE_CELLS;
 pub const MAX_PAGES: u32 = 10_000;
 pub const MAX_ANNOTATIONS: u32 = 4_096;
 pub use content::MAX_OPERATIONS as PDF_MAX_CONTENT_OPERATIONS;
 pub use font::MAX_FONT_BYTES as PDF_MAX_FONT_BYTES;
 pub const PDF_MAX_GLYPH_OUTLINE_POINTS: usize = postscript::MAX_POINTS;
+pub const PDF_MAX_DICTIONARY_NORMALIZATIONS: usize = syntax::MAX_DICTIONARY_NORMALIZATIONS;
 pub use raster::MIN_DPI as PDF_MIN_DPI;
 pub use raster::{MAX_DPI as PDF_MAX_DPI, MAX_RASTER_PIXELS as PDF_MAX_RASTER_PIXELS};
 
@@ -306,6 +307,22 @@ impl<'a> PdfDocument<'a> {
         })
     }
 
+    fn syntax_warnings(&self) -> Vec<Diagnostic> {
+        self.store.xref.normalizations.borrow().iter().map(|record| {
+            let origin = match record.origin {
+                syntax::SyntaxOrigin::File => "PDF-header-relative byte".to_owned(),
+                syntax::SyntaxOrigin::ObjectStream(container) => format!("decoded object stream {container} byte"),
+            };
+            let object = record.object.map(|reference| format!("{} {} R", reference.number, reference.generation))
+                .unwrap_or_else(|| "xref trailer".to_owned());
+            Diagnostic::warning(
+                "PDF_DICTIONARY_DUPLICATE_NORMALIZED",
+                format!("identical /{} entries in {object}, dictionary at {origin} {}, keys at {} and {}", record.key, record.dictionary_offset, record.first_key_offset, record.repeated_key_offset),
+                "identical parsed entries were normalized to one dictionary value; the source anomaly is preserved in diagnostics; no conflicting value was selected",
+            )
+        }).collect()
+    }
+
     pub fn page_count(&self) -> u32 {
         self.pages.len() as u32
     }
@@ -373,7 +390,7 @@ impl<'a> PdfDocument<'a> {
             .enumerate()
             .map(|(index, run)| self.make_span(number, index, run, parsed.approximated_font))
             .collect::<Result<Vec<_>, DocsightError>>()?;
-        let mut warnings = Vec::new();
+        let mut warnings = self.syntax_warnings();
         if parsed.approximated_font {
             warnings.push(font_outline_warning(number));
         }
@@ -1461,15 +1478,13 @@ impl<'a> PdfDocument<'a> {
 
         let metadata = match self.document_info() {
             Ok(metadata) => metadata,
-            Err(
-                error @ (DocsightError::MalformedDocument { .. }
-                | DocsightError::MalformedDocumentAt { .. }),
-            ) => {
+            Err(error @ DocsightError::MalformedDocument { .. }) => {
                 all_warnings.push(info_unreadable_warning(&error));
                 DocumentMetadata::default()
             }
             Err(error) => return Err(error),
         };
+        all_warnings.extend(self.syntax_warnings());
         let document = Document {
             version: IrVersion::current(),
             id: self.source.id(),
@@ -1509,7 +1524,7 @@ impl<'a> PdfDocument<'a> {
             None => public_page,
         };
         let parsed = self.parse_page(number)?;
-        let mut warnings = Vec::new();
+        let mut warnings = self.syntax_warnings();
         if parsed.approximated_font {
             warnings.push(font_outline_warning(number));
         }
@@ -1961,7 +1976,13 @@ impl ObjectStore<'_> {
         })?;
         match entry {
             XrefEntry::Offset(offset) => {
-                let mut value = parse_object(self.bytes, offset, reference, &self.xref.entries)?;
+                let mut value = parse_object(
+                    self.bytes,
+                    offset,
+                    reference,
+                    &self.xref.entries,
+                    &self.xref.normalizations,
+                )?;
                 if let Some(decryptor) = &self.decryptor {
                     decrypt_value(decryptor, reference, &mut value, 0)?;
                 }
@@ -1992,7 +2013,13 @@ impl ObjectStore<'_> {
                 reference.number
             )));
         }
-        syntax::parse_object_stream_value(&stream.data, offset)
+        syntax::parse_object_stream_value(
+            &stream.data,
+            offset,
+            container,
+            reference,
+            &self.xref.normalizations,
+        )
     }
 
     fn object_stream(&self, container: u32) -> Result<Rc<ObjectStreamIndex>, DocsightError> {
@@ -2016,7 +2043,13 @@ impl ObjectStore<'_> {
                 )));
             }
         };
-        let value = parse_object(self.bytes, offset, reference, &self.xref.entries)?;
+        let value = parse_object(
+            self.bytes,
+            offset,
+            reference,
+            &self.xref.entries,
+            &self.xref.normalizations,
+        )?;
         let Value::Stream(stream) = value else {
             return Err(malformed(format!("object {container} is not a stream")));
         };

@@ -1787,3 +1787,51 @@ fn mcp_rejects_nonportable_artifact_names_and_metadata_cannot_authorize_paths()
     assert!(std::fs::read_dir(client.output.path())?.next().is_none());
     Ok(())
 }
+
+#[test]
+fn mcp_inspection_preserves_identical_dictionary_normalization_diagnostics()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("generic.pdf");
+    let mut bytes = pdf_fixture::build_outline_pdf(
+        "BT /F1 12 Tf 20 70 Td (Generic reading sample) Tj ET",
+        "[0 0 300 100]",
+    );
+    let trailer = bytes
+        .windows(7)
+        .rposition(|window| window == b"trailer")
+        .ok_or("trailer missing")?;
+    let suffix = String::from_utf8(bytes.split_off(trailer))?
+        .replace("/Root 1 0 R", "/Root 1 0 R /Root 1 0 R");
+    bytes.extend_from_slice(suffix.as_bytes());
+    std::fs::write(&path, bytes)?;
+    let cli = docsight()
+        .args(["--agent", "inspect"])
+        .arg(&path)
+        .output()?;
+    assert!(cli.status.success());
+    let cli: serde_json::Value = serde_json::from_slice(&cli.stdout)?;
+    let expected = cli["warnings"].as_array().ok_or("warnings missing")?;
+    let mut client = McpClient::configured(&[], &[directory.path()], None)?;
+    let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inspect_document","arguments":{"path":path}}});
+    let response = client.request(&request.to_string())?;
+    assert_eq!(response["result"]["isError"], false);
+    let content = response["result"]["content"]
+        .as_array()
+        .ok_or("content missing")?;
+    let diagnostics = content
+        .iter()
+        .skip(1)
+        .map(|item| {
+            let text = item["text"].as_str().ok_or("diagnostic missing")?;
+            Ok(serde_json::from_str::<serde_json::Value>(text)?)
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    assert_eq!(&diagnostics, expected);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|warning| warning["code"] == "PDF_DICTIONARY_DUPLICATE_NORMALIZED")
+    );
+    Ok(())
+}

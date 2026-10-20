@@ -1,9 +1,30 @@
 use docsight_core::DocsightError;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_OBJECTS: usize = 100_000;
 const MAX_XREF_SECTIONS: usize = 64;
 const MAX_DEPTH: usize = 64;
+
+pub(crate) const MAX_DICTIONARY_NORMALIZATIONS: usize = 1024;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum SyntaxOrigin {
+    File,
+    ObjectStream(u32),
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct DictionaryNormalization {
+    pub origin: SyntaxOrigin,
+    pub object: Option<ObjectRef>,
+    pub dictionary_offset: usize,
+    pub first_key_offset: usize,
+    pub repeated_key_offset: usize,
+    pub key: String,
+}
+
+pub(crate) type Normalizations = RefCell<BTreeSet<DictionaryNormalization>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Value {
@@ -40,6 +61,7 @@ pub(crate) enum XrefEntry {
 pub(crate) struct Xref {
     pub entries: BTreeMap<ObjectRef, XrefEntry>,
     pub trailer: BTreeMap<String, Value>,
+    pub normalizations: Normalizations,
 }
 
 struct XrefSection {
@@ -73,7 +95,8 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
         .windows(marker.len())
         .rposition(|window| window == marker)
         .ok_or_else(|| malformed("missing startxref"))?;
-    let mut start_parser = Parser::new(bytes, marker_offset + marker.len());
+    let normalizations = Normalizations::default();
+    let mut start_parser = Parser::new(bytes, marker_offset + marker.len(), &normalizations);
     let xref_offset = start_parser.parse_usize()?;
     if xref_offset >= bytes.len() {
         return Err(malformed("startxref points outside the document"));
@@ -93,12 +116,12 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
                 limit: MAX_XREF_SECTIONS as u64,
             });
         }
-        let section = parse_xref_section(bytes, offset)?;
+        let section = parse_xref_section(bytes, offset, &normalizations)?;
         merge_xref_entries(&mut entries, section.entries)?;
         if let Some(hybrid) = section.hybrid
             && visited.insert(hybrid)
         {
-            let stream = parse_xref_section(bytes, hybrid)?;
+            let stream = parse_xref_section(bytes, hybrid, &normalizations)?;
             merge_xref_entries(&mut entries, stream.entries)?;
         }
         if trailer.is_none() {
@@ -112,7 +135,11 @@ pub(crate) fn parse_xref(bytes: &[u8]) -> Result<Xref, DocsightError> {
         Some(Value::Int(size)) if *size >= 0 && (*size as u64) <= MAX_OBJECTS as u64 => {}
         _ => return Err(malformed("trailer has no valid Size")),
     }
-    Ok(Xref { entries, trailer })
+    Ok(Xref {
+        entries,
+        trailer,
+        normalizations,
+    })
 }
 
 fn merge_xref_entries(
@@ -131,15 +158,19 @@ fn merge_xref_entries(
     Ok(())
 }
 
-fn parse_xref_section(bytes: &[u8], offset: usize) -> Result<XrefSection, DocsightError> {
+fn parse_xref_section(
+    bytes: &[u8],
+    offset: usize,
+    normalizations: &Normalizations,
+) -> Result<XrefSection, DocsightError> {
     if offset >= bytes.len() {
         return Err(malformed("xref section points outside the document"));
     }
-    let mut parser = Parser::new(bytes, offset);
+    let mut parser = Parser::new(bytes, offset, normalizations);
     if parser.consume_keyword(b"xref") {
         return parse_xref_table(parser, bytes);
     }
-    parse_xref_stream(bytes, offset)
+    parse_xref_stream(bytes, offset, normalizations)
 }
 
 fn parse_xref_table(mut parser: Parser<'_>, bytes: &[u8]) -> Result<XrefSection, DocsightError> {
@@ -192,10 +223,15 @@ fn parse_xref_table(mut parser: Parser<'_>, bytes: &[u8]) -> Result<XrefSection,
     })
 }
 
-fn parse_xref_stream(bytes: &[u8], offset: usize) -> Result<XrefSection, DocsightError> {
-    let mut parser = Parser::new(bytes, offset);
-    parser.parse_u32()?;
-    parser.parse_u16()?;
+fn parse_xref_stream(
+    bytes: &[u8],
+    offset: usize,
+    normalizations: &Normalizations,
+) -> Result<XrefSection, DocsightError> {
+    let mut parser = Parser::new(bytes, offset, normalizations);
+    let number = parser.parse_u32()?;
+    let generation = parser.parse_u16()?;
+    parser.object = Some(ObjectRef { number, generation });
     parser.require_keyword(b"obj")?;
     let value = parser.parse_value(0)?;
     let Value::Stream(stream) = value else {
@@ -353,7 +389,8 @@ pub(crate) fn parse_object_stream_index(
     if count > MAX_OBJECTS {
         return Err(xref_limit());
     }
-    let mut parser = Parser::new(data, 0);
+    let normalizations = Normalizations::default();
+    let mut parser = Parser::new(data, 0, &normalizations);
     let mut index = Vec::with_capacity(count);
     for _ in 0..count {
         let number = parser.parse_u32()?;
@@ -375,8 +412,13 @@ pub(crate) fn parse_object_stream_index(
 pub(crate) fn parse_object_stream_value(
     data: &[u8],
     offset: usize,
+    container: u32,
+    reference: ObjectRef,
+    normalizations: &Normalizations,
 ) -> Result<Value, DocsightError> {
-    let mut parser = Parser::new(data, offset);
+    let mut parser = Parser::new(data, offset, normalizations);
+    parser.origin = SyntaxOrigin::ObjectStream(container);
+    parser.object = Some(reference);
     let value = parser.parse_value(0)?;
     if matches!(value, Value::Stream(_)) {
         return Err(malformed("object streams must not contain stream objects"));
@@ -389,8 +431,10 @@ pub(crate) fn parse_object(
     offset: usize,
     expected: ObjectRef,
     entries: &BTreeMap<ObjectRef, XrefEntry>,
+    normalizations: &Normalizations,
 ) -> Result<Value, DocsightError> {
-    let mut parser = Parser::with_entries(bytes, offset, entries);
+    let mut parser = Parser::with_entries(bytes, offset, entries, normalizations);
+    parser.object = Some(expected);
     let number = parser.parse_u32()?;
     let generation = parser.parse_u16()?;
     if number != expected.number || generation != expected.generation {
@@ -408,14 +452,20 @@ struct Parser<'a> {
     bytes: &'a [u8],
     cursor: usize,
     entries: Option<&'a BTreeMap<ObjectRef, XrefEntry>>,
+    normalizations: &'a Normalizations,
+    origin: SyntaxOrigin,
+    object: Option<ObjectRef>,
 }
 
 impl<'a> Parser<'a> {
-    fn new(bytes: &'a [u8], cursor: usize) -> Self {
+    fn new(bytes: &'a [u8], cursor: usize, normalizations: &'a Normalizations) -> Self {
         Self {
             bytes,
             cursor,
             entries: None,
+            normalizations,
+            origin: SyntaxOrigin::File,
+            object: None,
         }
     }
 
@@ -423,11 +473,15 @@ impl<'a> Parser<'a> {
         bytes: &'a [u8],
         cursor: usize,
         entries: &'a BTreeMap<ObjectRef, XrefEntry>,
+        normalizations: &'a Normalizations,
     ) -> Self {
         Self {
             bytes,
             cursor,
             entries: Some(entries),
+            normalizations,
+            origin: SyntaxOrigin::File,
+            object: None,
         }
     }
 
@@ -456,23 +510,68 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_dict_or_stream(&mut self, depth: usize) -> Result<Value, DocsightError> {
+        let dictionary_offset = self.cursor;
         self.cursor += 2;
         let mut dict = BTreeMap::new();
+        let mut positions = BTreeMap::new();
         loop {
             self.skip_space_and_comments();
             if self.peek_byte() == Some(b'>') && self.peek_next() == Some(b'>') {
                 self.cursor += 2;
                 break;
             }
+            let key_offset = self.cursor;
             let key = self.parse_name()?;
+            self.skip_space_and_comments();
+            let value_start = self.cursor;
             let value = self.parse_value(depth + 1)?;
-            if dict.contains_key(&key) {
-                return Err(malformed(format!(
-                    "duplicate PDF dictionary key /{key} at parser-buffer byte {}",
-                    self.cursor
-                )));
+            if let Some(previous) = dict.get(&key) {
+                let &(first_key_offset, previous_start, previous_end) = positions
+                    .get(&key)
+                    .ok_or_else(|| malformed("dictionary value has no source range"))?;
+                if previous != &value
+                    || (contains_real(&value)
+                        && self.bytes[previous_start..previous_end]
+                            != self.bytes[value_start..self.cursor])
+                {
+                    return Err(DocsightError::MalformedDocumentAt {
+                        message: format!(
+                            "conflicting or non-identical duplicate PDF dictionary key /{key} at parser-buffer byte {key_offset}"
+                        ),
+                        location: docsight_core::ErrorLocation {
+                            object: self.object.map(|reference| {
+                                format!("{} {} R", reference.number, reference.generation)
+                            }),
+                            offset: Some(
+                                u64::try_from(key_offset)
+                                    .map_err(|_| malformed("dictionary offset exceeds u64"))?,
+                            ),
+                            ..docsight_core::ErrorLocation::default()
+                        },
+                    });
+                }
+                let normalization = DictionaryNormalization {
+                    origin: self.origin,
+                    object: self.object,
+                    dictionary_offset,
+                    first_key_offset,
+                    repeated_key_offset: key_offset,
+                    key,
+                };
+                let mut normalizations = self.normalizations.borrow_mut();
+                if !normalizations.contains(&normalization)
+                    && normalizations.len() >= MAX_DICTIONARY_NORMALIZATIONS
+                {
+                    return Err(DocsightError::ResourceLimit {
+                        resource: "PDF identical dictionary duplicates".to_owned(),
+                        limit: MAX_DICTIONARY_NORMALIZATIONS as u64,
+                    });
+                }
+                normalizations.insert(normalization);
+            } else {
+                positions.insert(key.clone(), (key_offset, value_start, self.cursor));
+                dict.insert(key, value);
             }
-            dict.insert(key, value);
         }
         self.skip_space_and_comments();
         if !self.consume_keyword(b"stream") {
@@ -517,7 +616,7 @@ impl<'a> Parser<'a> {
                 )));
             }
         };
-        let mut parser = Parser::new(self.bytes, offset);
+        let mut parser = Parser::new(self.bytes, offset, self.normalizations);
         let number = parser.parse_u32()?;
         let generation = parser.parse_u16()?;
         if number != reference.number || generation != reference.generation {
@@ -871,5 +970,123 @@ fn xref_limit() -> DocsightError {
     DocsightError::ResourceLimit {
         resource: "PDF xref entries".to_owned(),
         limit: MAX_OBJECTS as u64,
+    }
+}
+
+fn contains_real(value: &Value) -> bool {
+    match value {
+        Value::Real(_) => true,
+        Value::Array(values) => values.iter().any(contains_real),
+        Value::Dict(values) => values.values().any(contains_real),
+        Value::Stream(stream) => stream.dict.values().any(contains_real),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod dictionary_normalization_tests {
+    use super::*;
+
+    fn parse(bytes: &[u8], normalizations: &Normalizations) -> Result<Value, DocsightError> {
+        Parser::new(bytes, 0, normalizations).parse_value(0)
+    }
+
+    #[test]
+    fn identical_values_are_normalized_with_exact_source_positions() -> Result<(), DocsightError> {
+        let bytes = b"<< /ViewerPreferences << /DisplayDocTitle true >> /ViewerPreferences<</DisplayDocTitle true>> >>";
+        let normalizations = Normalizations::default();
+        let value = parse(bytes, &normalizations)?;
+        let Value::Dict(dict) = &value else {
+            return Err(malformed("expected dictionary"));
+        };
+        assert_eq!(dict.len(), 1);
+        let records = normalizations.borrow();
+        assert_eq!(records.len(), 1);
+        let record = records
+            .first()
+            .ok_or_else(|| malformed("normalization missing"))?;
+        assert_eq!(record.key, "ViewerPreferences");
+        assert_eq!(record.dictionary_offset, 0);
+        assert_eq!(record.first_key_offset, 3);
+        assert_eq!(
+            &bytes[record.repeated_key_offset..record.repeated_key_offset + 18],
+            b"/ViewerPreferences"
+        );
+        drop(records);
+        assert_eq!(parse(bytes, &normalizations)?, value);
+        assert_eq!(normalizations.borrow().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn equal_parsed_values_do_not_require_identical_whitespace_or_dictionary_order()
+    -> Result<(), DocsightError> {
+        for bytes in [
+            b"<< /Item [true null /Name 7 2 0 R] /Item [ true % ignored\n null /N#61me 7 2 0 R ] >>".as_slice(),
+            b"<< /Item << /A true /B 3 >> /Item << /B 3 /A true >> >>".as_slice(),
+            b"<< /Item (same) /Item <73616d65> >>".as_slice(),
+            b"<< /Item 1.25 /Item 1.25 >>".as_slice(),
+        ] {
+            let records = Normalizations::default();
+            parse(bytes, &records)?;
+            assert_eq!(records.borrow().len(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn conflicts_and_rounded_real_collisions_are_not_normalized() {
+        for bytes in [
+            b"<< /Item true /Item false >>".as_slice(),
+            b"<< /Item 1 /Item 1.0 >>".as_slice(),
+            b"<< /Item 2 0 R /Item 3 0 R >>".as_slice(),
+            b"<< /Item [1 2] /Item [1 3] >>".as_slice(),
+            b"<< /Item << /A true >> /Item << /A false >> >>".as_slice(),
+            b"<< /Item 16777216.0 /Item 16777217.0 >>".as_slice(),
+        ] {
+            assert!(matches!(
+                parse(bytes, &Normalizations::default()),
+                Err(DocsightError::MalformedDocumentAt { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn normalization_budget_is_bounded_including_repeat_occurrences() -> Result<(), DocsightError> {
+        for count in [
+            MAX_DICTIONARY_NORMALIZATIONS - 1,
+            MAX_DICTIONARY_NORMALIZATIONS,
+            MAX_DICTIONARY_NORMALIZATIONS + 1,
+        ] {
+            let bytes = format!("<< /Flag true {} >>", "/Flag true ".repeat(count));
+            let records = Normalizations::default();
+            let result = parse(bytes.as_bytes(), &records);
+            if count <= MAX_DICTIONARY_NORMALIZATIONS {
+                result?;
+                assert_eq!(records.borrow().len(), count);
+            } else {
+                assert!(
+                    matches!(result, Err(DocsightError::ResourceLimit { resource, limit }) if resource == "PDF identical dictionary duplicates" && limit == MAX_DICTIONARY_NORMALIZATIONS as u64)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn decoded_object_stream_locations_are_not_file_offsets() -> Result<(), DocsightError> {
+        let records = Normalizations::default();
+        let reference = ObjectRef {
+            number: 9,
+            generation: 0,
+        };
+        parse_object_stream_value(b"<< /Flag true /Flag true >>", 0, 5, reference, &records)?;
+        let records = records.borrow();
+        let record = records
+            .first()
+            .ok_or_else(|| malformed("normalization missing"))?;
+        assert_eq!(record.origin, SyntaxOrigin::ObjectStream(5));
+        assert_eq!(record.object, Some(reference));
+        Ok(())
     }
 }
