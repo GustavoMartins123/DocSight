@@ -51,7 +51,7 @@ fn install_network_filter() -> Result<(), DocsightError> {
         statement(0x06, 0x8000_0000),
         statement(0x20, 0),
     ];
-    for syscall in network_syscalls() {
+    for syscall in network_syscalls().into_iter().chain(process_syscalls()) {
         filter.push(jump(0x15, syscall, 0, 1));
         filter.push(statement(0x06, 0x0005_0000 | u32::from(libc::EPERM as u16)));
     }
@@ -316,6 +316,22 @@ fn network_syscalls() -> [u32; 18] {
         libc::SYS_sendmmsg as u32,
         libc::SYS_recvmmsg as u32,
     ]
+}
+
+fn process_syscalls() -> Vec<u32> {
+    let calls = vec![
+        libc::SYS_clone as u32,
+        libc::SYS_clone3 as u32,
+        libc::SYS_execve as u32,
+        libc::SYS_execveat as u32,
+    ];
+    #[cfg(not(target_arch = "aarch64"))]
+    let calls = {
+        let mut calls = calls;
+        calls.extend([libc::SYS_fork as u32, libc::SYS_vfork as u32]);
+        calls
+    };
+    calls
 }
 
 #[cfg(target_arch = "x86_64")]

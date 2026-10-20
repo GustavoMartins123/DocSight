@@ -737,6 +737,21 @@
       "sha256": "db1c6cc5177f30c5591708a56bf9d7a42b3b0944b4a53c4d12a2e9aa0a1d8d67"
     },
     {
+      "file": "mcp-policy.json",
+      "id": "https://docsight.dev/schemas/v2/mcp-policy.json",
+      "sha256": "9112826cdf14342eed7756aed70ca921dcba1c29a43835beae08462fdbfebf82"
+    },
+    {
+      "file": "mcp-tool-error.json",
+      "id": "https://docsight.dev/schemas/v2/mcp-tool-error.json",
+      "sha256": "c08678e581e16ac7d837d5a2c92a83a7e35ee7a30d8bc687bef6772776685ebd"
+    },
+    {
+      "file": "mcp-tool-result.json",
+      "id": "https://docsight.dev/schemas/v2/mcp-tool-result.json",
+      "sha256": "d68cb174cbe6def6867cce2b834634b5ba8ac147e1948f0a221c262dbd3397bc"
+    },
+    {
       "file": "ndjson-event.json",
       "id": "https://docsight.dev/schemas/v2/ndjson-event.json",
       "sha256": "aba6733bbcca134df8ac618fb9824df40da7c2bdbd697ebf413b4b28ea09be8c"

@@ -122,6 +122,8 @@ pub enum DocsightError {
     },
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String },
+    #[error("access denied by policy: {operation}")]
+    AccessDenied { operation: String },
     #[error("I/O operation failed for {path}: {source}")]
     Io {
         path: PathBuf,
@@ -161,7 +163,7 @@ pub enum DocsightError {
 impl DocsightError {
     pub fn exit_code(&self) -> u8 {
         match self {
-            Self::InvalidArgument { .. } => 2,
+            Self::InvalidArgument { .. } | Self::AccessDenied { .. } => 2,
             Self::UnsupportedFormat | Self::UnsupportedOperation { .. } => 10,
             Self::MalformedDocument { .. }
             | Self::MalformedDocumentAt { .. }
@@ -178,6 +180,10 @@ impl DocsightError {
     pub fn diagnostic(&self) -> Diagnostic {
         let (code, effect) = match self {
             Self::InvalidArgument { .. } => ("USAGE", "the requested operation was not performed"),
+            Self::AccessDenied { .. } => (
+                "ACCESS_DENIED",
+                "the operation was not performed; policy changes require operator authorization",
+            ),
             Self::UnsupportedFormat => ("UNSUPPORTED_FORMAT", "the document was not inspected"),
             Self::UnsupportedOperation { .. } => (
                 "UNSUPPORTED_FORMAT",
@@ -279,6 +285,11 @@ pub struct ErrorCatalogEntry {
 pub const SUCCESS_EXIT_CODE: u8 = 0;
 
 pub const ERROR_CATALOG: &[ErrorCatalogEntry] = &[
+    ErrorCatalogEntry {
+        code: "ACCESS_DENIED",
+        exit_code: 2,
+        meaning: "the configured access policy denied the operation",
+    },
     ErrorCatalogEntry {
         code: "USAGE",
         exit_code: 2,
@@ -567,6 +578,7 @@ mod tests {
         match error {
             DocsightError::FontUnavailable { .. } => "FontUnavailable",
             DocsightError::InvalidArgument { .. } => "InvalidArgument",
+            DocsightError::AccessDenied { .. } => "AccessDenied",
             DocsightError::Io { .. } => "Io",
             DocsightError::UnsupportedFormat => "UnsupportedFormat",
             DocsightError::ResourceLimit { .. } => "ResourceLimit",
@@ -584,6 +596,9 @@ mod tests {
 
     fn every_error_variant() -> Vec<DocsightError> {
         vec![
+            DocsightError::AccessDenied {
+                operation: "input path".to_owned(),
+            },
             DocsightError::FontUnavailable {
                 font: super::FontRequirement {
                     family: "Missing Font".to_owned(),

@@ -255,3 +255,68 @@ fn declared_write_paths_stay_writable_inside_the_sandbox() -> Result<(), Box<dyn
     assert!(!denied.path().join("probe.denied").exists());
     Ok(())
 }
+
+#[test]
+fn isolated_children_do_not_inherit_ambient_secrets() -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "environment_process_fixture",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("DOCSIGHT_TEST_AMBIENT_SECRET", "private-probe-value")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-probe-value"));
+    Ok(())
+}
+
+#[test]
+#[ignore = "Invoked as a subprocess fixture by the environment isolation test"]
+fn environment_process_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os(docsight_worker::SANDBOX_CHILD_ENV).is_none() {
+        assert!(std::env::var_os("DOCSIGHT_TEST_AMBIENT_SECRET").is_some());
+        let output = run_in_sandbox_with_env(
+            Some(&std::env::current_exe()?),
+            &SandboxPolicy {
+                isolated_temp_dir: false,
+                ..SandboxPolicy::default()
+            },
+            &[
+                "--exact".to_owned(),
+                "environment_process_fixture".to_owned(),
+                "--ignored".to_owned(),
+                "--nocapture".to_owned(),
+            ],
+            &[(
+                docsight_worker::SANDBOX_CHILD_ENV.to_owned(),
+                "1".to_owned(),
+            )],
+        )?;
+        assert_eq!(
+            output.exit_code,
+            0,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    } else {
+        docsight_worker::apply_sandbox_limits_if_child()?;
+        assert!(std::env::var_os("DOCSIGHT_TEST_AMBIENT_SECRET").is_none());
+        let forbidden =
+            std::env::temp_dir().join(format!("docsight-denied-{}", std::process::id()));
+        assert!(std::fs::write(forbidden, b"unauthorized write").is_err());
+        #[cfg(target_os = "linux")]
+        {
+            let process = Command::new(std::env::current_exe()?)
+                .arg("--help")
+                .output();
+            assert!(process.is_err());
+        }
+    }
+    Ok(())
+}

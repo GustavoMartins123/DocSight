@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docsight.dev/schemas/v2/mcp-tool-result.json",
+  "title": "McpToolResult",
+  "type": "object",
+  "required": [
+    "content",
+    "isError",
+    "_meta"
+  ],
+  "properties": {
+    "content": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "properties": {
+          "type": {
+            "const": "text"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "isError": {
+      "type": "boolean"
+    },
+    "_meta": {
+      "type": "object",
+      "required": [
+        "docsight"
+      ],
+      "properties": {
+        "docsight": {
+          "type": "object",
+          "required": [
+            "schema",
+            "trust"
+          ],
+          "properties": {
+            "schema": {
+              "const": "docsight.mcp/v2"
+            },
+            "trust": {
+              "const": "untrusted_document"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

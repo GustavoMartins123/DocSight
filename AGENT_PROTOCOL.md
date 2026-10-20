@@ -169,3 +169,35 @@ The normalized IR version is `1.4`. Inline runs retain source spans and font/sty
 `FONT_UNAVAILABLE` (exit `30`) includes `error.required_font` with `family`, `bold`, and `italic`, plus an affected source object where known. Supply the exact licensed face in `DOCSIGHT_FONT_DIR`; no substitution or network resolution is attempted. `DOCX_LAYOUT_PAGINATED` identifies computed, non-authoritative pagination even when all requested fonts resolve. Reproduction fingerprints include fonts actually used by the document, not unrelated installed faces.
 
 DOCX trace text operations identify resolved faces in `font_name` as `<family>;bold=<bool>;italic=<bool>`, matching font resource names and content digests. Underline rectangles are recorded as fill operations.
+
+## MCP security contract v2
+
+Launch the stdio server with an operator-owned policy file:
+
+```text
+docsight mcp --policy operator-policy.json
+```
+
+The policy is mandatory. There is no unrestricted MCP mode. The `capabilities` invocation grammar declares `mcp --policy <file>`. Initialization publishes `docsight.mcp/v2` in `_meta.docsight.schema`, the enforced limits, and the fact that tool credentials are host-controlled. Tool results conform to `schemas/v2/mcp-tool-result.json`; their `_meta.docsight.trust` is always `untrusted_document`, including document-derived diagnostics. This label is a trust boundary, not a claim that the content is safe or correct.
+
+A minimal read-only policy, validated against `schemas/v2/mcp-policy.json`, is:
+
+```json
+{
+  "schema": "docsight.mcp-policy/v1",
+  "read_roots": ["./documents"],
+  "allowed_tools": ["inspect_document", "get_overview", "get_page", "search_document"]
+}
+```
+
+Policy directories must already exist; relative policy roots resolve from the policy file's directory. Document arguments must be absolute paths within the authorized input roots. Final-component symlinks and symlink escapes are rejected; workers are also confined by the operating system to the configured read roots and required runtime/font resources. Policy denials carry typed code `ACCESS_DENIED` and exit category `2`, distinct from `USAGE`; callers must not parse the message to detect denied access. Unknown tools, unknown arguments, invalid types, overflowing integers, duplicate permissions, and unsupported policy versions are explicit errors. Discovery returns only authorized tools with read/write annotations and closed input schemas.
+
+`limits` may override these defaults within the ranges in the policy schema: request payload 65,536 bytes, complete response frame 1,048,576 bytes, document 64 MiB, artifact 16 MiB, worker memory 768 MiB, CPU 30 seconds, and wall time 120 seconds. Requests exceeding their byte limit close the session with exit code `13` without echoing the payload. Oversized results return a typed error instead of partial JSON. A rejected tool call does not invalidate an otherwise healthy session. CLI streaming, projection, cache, document-limit and `--sandbox` flags are rejected for MCP; its limits and mandatory per-call isolation come from the policy.
+
+Each document operation runs in a fresh isolated process with network access denied and a filtered environment. Ambient credentials and loader-injection variables are not inherited. Linux workers cannot spawn processes or threads or execute another program; Windows workers remain limited to one process in their AppContainer job, and macOS workers retain the deny-by-default seatbelt profile. Unsupported isolation fails closed; the parent never retries in process. The MCP worker receives no document/artifact write grants: crops and bundles are generated in memory and transferred over a bounded private pipe. The parent checks artifact size, digest, declared length and response bounds before atomically publishing a new file. No worker-controlled pathname is followed for artifact publication.
+
+To enable artifacts, the operator must explicitly authorize `render_crop` or `create_bundle` and configure an existing `write_root` disjoint from every input root. Output paths must name new files directly inside that directory; relative output names resolve there. Nested paths, traversal, final-component symlinks and existing destinations are rejected. Output basenames are portable ASCII names of at most 128 bytes: they start with an alphanumeric character and otherwise contain only letters, digits, dots, underscores or hyphens. Trailing dots and Windows device names are rejected on every platform. `replay_bundle` may also read a bundle directly from `write_root`, without granting the worker write access to it.
+
+Tool arguments never contain passwords or credential-file paths. For encrypted document operations, the operator starts the server with `--password-file`; for `compare_documents`, the operator supplies `--password-before-file` and `--password-after-file` independently. Credential files must be regular files outside both input and output roots. Credentials are read from those host-selected files by the relevant worker, not copied into the handoff request, public response, trace or bundle. MCP does not persist an IR cache. Errors preserve the agent error record, including typed code, exit code, remediation, location and required-font details, inside the first content item's JSON text under `error`; the payload declares `schema: docsight.mcp/v2`. A worker that aborts without a typed error returns `BACKEND_FAILURE` with its exit category and stderr digest; raw untrusted stderr is not copied into the model context or logs.
+
+Keep the policy, root directories and their parents under operator control, separate from untrusted producers. This is a local single-user containment boundary, not protection against a privileged host process that can replace the policy, roots or executable. DocSight does not configure the consuming agent's other tools: the host must independently restrict shell execution, filesystem access, remote model disclosure and network egress. Document contents never grant those permissions. The repository skill at `.agents/skills/docsight-inspect/SKILL.md` teaches bounded navigation and evidence handling; it is guidance, not an enforcement mechanism.

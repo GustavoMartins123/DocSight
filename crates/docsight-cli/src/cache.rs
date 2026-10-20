@@ -120,14 +120,6 @@ impl<'a> DocumentLoader<'a> {
         })
     }
 
-    pub(crate) fn has_cache(&self) -> bool {
-        self.cache.is_some()
-    }
-
-    pub(crate) fn reporting(&self) -> Reporting {
-        self.reporting
-    }
-
     pub(crate) fn open_source(
         &self,
         path: impl AsRef<Path>,
