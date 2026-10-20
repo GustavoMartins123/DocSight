@@ -135,6 +135,10 @@ fn declared_limits_match_the_enforced_constants() {
     );
     assert_eq!(declared("pdf_pages"), Some(docsight_pdf::MAX_PAGES as u64));
     assert_eq!(
+        declared("pdf_identical_dictionary_duplicates"),
+        Some(docsight_pdf::PDF_MAX_DICTIONARY_NORMALIZATIONS as u64)
+    );
+    assert_eq!(
         declared("pdf_inferred_table_cells"),
         Some(docsight_pdf::PDF_MAX_INFERRED_TABLE_CELLS as u64)
     );

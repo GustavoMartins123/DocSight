@@ -1,0 +1,1219 @@
+{
+  "observed_on": "2026-10-20",
+  "base_revision": "5f07f994ca0fa94d79aa511ca2c17c59f54ac5ee",
+  "uncommitted_implementation_changes": true,
+  "engine_version": "0.1.4",
+  "reproduction_profile": "pdf-native-v4/alignment-v2/dictionary-normalization-v1",
+  "executable": "target/release/docsight",
+  "executable_sha256": "48143f085699a2840f88ddbb55c87fd523aac3d5f44859d81b0fc647fb796ef6",
+  "global_install_updated": false,
+  "all_input_digests_unchanged": true,
+  "raw_evidence_directories": [
+    "/tmp/docsight-public-corpus",
+    "/tmp/docsight-duplicate-validation"
+  ],
+  "summary": {
+    "real_pdf_cli_calls": 29,
+    "cli_successful": 20,
+    "cli_conflicting_group_errors": 9,
+    "all_repeated_inspections_byte_identical": true,
+    "clean_channels": true,
+    "public_corpus_mcp_calls": 14,
+    "public_corpus_mcp_successful": 12,
+    "public_corpus_mcp_conflicting_group_errors": 2,
+    "generic_mcp_calls": 3,
+    "generic_mcp_successful": 3,
+    "normalization_diagnostic_verified_in_cli_ndjson_and_mcp": true
+  },
+  "tests": {
+    "workspace_command": "cargo test --locked --offline --workspace --all-features",
+    "workspace_passed": 824,
+    "workspace_failed": 0,
+    "subsequent_mcp_cli_command": "cargo test --locked --offline -p docsight-cli --test mcp_cli --test pdf_dictionary_cli",
+    "mcp_tests_passed": 38,
+    "dictionary_cli_tests_passed": 2,
+    "clippy_zero_warnings": true,
+    "fuzz_target": "fuzz_pdf_syntax",
+    "fuzz_runs": 5000,
+    "fuzz_failures": 0
+  },
+  "schema_checks": {
+    "passed": true,
+    "counts": {
+      "agent-envelope.json": 21,
+      "coverage-report.json": 2,
+      "diagnostic.json": 86,
+      "error-envelope.json": 9,
+      "find-result.json": 2,
+      "inspect-result.json": 4,
+      "mcp-tool-error.json": 2,
+      "mcp-tool-result.json": 17,
+      "ndjson-event.json": 5,
+      "overview-result.json": 2,
+      "page-result.json": 2,
+      "render-result.json": 4,
+      "tables-result.json": 2,
+      "text-result.json": 2
+    }
+  },
+  "remaining_source_conflict": {
+    "document": "forallx-calgary",
+    "sha256": "9eca9e08ad6380b00a783536f8a16abc94d13d9561f05baa7fc0a2b762e48ef0",
+    "object": "9 0 R",
+    "key": "Group",
+    "first_key_file_offset": 10566,
+    "repeated_key_file_offset": 10765,
+    "first_value": {
+      "S": "Transparency",
+      "K": false,
+      "I": false
+    },
+    "second_value_reference": "14 0 R",
+    "referenced_dictionary": {
+      "Type": "Group",
+      "S": "Transparency",
+      "I": true,
+      "CS": "DeviceRGB"
+    },
+    "original_source_rewritten": false,
+    "whole_document_success": false
+  },
+  "cli": [
+    {
+      "document": "think-python-2",
+      "operation": "inspect",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 1.117,
+      "stdout_bytes": 1468,
+      "stderr_bytes": 0,
+      "stdout_sha256": "fb1e296e6c9d84f378d57546df0a3d10d079af1aa9b153821ab64d0f9a568cdb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "inspect-repeat",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 1.218,
+      "stdout_bytes": 1468,
+      "stderr_bytes": 0,
+      "stdout_sha256": "fb1e296e6c9d84f378d57546df0a3d10d079af1aa9b153821ab64d0f9a568cdb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "overview",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 1.118,
+      "stdout_bytes": 3709,
+      "stderr_bytes": 0,
+      "stdout_sha256": "ed21265215c3a0eb2e0f744ce1efa66950ecd3773080c534ddfad8c2d68f69ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "6f766572766965773a383a36303333303030626163336639323638",
+        "total_items": 573,
+        "returned_items": 8
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "text",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 1.168,
+      "stdout_bytes": 1507,
+      "stderr_bytes": 0,
+      "stdout_sha256": "5b3f78f9130b1885b14ff0fa2d0ae8b03e8bb0f716911631cf477dc75e1d690d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a36303333303030626163336639323638",
+        "total_items": 1168,
+        "returned_items": 5
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "find",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/think-python-2.pdf",
+        "Python",
+        "--ignore-case"
+      ],
+      "exit_code": 0,
+      "seconds": 1.118,
+      "stdout_bytes": 3146,
+      "stderr_bytes": 0,
+      "stdout_sha256": "d1dc38199af88e71d4cd2b607cdf68ca8b99deb53920dd329825b55e19e634c1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f366138363836336630326232313733633a353a36303333303030626163336639323638",
+        "total_items": 294,
+        "returned_items": 5
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "tables",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 1.167,
+      "stdout_bytes": 2065,
+      "stderr_bytes": 0,
+      "stdout_sha256": "91b6934c78326408b0ae3896ab08a369471a5713f3ef5330b4ca820282275f11",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "7461626c65733a353a36303333303030626163336639323638",
+        "total_items": 59,
+        "returned_items": 5
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "page-first",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "page",
+        "<corpus>/documents/think-python-2.pdf",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.117,
+      "stdout_bytes": 2193,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f43f246973c1e13ebe615c0c72192e5fd0e5cff83fe9c522fa6cd95928348536",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null,
+        "total_items": 4,
+        "returned_items": 4
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "coverage",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/think-python-2.pdf",
+        "--page",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.067,
+      "stdout_bytes": 1868,
+      "stderr_bytes": 0,
+      "stdout_sha256": "60dd393c35d3c0acecff1ca689394a1ae029e9cfb2cb4975c69ef6e25bd3ea68",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      }
+    },
+    {
+      "document": "think-python-2",
+      "operation": "render-first",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-python-2.pdf",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/dictionary-v1-results/think-python-2/page-1.png"
+      ],
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 580,
+      "stderr_bytes": 0,
+      "stdout_sha256": "8bc18b00ae950be0d553c70df418a876abf23bcdbd0a2467c72a422ffef77a48",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {}
+    },
+    {
+      "document": "think-python-2",
+      "operation": "render-middle",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-python-2.pdf",
+        "--page",
+        "122",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/dictionary-v1-results/think-python-2/page-122.png"
+      ],
+      "exit_code": 0,
+      "seconds": 0.064,
+      "stdout_bytes": 584,
+      "stderr_bytes": 0,
+      "stdout_sha256": "878c8ef8e5eb43078f2da5b2e03324b8906e838826bb023b2860e2d25202b29a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {}
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "inspect",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 3.775,
+      "stdout_bytes": 17265,
+      "stderr_bytes": 0,
+      "stdout_sha256": "96b5a59d4b716655c69b95f38edcc21b490a01c7d2249589f6a87ccfec074d41",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "inspect-repeat",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 3.473,
+      "stdout_bytes": 17265,
+      "stderr_bytes": 0,
+      "stdout_sha256": "96b5a59d4b716655c69b95f38edcc21b490a01c7d2249589f6a87ccfec074d41",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "overview",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 3.524,
+      "stdout_bytes": 19506,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f6bc4cc39f26876fe230a664505efe23eab36ecd7374aa87cbed39b1f1f73ffa",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "6f766572766965773a383a35646265613930393466333630363437",
+        "total_items": 300,
+        "returned_items": 8
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "text",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 3.773,
+      "stdout_bytes": 17293,
+      "stderr_bytes": 0,
+      "stdout_sha256": "99013cc154ea55d041db73d8a2979b2bc0920554b7ee0973bce11b2b06b83e18",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a35646265613930393466333630363437",
+        "total_items": 1306,
+        "returned_items": 5
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "find",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/think-stats-2.pdf",
+        "probability",
+        "--ignore-case"
+      ],
+      "exit_code": 0,
+      "seconds": 3.824,
+      "stdout_bytes": 19271,
+      "stderr_bytes": 0,
+      "stdout_sha256": "e329cb8542338d29d2c8fa250b14d70e1e9b7b8704e01e69e6954a0783cc8ddb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f623036383861623961653562313263633a353a35646265613930393466333630363437",
+        "total_items": 143,
+        "returned_items": 5
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "tables",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "exit_code": 0,
+      "seconds": 3.724,
+      "stdout_bytes": 17919,
+      "stderr_bytes": 0,
+      "stdout_sha256": "da70e94b4412f374c847da086f84e2d8f170c5e1524a4e4ee82dfdd59e509dcf",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "7461626c65733a353a35646265613930393466333630363437",
+        "total_items": 92,
+        "returned_items": 5
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "page-first",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "page",
+        "<corpus>/documents/think-stats-2.pdf",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 3.825,
+      "stdout_bytes": 17975,
+      "stderr_bytes": 0,
+      "stdout_sha256": "99e8b5165e9a72e5382947e2c376e7acd9c6352fab4127aaa264d1f6b972b592",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null,
+        "total_items": 4,
+        "returned_items": 4
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "coverage",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/think-stats-2.pdf",
+        "--page",
+        "1"
+      ],
+      "exit_code": 0,
+      "seconds": 3.572,
+      "stdout_bytes": 17721,
+      "stderr_bytes": 0,
+      "stdout_sha256": "a0c9637433d1f4921fc2dafb76df63b2df5e27e23fafae474c41371111c0c6dd",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      }
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "render-first",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-stats-2.pdf",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/dictionary-v1-results/think-stats-2/page-1.png"
+      ],
+      "exit_code": 0,
+      "seconds": 0.064,
+      "stdout_bytes": 579,
+      "stderr_bytes": 0,
+      "stdout_sha256": "c5becd100816a6547cb5b5875b19088c30c35ceb9a0a5c7a0b259214416f6e1c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {}
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "render-middle",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-stats-2.pdf",
+        "--page",
+        "132",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/dictionary-v1-results/think-stats-2/page-132.png"
+      ],
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 583,
+      "stderr_bytes": 0,
+      "stdout_sha256": "0b18318bbbd4788196252710710d9083dca327cd567801b2773a9e9aeeeed707",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "inspect",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "exit_code": 11,
+      "seconds": 0.032,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "repeat_identical": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "inspect-repeat",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "overview",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "exit_code": 11,
+      "seconds": 0.032,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "text",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "find",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "logic",
+        "--ignore-case"
+      ],
+      "exit_code": 11,
+      "seconds": 0.032,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "tables",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "page-first",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "page",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "1"
+      ],
+      "exit_code": 11,
+      "seconds": 0.032,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "coverage",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "--page",
+        "1"
+      ],
+      "exit_code": 11,
+      "seconds": 0.033,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "render-first",
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/dictionary-v1-results/forallx-calgary/page-1.png"
+      ],
+      "exit_code": 11,
+      "seconds": 0.033,
+      "stdout_bytes": 0,
+      "stderr_bytes": 353,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "aa0abe9849e638695e82efe985685ed9eb8fae73bddb7dd8a64108250ab0d773",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document at object 9 0 R, offset 10765: conflicting or non-identical duplicate PDF dictionary key /Group at parser-buffer byte 10765",
+        "effect": "the document was rejected during parsing",
+        "location": {
+          "object": "9 0 R",
+          "offset": 10765
+        }
+      },
+      "clean_channels": true,
+      "warning_counts": {}
+    }
+  ],
+  "mcp": [
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_TEXT_CODE_UNMAPPED"
+      ]
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_TEXT_CODE_UNMAPPED",
+        "PDF_FONT_OUTLINE_MISSING"
+      ]
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": true,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": true,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_NORMALIZED"
+      ]
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_NORMALIZED"
+      ]
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_NORMALIZED"
+      ]
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "DOCX_BODY_ELEMENT_UNSUPPORTED",
+        "DOCX_NUMBERING_UNRESOLVED",
+        "DOCX_NUMBERING_UNRESOLVED",
+        "DOCX_LAYOUT_PAGINATED",
+        "DOCX_FONT_NORMALIZED"
+      ]
+    },
+    {
+      "transcript": "mcp-dictionary-v1-results.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-generic.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_DICTIONARY_DUPLICATE_NORMALIZED"
+      ]
+    },
+    {
+      "transcript": "mcp-generic.json",
+      "tool": "search_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": []
+    },
+    {
+      "transcript": "mcp-generic.json",
+      "tool": "inspect_document",
+      "is_error": false,
+      "trust": "untrusted_document",
+      "diagnostic_codes": [
+        "PDF_FONT_OUTLINE_MISSING",
+        "PDF_DICTIONARY_DUPLICATE_NORMALIZED"
+      ]
+    }
+  ],
+  "limitations": [
+    "The original book now passes the identical preference duplication but still has a conflicting transparency group.",
+    "No first/last-value choice or silent rendering interpretation was added.",
+    "Equal numeric types are required; real-containing duplicate values require identical source spellings.",
+    "Unused objects are not eagerly interpreted; diagnostics describe normalized occurrences encountered by the operation.",
+    "Linux-only validation; no Windows/macOS runs."
+  ]
+}
