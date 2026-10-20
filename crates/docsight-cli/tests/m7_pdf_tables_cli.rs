@@ -100,7 +100,7 @@ fn detects_alignment_pdf_table_and_exports_csv() -> Result<(), Box<dyn std::erro
     let tbl = &tables[0];
     assert_eq!(tbl["rows"], 4);
     assert_eq!(tbl["columns"], 3);
-    assert_eq!(tbl["detector"], "alignment");
+    assert_eq!(tbl["detector"], "alignment-v2");
     let confidence = tbl["confidence"].as_f64().ok_or("confidence missing")?;
     assert!(confidence >= 0.80);
 

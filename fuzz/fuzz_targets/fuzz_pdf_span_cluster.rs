@@ -55,5 +55,9 @@ fuzz_target!(|data: &[u8]| {
     }
     let first = detect_tables(1, &spans, &rulings, 612.0, 792.0);
     let second = detect_tables(1, &spans, &rulings, 612.0, 792.0);
-    assert_eq!(first, second);
+    match (first, second) {
+        (Ok(first), Ok(second)) => assert_eq!(first, second),
+        (Err(first), Err(second)) => assert_eq!(first.to_string(), second.to_string()),
+        results => panic!("non-deterministic table detection: {results:?}"),
+    }
 });

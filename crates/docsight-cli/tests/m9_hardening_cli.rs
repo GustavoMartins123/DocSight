@@ -349,7 +349,7 @@ fn fuzz_layout_paragraph_never_panics_on_random_text() -> Result<(), Box<dyn std
 }
 
 #[test]
-fn fuzz_pdf_span_cluster_is_deterministic_and_safe() {
+fn fuzz_pdf_span_cluster_is_deterministic_and_safe() -> Result<(), Box<dyn std::error::Error>> {
     use docsight_tables::{RulingSegment, TextSpanItem, detect_tables};
     let mut state = 7_u64;
     let mut next = move || {
@@ -375,8 +375,8 @@ fn fuzz_pdf_span_cluster_is_deterministic_and_safe() {
                 bold: false,
             })
             .collect();
-        let first = detect_tables(1, &spans, &[], 595.0, 842.0);
-        let second = detect_tables(1, &spans, &[], 595.0, 842.0);
+        let first = detect_tables(1, &spans, &[], 595.0, 842.0)?;
+        let second = detect_tables(1, &spans, &[], 595.0, 842.0)?;
         assert_eq!(first.len(), second.len());
         for (left, right) in first.iter().zip(&second) {
             assert_eq!(left.bbox, right.bbox);
@@ -423,8 +423,9 @@ fn fuzz_pdf_span_cluster_is_deterministic_and_safe() {
         &rulings,
         595.0,
         842.0,
-    );
+    )?;
     assert!(tables.len() <= 1);
+    Ok(())
 }
 
 #[test]

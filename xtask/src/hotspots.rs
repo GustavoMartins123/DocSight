@@ -387,7 +387,10 @@ fn prepare_pdf_rulings() -> HotspotResult<Box<dyn Workload>> {
     let (spans, rulings) = ruled_table_input(TABLE_RULING_SCALE)?;
     Ok(workload(move || {
         measure(
-            || Ok(detect_tables(1, &spans, &rulings, 400.0, 400.0)),
+            || {
+                detect_tables(1, &spans, &rulings, 400.0, 400.0)
+                    .map_err(|error| HotspotError(error.to_string()))
+            },
             |tables| {
                 if tables.len() != 1 || tables[0].cells.len() != 256 {
                     return Err(HotspotError(
@@ -404,7 +407,10 @@ fn prepare_pdf_unruled() -> HotspotResult<Box<dyn Workload>> {
     let spans = unruled_table_input(TABLE_SPAN_SCALE)?;
     Ok(workload(move || {
         measure(
-            || Ok(detect_tables(1, &spans, &[], 1_000.0, 6_020.0)),
+            || {
+                detect_tables(1, &spans, &[], 1_000.0, 6_020.0)
+                    .map_err(|error| HotspotError(error.to_string()))
+            },
             |tables| {
                 if tables.len() != 1 || tables[0].cells.len() != TABLE_SPAN_SCALE {
                     return Err(HotspotError(
@@ -1120,7 +1126,7 @@ mod tests {
         assert_eq!(laid_out.document.blocks.len(), 17);
         let (spans, rulings) = ruled_table_input(100)?;
         assert_eq!(rulings.len(), 100);
-        assert_eq!(detect_tables(1, &spans, &rulings, 400.0, 400.0).len(), 1);
+        assert_eq!(detect_tables(1, &spans, &rulings, 400.0, 400.0)?.len(), 1);
         Ok(())
     }
 }

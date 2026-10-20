@@ -93,21 +93,23 @@ pub(crate) fn reconstruct_page_semantics(
     let rulings = extract_rulings(commands);
     let span_items = merge_contiguous_runs_for_spans(text_runs);
 
-    let tables = detect_tables(page, &span_items, &rulings, page_width, page_height);
+    let tables = detect_tables(page, &span_items, &rulings, page_width, page_height)?;
 
     let run_index = TextRunRowIndex::new(text_runs);
     let mut covered_span_indices = BTreeSet::new();
     for table in &tables {
-        for idx in run_index.candidates(table.bbox.y0 - 2.0, table.bbox.y1 + 2.0) {
-            let span = &text_runs[idx];
-            let cx = (span.bbox.x0 + span.bbox.x1) * 0.5;
-            let cy = (span.bbox.y0 + span.bbox.y1) * 0.5;
-            if cx >= table.bbox.x0 - 2.0
-                && cx <= table.bbox.x1 + 2.0
-                && cy >= table.bbox.y0 - 2.0
-                && cy <= table.bbox.y1 + 2.0
-            {
-                covered_span_indices.insert(idx);
+        for cell_bbox in table.cells.iter().filter_map(|cell| cell.bbox) {
+            for idx in run_index.candidates(cell_bbox.y0, cell_bbox.y1) {
+                let span = &text_runs[idx];
+                let cx = (span.bbox.x0 + span.bbox.x1) * 0.5;
+                let cy = (span.bbox.y0 + span.bbox.y1) * 0.5;
+                if cx >= cell_bbox.x0
+                    && cx <= cell_bbox.x1
+                    && cy >= cell_bbox.y0
+                    && cy <= cell_bbox.y1
+                {
+                    covered_span_indices.insert(idx);
+                }
             }
         }
     }

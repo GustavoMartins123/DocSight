@@ -1800,3 +1800,48 @@ fn form_text_has_distinct_semantic_ids_and_unused_resources_are_not_invoked()
     assert_eq!(first, second);
     Ok(())
 }
+
+#[test]
+fn reconstructs_titles_and_multiword_cells_without_word_columns()
+-> Result<(), Box<dyn std::error::Error>> {
+    let content = "BT /F1 20 Tf 150 270 Td (Local) Tj 55 0 Td (Guide) Tj ET \
+        BT /F1 12 Tf 100 248 Td (A) Tj 11 0 Td (practical) Tj 59 0 Td (reference) Tj ET \
+        BT /F1 12 Tf 30 190 Td (Site name) Tj 130 0 Td (Amount) Tj ET \
+        BT /F1 12 Tf 30 170 Td (North) Tj 35 0 Td (building) Tj ET \
+        BT /F1 12 Tf 190 170 Td (1) Tj ET \
+        BT /F1 12 Tf 30 150 Td (South) Tj 35 0 Td (building) Tj ET \
+        BT /F1 12 Tf 166 150 Td (12000) Tj ET";
+    let source = DocumentSource::from_bytes(build_outline_pdf(content, "[0 0 400 300]"))?;
+    let pdf = PdfDocument::open(&source)?;
+    let document = pdf.to_document()?;
+    assert!(docsight_core::canonical_violations(&document).is_empty());
+    let tables = document.tables().collect::<Vec<_>>();
+    assert_eq!(tables.len(), 1);
+    let (_, table) = tables[0];
+    assert_eq!((table.rows, table.columns, table.header_rows), (3, 2, 1));
+    assert_eq!(table.detector.as_deref(), Some("alignment-v2"));
+    assert_eq!(table.cells[2].text, "North building");
+    assert_eq!(table.cells[5].text, "12000");
+    let text = document
+        .blocks
+        .iter()
+        .map(|block| block.text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for expected in [
+        "Local Guide",
+        "A practical reference",
+        "North building",
+        "South building",
+        "12000",
+    ] {
+        assert_eq!(text.matches(expected).count(), 1, "{expected}: {text}");
+    }
+    let repeated = PdfDocument::open(&source)?.to_document()?;
+    assert_eq!(document, repeated);
+    assert_eq!(
+        pdf.rasterize(1, 72, None)?.png,
+        pdf.rasterize(1, 72, None)?.png
+    );
+    Ok(())
+}
