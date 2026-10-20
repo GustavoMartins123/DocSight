@@ -24,6 +24,23 @@ pub fn ingest_docx(source: &DocumentSource) -> Result<LaidOutDocument, DocsightE
     layout_docx(parse_docx(source)?)
 }
 
+pub fn ingest_semantic_with_password(
+    source: &DocumentSource,
+    password: &[u8],
+) -> Result<Document, DocsightError> {
+    let document = match source.format() {
+        DocumentFormat::Docx if !password.is_empty() => {
+            return Err(DocsightError::InvalidArgument {
+                message: "a PDF password cannot be applied to a DOCX document".to_owned(),
+            });
+        }
+        DocumentFormat::Docx => parse_docx(source)?,
+        DocumentFormat::Pdf => PdfDocument::open_with_password(source, password)?.to_document()?,
+    };
+    docsight_core::validate_canonical(&document)?;
+    Ok(document)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct IngestionLimit {
     pub name: &'static str,
@@ -131,6 +148,13 @@ pub const INGESTION_LIMITS: &[IngestionLimit] = &[
         value: docsight_pdf::PDF_MAX_FONT_BYTES as u64,
         unit: "bytes",
         effect: "the embedded font program is rejected",
+    },
+    IngestionLimit {
+        name: "pdf_postscript_glyph_outline_points",
+        applies_to: "pdf",
+        value: docsight_pdf::PDF_MAX_GLYPH_OUTLINE_POINTS as u64,
+        unit: "outline_vertices",
+        effect: "the embedded Type1 or CFF glyph is rejected when its flattened outline, including closure vertices, exceeds the limit",
     },
     IngestionLimit {
         name: "raster_pixels",

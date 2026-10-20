@@ -153,6 +153,7 @@ pub(crate) struct FontInfo {
     pub base_font: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
+    simple_widths: Option<[f32; 256]>,
     pub outline: Option<Rc<FontProgram>>,
     cid_identity: bool,
     cid_to_gid: Option<Rc<Vec<u16>>>,
@@ -339,6 +340,45 @@ pub(crate) fn parse_content(
         &mut error_location,
     )
     .map_err(|error| error.with_error_location(error_location))
+}
+
+pub(crate) fn xobject_uses(bytes: &[u8]) -> Result<BTreeSet<String>, DocsightError> {
+    let mut lexer = ContentLexer::new(bytes);
+    let mut operands = Vec::new();
+    let mut names = BTreeSet::new();
+    let mut operations = 0_usize;
+    while let Some(token) = lexer.next_token()? {
+        match token {
+            ContentToken::Operand(value) => {
+                if operands.len() >= MAX_OPERANDS {
+                    return Err(DocsightError::ResourceLimit {
+                        resource: "PDF content operands".to_owned(),
+                        limit: MAX_OPERANDS as u64,
+                    });
+                }
+                operands.push(value);
+            }
+            ContentToken::Operator(operator, _, _) => {
+                operations += 1;
+                if operations > MAX_OPERATIONS {
+                    return Err(operation_limit());
+                }
+                if operator == "Do" {
+                    if operands.len() != 1 {
+                        return Err(malformed("Do requires one XObject name"));
+                    }
+                    names.insert(name(&operands[0], &operator)?.to_owned());
+                }
+                if operator == "ID" {
+                    return Err(DocsightError::UnsupportedFeature {
+                        feature: "PDF inline image data".to_owned(),
+                    });
+                }
+                operands.clear();
+            }
+        }
+    }
+    Ok(names)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -720,6 +760,7 @@ fn parse_content_inner(
                             font_name: font.base_font.clone(),
                             decoder: font.decoder.clone(),
                             cid_widths: font.cid_widths.clone(),
+                            simple_widths: font.simple_widths,
                             outline: font.outline.clone(),
                             cid_identity: font.cid_identity,
                             cid_to_gid: font.cid_to_gid.clone(),
@@ -1141,13 +1182,25 @@ fn append_text(
         .ok_or_else(|| malformed("text showing operator used before Tf"))?;
     let text = font.decoder.decode(bytes)?;
     *unmapped_text_codes |= text.contains(char::REPLACEMENT_CHARACTER);
-    let glyphs = match &font.outline {
+    let mut glyphs = match &font.outline {
         Some(program) if font.cid_identity => {
             program.glyphs_for_identity(bytes, font.cid_to_gid.as_deref().map(Vec::as_slice))?
         }
         Some(program) => program.glyphs_for_simple_text(bytes, &text)?,
         None => Vec::new(),
     };
+    if let Some(widths) = &font.simple_widths
+        && font.outline.is_some()
+    {
+        if glyphs.len() != bytes.len() {
+            return Err(malformed(
+                "simple font outlines disagree with character codes",
+            ));
+        }
+        for (glyph, code) in glyphs.iter_mut().zip(bytes) {
+            glyph.advance = widths[usize::from(*code)] * glyph.units_per_em / 1000.0;
+        }
+    }
     let character_count = text.chars().count() as f32;
     let spaces = if font.cid_widths.is_some() {
         0.0
@@ -1159,7 +1212,18 @@ fn append_text(
             metrics.advance(bytes)? * font.size / 1000.0,
             bytes.len() as f32 / 2.0,
         ),
-        None => (character_count * font.size * 0.6, character_count),
+        None => match &font.simple_widths {
+            Some(widths) => (
+                bytes
+                    .iter()
+                    .map(|code| widths[usize::from(*code)])
+                    .sum::<f32>()
+                    * font.size
+                    / 1000.0,
+                bytes.len() as f32,
+            ),
+            None => (character_count * font.size * 0.6, character_count),
+        },
     };
     let width = advance + code_count * state.text.char_spacing + spaces * state.text.word_spacing;
     let width = width * state.text.horizontal_scale;
@@ -1732,6 +1796,7 @@ impl GraphicsState {
                 font_name: font.base_font.clone(),
                 decoder: font.decoder.clone(),
                 cid_widths: font.cid_widths.clone(),
+                simple_widths: font.simple_widths,
                 outline: font.outline.clone(),
                 cid_identity: font.cid_identity,
                 cid_to_gid: font.cid_to_gid.clone(),
@@ -1794,6 +1859,7 @@ struct FontSelection {
     font_name: String,
     decoder: FontDecoder,
     cid_widths: Option<CidWidths>,
+    simple_widths: Option<[f32; 256]>,
     outline: Option<Rc<FontProgram>>,
     cid_identity: bool,
     cid_to_gid: Option<Rc<Vec<u16>>>,
@@ -2418,28 +2484,62 @@ pub(crate) fn fonts_from_resources(
                 .as_ref()
                 .and_then(|descendant| descendant.get("FontDescriptor"))
         });
-        let outline = match descriptor_value {
-            Some(value) => {
-                let descriptor = resolve(value)?;
-                let descriptor = match descriptor {
-                    Value::Dict(descriptor) => descriptor,
-                    _ => return Err(malformed("FontDescriptor must resolve to a dictionary")),
-                };
-                match descriptor.get("FontFile2") {
-                    Some(value) => match FontProgram::parse(decode_stream_value(value)?) {
-                        Ok(program) => Some(Rc::new(program)),
-                        Err(DocsightError::UnsupportedFeature { .. }) => None,
-                        Err(error) => return Err(error),
-                    },
-                    None => None,
-                }
-            }
-            None => None,
-        };
         let encoding = match dict.get("Encoding") {
             Some(value) => Some(resolve(value)?),
             None => None,
         };
+        let mut simple_widths = None;
+        let mut outline = None;
+        if let Some(value) = descriptor_value {
+            let Value::Dict(descriptor) = resolve(value)? else {
+                return Err(malformed("FontDescriptor must resolve to a dictionary"));
+            };
+            if descendant.is_none() {
+                simple_widths = parse_simple_widths(&dict, &descriptor, &resolve)?;
+            }
+            let files: Vec<_> = ["FontFile", "FontFile2", "FontFile3"]
+                .into_iter()
+                .filter_map(|key| descriptor.get(key).map(|value| (key, value)))
+                .collect();
+            if files.len() > 1 {
+                return Err(malformed(
+                    "FontDescriptor declares multiple embedded font programs",
+                ));
+            }
+            if let Some((kind, value)) = files.first() {
+                let data = decode_stream_value(value)?;
+                let program = match *kind {
+                    "FontFile2" => FontProgram::parse(data)?,
+                    "FontFile" => {
+                        FontProgram::postscript(data, false, encoding.as_ref(), simple_widths)?
+                    }
+                    "FontFile3" => {
+                        let Value::Stream(stream) = resolve(value)? else {
+                            return Err(malformed("FontFile3 must be a stream"));
+                        };
+                        match stream.dict.get("Subtype") {
+                            Some(Value::Name(name))
+                                if matches!(name.as_str(), "Type1C" | "CIDFontType0C") =>
+                            {
+                                FontProgram::postscript(
+                                    data,
+                                    true,
+                                    encoding.as_ref(),
+                                    simple_widths,
+                                )?
+                            }
+                            _ => return Err(DocsightError::UnsupportedFeature {
+                                feature:
+                                    "embedded FontFile3 format other than Type1C or CIDFontType0C"
+                                        .to_owned(),
+                            }),
+                        }
+                    }
+                    _ => return Err(malformed("unknown embedded font program kind")),
+                };
+                outline = Some(Rc::new(program));
+            }
+        }
         let decoder = match dict.get("ToUnicode").or_else(|| {
             descendant
                 .as_ref()
@@ -2467,7 +2567,16 @@ pub(crate) fn fonts_from_resources(
                     feature: "Type3 PDF font without ToUnicode or an explicit encoding".to_owned(),
                 });
             }
-            None => decoder_from_encoding(encoding.as_ref())?,
+            None => match &outline {
+                Some(program) if program.intrinsic_characters().is_some() => {
+                    FontDecoder::Simple(Rc::new(SimpleEncoding {
+                        characters: program
+                            .intrinsic_characters()
+                            .ok_or_else(|| malformed("PostScript encoding is unavailable"))?,
+                    }))
+                }
+                _ => decoder_from_encoding(encoding.as_ref())?,
+            },
         };
         let mut cid_to_gid = None;
         let cid_identity = match &descendant {
@@ -2514,6 +2623,7 @@ pub(crate) fn fonts_from_resources(
             base_font: canonical_font.clone(),
             decoder,
             cid_widths,
+            simple_widths,
             outline,
             cid_identity,
             cid_to_gid,
@@ -2957,6 +3067,129 @@ impl ToUnicodeMap {
     }
 }
 
+fn parse_simple_widths(
+    dict: &BTreeMap<String, Value>,
+    descriptor: &BTreeMap<String, Value>,
+    resolve: &impl Fn(&Value) -> Result<Value, DocsightError>,
+) -> Result<Option<[f32; 256]>, DocsightError> {
+    let Some(value) = dict.get("Widths") else {
+        return Ok(None);
+    };
+    let Value::Array(values) = resolve(value)? else {
+        return Err(malformed("simple font Widths must be an array"));
+    };
+    let code = |key: &str| -> Result<u8, DocsightError> {
+        let value = resolve(
+            dict.get(key)
+                .ok_or_else(|| malformed(format!("simple font has Widths but no {key}")))?,
+        )?;
+        match value {
+            Value::Int(value) => u8::try_from(value)
+                .map_err(|_| malformed(format!("simple font {key} exceeds one byte"))),
+            _ => Err(malformed(format!("simple font {key} must be an integer"))),
+        }
+    };
+    let first = code("FirstChar")?;
+    let last = code("LastChar")?;
+    if last < first || values.len() != usize::from(last - first) + 1 {
+        return Err(malformed(
+            "simple font Widths does not match FirstChar and LastChar",
+        ));
+    }
+    let missing = match descriptor.get("MissingWidth") {
+        Some(value) => font_width(&resolve(value)?)?,
+        None => 0.0,
+    };
+    let mut widths = [missing; 256];
+    for (index, value) in values.iter().enumerate() {
+        widths[usize::from(first) + index] = font_width(&resolve(value)?)?;
+    }
+    Ok(Some(widths))
+}
+
+pub(crate) fn character_glyph_name(character: char) -> Option<&'static str> {
+    GLYPH_NAMES
+        .iter()
+        .find(|(_, value)| *value == character)
+        .map(|(name, _)| *name)
+}
+
+pub(crate) fn named_encoding_character(
+    name: &str,
+    code: u8,
+) -> Result<Option<char>, DocsightError> {
+    match name {
+        "WinAnsiEncoding" => Ok(win_ansi_character(code).ok()),
+        "MacRomanEncoding" => Ok(mac_roman_character(code)),
+        "StandardEncoding" => {
+            let name = match code {
+                39 => Some("quoteright"),
+                96 => Some("quoteleft"),
+                32..=126 => return Ok(char::from_u32(u32::from(code))),
+                161 => Some("exclamdown"),
+                162 => Some("cent"),
+                163 => Some("sterling"),
+                164 => Some("fraction"),
+                165 => Some("yen"),
+                166 => Some("florin"),
+                167 => Some("section"),
+                168 => Some("currency"),
+                169 => Some("quotesingle"),
+                170 => Some("quotedblleft"),
+                171 => Some("guillemotleft"),
+                172 => Some("guilsinglleft"),
+                173 => Some("guilsinglright"),
+                174 => Some("fi"),
+                175 => Some("fl"),
+                177 => Some("endash"),
+                178 => Some("dagger"),
+                179 => Some("daggerdbl"),
+                180 => Some("periodcentered"),
+                182 => Some("paragraph"),
+                183 => Some("bullet"),
+                184 => Some("quotesinglbase"),
+                185 => Some("quotedblbase"),
+                186 => Some("quotedblright"),
+                187 => Some("guillemotright"),
+                188 => Some("ellipsis"),
+                189 => Some("perthousand"),
+                191 => Some("questiondown"),
+                193 => Some("grave"),
+                194 => Some("acute"),
+                195 => Some("circumflex"),
+                196 => Some("tilde"),
+                197 => Some("macron"),
+                198 => Some("breve"),
+                199 => Some("dotaccent"),
+                200 => Some("dieresis"),
+                202 => Some("ring"),
+                203 => Some("cedilla"),
+                205 => Some("hungarumlaut"),
+                206 => Some("ogonek"),
+                207 => Some("caron"),
+                208 => Some("emdash"),
+                225 => Some("AE"),
+                227 => Some("ordfeminine"),
+                232 => Some("Lslash"),
+                233 => Some("Oslash"),
+                234 => Some("OE"),
+                235 => Some("ordmasculine"),
+                241 => Some("ae"),
+                245 => Some("dotlessi"),
+                248 => Some("lslash"),
+                249 => Some("oslash"),
+                250 => Some("oe"),
+                251 => Some("germandbls"),
+                _ => None,
+            };
+            Ok(name.and_then(glyph_name_character))
+        }
+        _ => Err(DocsightError::UnsupportedFeature {
+            feature: format!("PDF font encoding {name}"),
+        }),
+    }
+}
+
 fn decoder_from_encoding(encoding: Option<&Value>) -> Result<FontDecoder, DocsightError> {
     match encoding {
         None => Ok(FontDecoder::Ascii),
@@ -3236,10 +3469,12 @@ const GLYPH_NAMES: &[(&str, char)] = &[
     ("zero", '\u{30}'),
 ];
 
-fn glyph_name_character(name: &str) -> Option<char> {
+pub(crate) fn glyph_name_character(name: &str) -> Option<char> {
+    let name = name.split_once('.').map_or(name, |(head, _)| head);
     if let Some(rest) = name.strip_prefix("uni")
-        && rest.len() >= 4
-        && let Ok(code) = u32::from_str_radix(&rest[..4], 16)
+        && rest.len() == 4
+        && let Some(digits) = rest.get(..4)
+        && let Ok(code) = u32::from_str_radix(digits, 16)
     {
         return char::from_u32(code);
     }

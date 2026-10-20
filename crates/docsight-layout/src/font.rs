@@ -2,7 +2,7 @@ use docsight_core::DocsightError;
 use docsight_fonts::{DEFAULT_FAMILY, FontBook, FontFace};
 
 pub fn font_fingerprint() -> Result<String, DocsightError> {
-    Ok(FontBook::load()?.fingerprint())
+    Ok(FontBook::normalized()?.fingerprint())
 }
 
 pub fn char_width(character: char, size_pt: f32) -> Result<f32, DocsightError> {
@@ -10,7 +10,7 @@ pub fn char_width(character: char, size_pt: f32) -> Result<f32, DocsightError> {
 }
 
 pub fn text_width(text: &str, size_pt: f32) -> Result<f32, DocsightError> {
-    Ok(FontBook::bundled()?
+    Ok(FontBook::normalized()?
         .resolve(DEFAULT_FAMILY, false, false)?
         .shape(text, size_pt)?
         .width)
@@ -35,7 +35,7 @@ pub fn wrap_text_indexed(
     first_width: f32,
     width: f32,
 ) -> Result<Vec<WrappedLine>, DocsightError> {
-    let face = FontBook::bundled()?.resolve(DEFAULT_FAMILY, false, false)?;
+    let face = FontBook::normalized()?.resolve(DEFAULT_FAMILY, false, false)?;
     wrap_with_face(text, size_pt, first_width, width, &face)
 }
 

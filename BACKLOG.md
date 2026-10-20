@@ -24,7 +24,7 @@ The 2026-09-23 architecture and real-use audit reopened the following v1-blockin
 | MCP security boundary | Request/output limits, strict arguments, roots, warnings, structured errors and sandbox stdio are incomplete. |
 | Diff NDJSON continuation | A valid continuation token re-emits the same event sequence instead of advancing. |
 | Agent contract alignment | Password transports, output-limit discovery, projected schemas, page validation and cache handoff disagree across code, capabilities and docs. |
-| DOCX visual fidelity | Exact local OpenType fonts, shaping, antialiased rasterization, formatted runs/headers and paginated tables are implemented; reviewed real-document oracle and geometry gates remain open. |
+| DOCX visual fidelity | The canonical bundled-font normalized profile, shaping, antialiased rasterization, formatted runs/headers and paginated tables are implemented; normalized output is not Word parity, and reviewed real-document accuracy gates remain open. |
 
 ### Evidence that requires people
 

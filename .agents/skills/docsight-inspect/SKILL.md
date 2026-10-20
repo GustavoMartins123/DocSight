@@ -27,7 +27,8 @@ Start with inspection and overview. Locate the relevant page or object with sear
 
 - Cite document identity, page and object ID where available. Derive crops from returned geometry, not estimated pixel positions.
 - Distinguish structural facts from inferred PDF tables, reading order, and other confidence-scored results.
-- Check diagnostics and fidelity before claiming visual evidence. Missing fonts, unsupported painting, or absent rendering are limitations, not permission to substitute a renderer or font.
+- Check diagnostics and fidelity before claiming visual evidence. DOCX uses `docx-normalized-v1` with bundled fonts; `DOCX_FONT_NORMALIZED` means pages and crops describe DocSight's normalized view, not Word. Source font names remain evidence, not installation requests. PDF uses source font programs, not DOCX fonts. Unsupported glyphs, painting, or absent rendering never authorize a different renderer or a missing-font retry.
+- For DOCX text without visual evidence, use the CLI `text` operation: semantic extraction does not require layout. Do not claim that text-only success establishes geometry or rendering support.
 - For CLI JSON require exit code `0`; for NDJSON also require the final `done` record. A failed stream invalidates its received prefix. For MCP check `isError` before using the returned payload.
 - Generate crops or bundles only when requested and authorized. MCP outputs are new files in the configured output directory; existing files are not overwritten. Treat bundles, exports, and images as sensitive document derivatives.
 - MCP does not persist an IR cache. For explicitly requested CLI caching, remember that cache entries contain plaintext document data and must not be shared between trust domains.

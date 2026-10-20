@@ -1405,6 +1405,11 @@ fn paragraph_facts(node: Node<'_, '_>) -> ParagraphFacts {
     let mut leading_page_break = false;
     let mut unknown: BTreeSet<String> = BTreeSet::new();
     for descendant in node.descendants().filter(Node::is_element) {
+        if descendant.ancestors().any(|ancestor| {
+            ancestor.has_tag_name((W_NS, "pPr")) || ancestor.has_tag_name((W_NS, "rPr"))
+        }) {
+            continue;
+        }
         let name = descendant.tag_name().name();
         if let Some(parent) = descendant.parent() {
             if parent == node {
@@ -2482,6 +2487,35 @@ fn formatted_header_paragraph(
     })
 }
 
+fn header_footer_children<'a, 'input>(
+    node: Node<'a, 'input>,
+    part: &str,
+    children: &mut Vec<Node<'a, 'input>>,
+) -> Result<(), DocsightError> {
+    for child in node.children().filter(Node::is_element) {
+        if child.has_tag_name((W_NS, "sdt")) {
+            if child
+                .descendants()
+                .any(|node| node.has_tag_name((W_NS, "dataBinding")))
+            {
+                return Err(DocsightError::UnsupportedFeature {
+                    feature: format!("bound header/footer content control in {part}"),
+                });
+            }
+            let content = child
+                .children()
+                .find(|node| node.has_tag_name((W_NS, "sdtContent")))
+                .ok_or_else(|| DocsightError::MalformedDocument {
+                    message: format!("header/footer content control has no sdtContent in {part}"),
+                })?;
+            header_footer_children(content, part, children)?;
+        } else {
+            children.push(child);
+        }
+    }
+    Ok(())
+}
+
 fn formatted_header_footer(
     xml: &str,
     part: &str,
@@ -2507,7 +2541,9 @@ fn formatted_header_footer(
     let mut blocks = Vec::new();
     let mut paragraph_index = 0;
     let mut table_index = 0;
-    for node in parsed.root_element().children().filter(Node::is_element) {
+    let mut children = Vec::new();
+    header_footer_children(parsed.root_element(), part, &mut children)?;
+    for node in children {
         let order = u32::try_from(blocks.len() + 1).map_err(|_| block_count_error())?;
         if node.has_tag_name((W_NS, "p")) {
             paragraph_index += 1;

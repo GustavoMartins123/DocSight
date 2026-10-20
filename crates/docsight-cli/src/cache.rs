@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const CACHE_HANDOFF_ENV: &str = "DOCSIGHT_CACHE_HANDOFF_DIR";
 pub(crate) const CACHE_LAYOUT: &str = "docsight.cache/v1";
-pub(crate) const LAYOUT_PROFILE: &str = "agent-fidelity-v1";
+pub(crate) const LAYOUT_PROFILE: &str = "semantic-ir-v1/docx-normalized-v1";
 pub(crate) const CACHE_FLAGS: &[&str] =
     &["--cache-dir", "--cache-max-bytes", "--cache-max-entries"];
 pub(crate) const CACHE_KEY_COMPONENTS: &[&str] = &[
@@ -136,8 +136,18 @@ impl<'a> DocumentLoader<'a> {
     }
 
     pub(crate) fn load(&self, source: &DocumentSource) -> Result<Document, DocsightError> {
+        let document = self.load_semantic(source)?;
+        match source.format() {
+            docsight_core::DocumentFormat::Docx => {
+                Ok(docsight_layout::layout_docx(document)?.document)
+            }
+            docsight_core::DocumentFormat::Pdf => Ok(document),
+        }
+    }
+
+    pub(crate) fn load_semantic(&self, source: &DocumentSource) -> Result<Document, DocsightError> {
         self.load_with(source, || {
-            docsight_ingest::ingest_with_password(source, self.password)
+            docsight_ingest::ingest_semantic_with_password(source, self.password)
         })
     }
 

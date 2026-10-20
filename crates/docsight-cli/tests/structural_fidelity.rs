@@ -96,10 +96,10 @@ fn unsupported_feature_count_matches_the_reported_diagnostics()
         );
         if coverage.unsupported_feature_count == 0 {
             assert!(
-                coverage
-                    .reason_codes
-                    .iter()
-                    .all(|code| code == "DOCX_LAYOUT_PAGINATED"),
+                coverage.reason_codes.iter().all(|code| matches!(
+                    code.as_str(),
+                    "DOCX_LAYOUT_PAGINATED" | "DOCX_FONT_NORMALIZED"
+                )),
                 "{name} reports unsupported reason codes without counting an unsupported feature"
             );
         }

@@ -5,7 +5,7 @@
         "x0": 72.0,
         "x1": 540.0,
         "y0": 72.0,
-        "y1": 84.64892578125
+        "y1": 84.8046875
       },
       "confidence": 1.0,
       "content": {
@@ -54,8 +54,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 84.64892578125,
-        "y1": 97.2978515625
+        "y0": 84.8046875,
+        "y1": 97.609375
       },
       "confidence": 1.0,
       "content": {
@@ -119,8 +119,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 97.2978515625,
-        "y1": 109.94677734375
+        "y0": 97.609375,
+        "y1": 110.4140625
       },
       "confidence": 1.0,
       "content": {
@@ -184,8 +184,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 109.94677734375,
-        "y1": 127.91677856445312
+        "y0": 110.4140625,
+        "y1": 128.38406372070312
       },
       "confidence": 1.0,
       "content": {
@@ -215,8 +215,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 272.0,
-        "y0": 133.91677856445312,
-        "y1": 233.91677856445312
+        "y0": 134.38406372070312,
+        "y1": 234.38406372070312
       },
       "confidence": 1.0,
       "content": {
@@ -249,8 +249,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 239.91677856445312,
-        "y1": 252.56570434570312
+        "y0": 240.38406372070312,
+        "y1": 253.18875122070312
       },
       "confidence": 1.0,
       "content": {
@@ -314,8 +314,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 252.56570434570312,
-        "y1": 266.9956970214844
+        "y0": 253.18875122070312,
+        "y1": 267.6187438964844
       },
       "confidence": 1.0,
       "content": {
@@ -347,8 +347,8 @@
       "bbox": {
         "x0": 72.0,
         "x1": 540.0,
-        "y0": 266.9956970214844,
-        "y1": 281.4256896972656
+        "y0": 267.6187438964844,
+        "y1": 282.0487365722656
       },
       "confidence": 1.0,
       "content": {
@@ -448,7 +448,7 @@
             "x0": 72.0,
             "x1": 540.0,
             "y0": 36.0,
-            "y1": 48.64892578125
+            "y1": 48.8046875
           },
           "id": "hdr_f69a0863ed491463ee97d1b892f39382",
           "kind": "header",
@@ -464,7 +464,7 @@
           "bbox": {
             "x0": 72.0,
             "x1": 540.0,
-            "y0": 743.35107421875,
+            "y0": 743.1953125,
             "y1": 756.0
           },
           "id": "ftr_ce65905ffcbdbcc104ce18ee5d85c5a4",
@@ -492,12 +492,12 @@
       "target": "word/media/arch.png"
     },
     {
-      "content_sha256": "4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144",
-      "id": "font_74832f68d590cb641a86248f6787f803",
+      "content_sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
+      "id": "font_66c8967ac623e27d2df9055e4db3fde5",
       "kind": "font",
       "mime_type": "font/ttf",
-      "name": "Liberation Sans;bold=false;italic=false",
-      "target": "opentype:4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144"
+      "name": "DejaVu Sans;bold=false;italic=false",
+      "target": "opentype:ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280"
     }
   ],
   "sections": [
@@ -677,7 +677,7 @@
   },
   "version": {
     "engine_version": "<engine>",
-    "schema_version": "1.4"
+    "schema_version": "1.5"
   },
   "warnings": [
     {
@@ -691,6 +691,12 @@
       "code": "DOCX_LAYOUT_PAGINATED",
       "effect": "page geometry is inferred by DocSight; equivalence to an authoring application has not been established",
       "message": "DOCX pagination was computed from source formatting and resolved OpenType fonts",
+      "severity": "warning"
+    },
+    {
+      "code": "DOCX_FONT_NORMALIZED",
+      "effect": "source font names remain in the IR; line breaks, pagination and geometry describe the normalized view, not the authoring application's appearance",
+      "message": "DOCX visual text uses bundled DejaVu Sans, Liberation Serif and Liberation Mono under docx-normalized-v1",
       "severity": "warning"
     }
   ]

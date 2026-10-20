@@ -976,3 +976,23 @@ fn rejects_twips_that_are_not_whole_numbers() -> Result<(), Box<dyn std::error::
     }
     Ok(())
 }
+
+#[test]
+fn paragraph_tab_stops_do_not_become_text_characters() -> Result<(), Box<dyn std::error::Error>> {
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="720"/><w:tab w:val="clear" w:pos="1440"/></w:tabs></w:pPr><w:r><w:t>Sample</w:t><w:tab/><w:t>value</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let source = DocumentSource::from_bytes(package(&xml, None, None)?)?;
+    let document = parse_docx(&source)?;
+    let block = &document.blocks[0];
+    assert_eq!(block.text(), "Sample\tvalue");
+    assert_eq!(
+        block
+            .inline_runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        block.text()
+    );
+    Ok(())
+}

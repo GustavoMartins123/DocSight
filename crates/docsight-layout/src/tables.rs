@@ -524,6 +524,14 @@ pub(crate) fn project_cells(
             )?;
         }
         for (child, original) in cell.blocks.iter_mut().zip(&original.blocks) {
+            if matches!(original.content, BlockContent::Paragraph(_))
+                && original.text().is_empty()
+                && original
+                    .bbox
+                    .is_some_and(|bbox| bbox.y0 < fragment.start - 0.001)
+            {
+                continue;
+            }
             if let Some(bbox) = original
                 .bbox
                 .map(|rect| fragment.project(rect))
@@ -556,4 +564,92 @@ pub(crate) fn project_cells(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fragment_tests {
+    use super::*;
+    use docsight_core::{BlockKind, ObjectId, ParagraphBlock, SourceSpan, TableCell};
+
+    #[test]
+    fn empty_paragraph_whitespace_does_not_create_a_zero_offset_continuation()
+    -> Result<(), DocsightError> {
+        let source = "/word/document.xml::body/tbl[1]/tr[1]/tc[1]/p[1]";
+        let id = ObjectId::new("p", "sample", source);
+        let paragraph_box = Rect::new(0.0, 0.0, 100.0, 20.0)?;
+        let paragraph = Block {
+            id: id.clone(),
+            kind: BlockKind::Paragraph,
+            page: None,
+            bbox: Some(paragraph_box),
+            z_index: 0,
+            reading_order: 1,
+            source: SourceSpan::new(source),
+            confidence: 1.0,
+            flags: Default::default(),
+            format: Default::default(),
+            continuations: Vec::new(),
+            inline_runs: Vec::new(),
+            content: BlockContent::Paragraph(ParagraphBlock {
+                text: String::new(),
+                style_id: None,
+            }),
+        };
+        let table = TableBlock {
+            rows: 1,
+            columns: 1,
+            header_rows: 0,
+            column_widths_pt: Some(vec![100.0]),
+            detector: None,
+            cells: vec![TableCell {
+                id: ObjectId::new("cell", "sample", "cell[1]"),
+                row: 0,
+                column: 0,
+                row_span: 1,
+                column_span: 1,
+                bbox: Some(Rect::new(0.0, 0.0, 100.0, 100.0)?),
+                page: None,
+                continuations: Vec::new(),
+                format: Default::default(),
+                text: String::new(),
+                blocks: vec![paragraph],
+                source: SourceSpan::new("cell[1]"),
+            }],
+        };
+        let metrics = TableMetrics {
+            height: 100.0,
+            rows: vec![100.0],
+            table: table.clone(),
+            emitted: EmittedBlock {
+                height: 100.0,
+                runs: Vec::new(),
+                borders: Vec::new(),
+                images: Vec::new(),
+                fills: Vec::new(),
+            },
+            text_lines: Vec::new(),
+            cell_offsets: vec![0],
+            block_lines: std::collections::BTreeMap::from([(id, vec![(0, paragraph_box)])]),
+        };
+        let mut placed = table.clone();
+        clear_placements(&mut placed);
+        for (page, start, end) in [(1, 0.0, 10.0), (2, 10.0, 100.0)] {
+            project_cells(
+                &mut placed,
+                &table,
+                &metrics,
+                &TableFragment {
+                    page,
+                    start,
+                    end,
+                    dx: 0.0,
+                    dy: -start,
+                },
+            )?;
+        }
+        assert_eq!(placed.cells[0].continuations.len(), 1);
+        assert_eq!(placed.cells[0].blocks[0].page, Some(1));
+        assert!(placed.cells[0].blocks[0].continuations.is_empty());
+        Ok(())
+    }
 }

@@ -82,7 +82,7 @@ fn evidence_docx_human_and_json() -> Result<(), Box<dyn std::error::Error>> {
 fn evidence_pdf_carries_content_byte_anchor() -> Result<(), Box<dyn std::error::Error>> {
     let pdf_path = fixture("sample_render.pdf");
     let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
-    let object = "p_1051e51c57d96b53d7e64049ee91a305";
+    let object = "p_9d170e70c39e1ddfd4857e5d3acc8e04";
 
     let output = docsight().args(["evidence", pdf_str, object]).output()?;
     assert!(output.status.success());
@@ -122,7 +122,7 @@ fn evidence_pdf_without_glyph_outlines_reports_missing_render_fingerprint()
 -> Result<(), Box<dyn std::error::Error>> {
     let pdf_path = fixture("sample_table_ruled.pdf");
     let pdf_str = pdf_path.to_str().ok_or("invalid path")?;
-    let object = "p_c7f2cbe563d57330ee6d1a3578bfe5d7";
+    let object = "p_027f81fac3a9c6a43276415eeecb0810";
 
     let output = docsight().args(["evidence", pdf_str, object]).output()?;
     assert!(output.status.success());

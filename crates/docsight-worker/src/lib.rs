@@ -548,13 +548,6 @@ fn sandbox_paths(
     extra_env: &[(String, String)],
 ) -> Result<(Vec<String>, Vec<String>), DocsightError> {
     let mut read_paths = infer_read_paths(args);
-    for path in docsight_fonts::font_read_paths()? {
-        read_paths.push(
-            path.into_os_string()
-                .into_string()
-                .map_err(|_| platform::sandbox_failure("font paths must be valid UTF-8"))?,
-        );
-    }
     let mut write_paths = infer_write_paths(args);
     for (key, value) in extra_env {
         if key == SANDBOX_READ_PATHS_ENV {

@@ -1250,7 +1250,11 @@ pub fn reproduction_fingerprint(
 ) -> Result<ReproductionFingerprint, DocsightError> {
     let engine = format!("docsight {}", env!("CARGO_PKG_VERSION"));
     let ooxml_engine = format!("docsight-ooxml {}", env!("CARGO_PKG_VERSION"));
-    let pdf_engine = format!("docsight-pdf {}", env!("CARGO_PKG_VERSION"));
+    let pdf_engine = format!(
+        "docsight-pdf {};fonts={}",
+        env!("CARGO_PKG_VERSION"),
+        docsight_pdf::FONT_BACKEND_ID
+    );
     let raster_engine = format!("docsight-render {}", env!("CARGO_PKG_VERSION"));
     let fonts = if source.format() == docsight_core::DocumentFormat::Docx {
         let document = docsight_ingest::ingest_docx(source)?.document;
@@ -1274,9 +1278,16 @@ pub fn reproduction_fingerprint(
             crate::raster_font_fingerprint()
         )
     } else {
-        "docsight-pdf-builtin-fonts-v1".to_owned()
+        format!(
+            "pdf-embedded-font-programs-v2/{}",
+            docsight_pdf::FONT_BACKEND_ID
+        )
     };
-    let layout_profile = "agent-fidelity-v1".to_owned();
+    let layout_profile = match source.format() {
+        DocumentFormat::Docx => docsight_fonts::NORMALIZED_PROFILE,
+        DocumentFormat::Pdf => "pdf-native-v2",
+    }
+    .to_owned();
     let values = [
         source.sha256(),
         &engine,

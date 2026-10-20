@@ -162,13 +162,15 @@ The M17 adaptive projection contract is `schemas/v2/projection-selection.json`, 
 
 M18 interaction-economy conformance is defined by `fixtures/conformance/m18-interaction-economy.json`. The corpus exercises table location in DOCX and PDF, merged-cell reading, bounded page context, visual proof creation and verification, and generated-document comparison. Every scenario declares maximum CLI invocations, serialized output bytes, render requests and required evidence. The conformance runner invokes only the `docsight` executable, requires one or two calls per normal workflow and rejects missing scenario definitions or evidence assertions.
 
-### DOCX IR 1.4 and font requirements
+### IR 1.5 and canonical font policy
 
-The normalized IR version is `1.4`. Inline runs retain source spans and font/style/color/underline properties. Tables retain structural child blocks, cell formatting, primary pages and continuations; sections retain columns/gutters and formatted header/footer blocks. Geometry remains page-local points with a top-left origin.
+IR version `1.5` preserves source inline fonts and formatting while separating semantic ingestion from visual projection. DOCX `text` reads semantic IR without pagination or font resolution. Its record shape and object IDs are unchanged; layout-only warnings are absent. The cache stores semantic IR under profile `semantic-ir-v1/docx-normalized-v1`, separate from former laid-out entries.
 
-`FONT_UNAVAILABLE` (exit `30`) includes `error.required_font` with `family`, `bold`, and `italic`, plus an affected source object where known. Supply the exact licensed face in `DOCSIGHT_FONT_DIR`; no substitution or network resolution is attempted. `DOCX_LAYOUT_PAGINATED` identifies computed, non-authoritative pagination even when all requested fonts resolve. Reproduction fingerprints include fonts actually used by the document, not unrelated installed faces.
+DOCX layout and reproduction fingerprints declare `docx-normalized-v1`. Bundled DejaVu Sans, Liberation Serif and Liberation Mono faces are selected through fixed family-role classification before shaping; installed fonts never affect selection. No external font directory is consulted. `DOCX_FONT_NORMALIZED` declares the changes to appearance, line breaks, pagination and coordinates. `DOCX_LAYOUT_PAGINATED` and page fidelity continue to identify computed, non-authoritative geometry. Unsupported characters fail without an artifact or a second rendering path.
 
-DOCX trace text operations identify resolved faces in `font_name` as `<family>;bold=<bool>;italic=<bool>`, matching font resource names and content digests. Underline rectangles are recorded as fill operations.
+DOCX trace `font_name` values use `<effective-family>;bold=<bool>;italic=<bool>`, matching resolved font resources and digests. Original inline family names are not rewritten. Underlines remain fill operations. A normalized crop or proof bundle does not establish Word-identical rendering.
+
+PDF rendering uses `pdf-native-v2`, source simple-font widths and embedded TrueType, Type 1 or supported CFF programs, never DOCX fonts. The pinned Type 1/CFF dependency parses fonts only, not PDF documents. Invalid or unsupported embedded programs are rejected rather than silently discarded. Form resources are expanded only when invoked, without raising recursion limits. PDF paragraph/heading IDs now include a deterministic page-local semantic text-block path, preventing repeated form-label collisions. This identity change is versioned by IR `1.5`; old IDs must not be treated as cross-version lineage.
 
 ## MCP security contract v2
 

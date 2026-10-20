@@ -14,6 +14,7 @@ flate2.workspace = true
 hayro-ccitt.workspace = true
 hayro-jbig2.workspace = true
 hayro-jpeg2000.workspace = true
+hayro-font.workspace = true
 md-5.workspace = true
 rc4.workspace = true
 serde.workspace = true

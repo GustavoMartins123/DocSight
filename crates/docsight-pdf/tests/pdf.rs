@@ -1656,21 +1656,12 @@ fn cff_program_objects(font: &str, extra_font_entries: &str) -> Vec<String> {
 }
 
 #[test]
-fn an_unsupported_embedded_font_program_only_extracts_text()
+fn an_invalid_embedded_font_program_is_not_silently_discarded()
 -> Result<(), Box<dyn std::error::Error>> {
     let objects = cff_program_objects("/TrueType", "/Encoding /WinAnsiEncoding ");
     let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
-    let document = PdfDocument::open(&source)?.to_document()?;
-    let text: String = document.blocks.iter().map(|block| block.text()).collect();
-    assert!(text.contains("Readable text"), "text missing: {text}");
-    assert!(
-        document
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "PDF_FONT_OUTLINE_MISSING")
-    );
     assert!(matches!(
-        PdfDocument::open(&source)?.rasterize(1, 72, None),
+        PdfDocument::open(&source)?.to_document(),
         Err(DocsightError::UnsupportedFeature { .. })
     ));
     Ok(())
@@ -1776,5 +1767,36 @@ fn reconstructs_kerned_text_without_table_fragmentation() -> Result<(), Box<dyn 
         text.contains("HABILIDADES"),
         "expected merged word, got: {text}"
     );
+    Ok(())
+}
+
+#[test]
+fn form_text_has_distinct_semantic_ids_and_unused_resources_are_not_invoked()
+-> Result<(), Box<dyn std::error::Error>> {
+    let page_content = "/Fm Do";
+    let form_content = "BT /F1 10 Tf 20 170 Td (Sample) Tj 0 -50 Td (Sample) Tj ET";
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> /XObject << /Fm 6 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{page_content}\nendstream",page_content.len()),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> /XObject << /Unused 7 0 R >> >> /Length {} >>\nstream\n{form_content}\nendstream",form_content.len()),
+    ];
+    for number in 7..=21 {
+        objects.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /XObject << /Unused {} 0 R >> >> /Length 0 >>\nstream\n\nendstream",number+1));
+    }
+    let source = DocumentSource::from_bytes(build_pdf_with_objects(&objects))?;
+    let first = PdfDocument::open(&source)?.to_document()?;
+    let second = PdfDocument::open(&source)?.to_document()?;
+    let blocks: Vec<_> = first
+        .blocks
+        .iter()
+        .filter(|block| block.text() == "Sample")
+        .collect();
+    assert_eq!(blocks.len(), 2);
+    assert_ne!(blocks[0].id, blocks[1].id);
+    assert!(docsight_core::canonical_violations(&first).is_empty());
+    assert_eq!(first, second);
     Ok(())
 }

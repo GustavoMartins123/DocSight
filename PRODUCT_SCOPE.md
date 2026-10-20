@@ -33,7 +33,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 ### DOCX
 
 - Paragraphs, headings, list items, structural tables, figures, footnotes and endnotes.
-- Source run fonts, sizes, bold, italic, underline and explicit colors, including paragraph/character style inheritance and document defaults. OpenType shaping and antialiased outline rasterization share the same exact resolved font bytes; font resources carry content digests.
+- Source run fonts, sizes, bold, italic, underline and explicit colors, including paragraph/character style inheritance and document defaults. The `docx-normalized-v1` visual profile uses bundled DejaVu Sans, Liberation Serif and Liberation Mono; original font names remain in the IR. Shaping and rasterization share effective font bytes and resources carry their digests.
 - Equal-width multi-column body flow and binding gutters. Contextual paragraph spacing, automatic/exact/minimum line height, hanging list markers and independent numbering sequences with start overrides.
 - Row-level table pagination, including legal line cuts in oversized rows, per-cell page continuations, structural child geometry, nested content, source grid widths, margins, fills and single-line borders.
 - Formatted header/footer paragraphs and tables reserve body space. Page-dependent fields are stabilized by bounded iterative pagination. Unsupported numbering formats and out-of-page headers/footers fail explicitly rather than changing their meaning.
@@ -51,7 +51,7 @@ Behaviour in this section is implemented, tested and source-faithful unless a do
 
 - A native parser with no third-party document engine at runtime: cross-reference tables, cross-reference streams, hybrid `XRefStm`, object streams and `Prev` chains.
 - Stream filters, page tree, page resources and content streams.
-- Text extraction with encoding and `ToUnicode` resolution, embedded TrueType outlines, `Identity-H` CID fonts and CID-to-GID mapping.
+- Text extraction with encoding and `ToUnicode` resolution, embedded TrueType, Type 1 and supported CFF outlines, `Identity-H` CID fonts and CID-to-GID mapping. Simple embedded fonts use declared PDF widths.
 - Paragraph and heading reconstruction with per-object confidence.
 - Table inference with an explicit detector name and confidence score.
 - Form XObjects are traversed: their content stream is parsed with the invoking graphics state composed with the form `/Matrix`, and their text, geometry and nested forms reach the IR. Cycles and nesting beyond 12 levels fail closed.
@@ -76,7 +76,7 @@ Ingestion has a single boundary, `docsight-ingest`, which detects the format, di
 - Machine contract: `capabilities`, plus `--agent` JSON and `--ndjson` streaming with `--max-bytes`, `--max-items`, `--text-limit`, `--select`, `--budget` and deterministic continuation tokens. Protocol integration: the `mcp` command (`mcp --policy <file>`) on stdio for MCP clients, with mandatory per-call isolation, authorized roots and tools, bounded messages and host-only credential files. MCP results declare `docsight.mcp/v2` and label document content as untrusted. The discoverable `pdf_password` contract declares the file transport, distinct before/after files for `diff`, the 127-byte limit and fail-closed behavior for encrypted PDFs.
 - Interactive setup: `completions` generates deterministic scripts for Bash, Elvish, Fish, PowerShell and Zsh. It is intentionally human-only and rejects agent or machine-output flags instead of mixing a shell script with JSON.
 - Process isolation: `--sandbox` on Linux, macOS and Windows, failing closed on platforms where enforcement is unavailable.
-- Document IR cache: opt-in `--cache-dir` persists the normalized IR between invocations for `inspect`, `outline`, `text`, `tables`, `table`, `page`, `images`, `links`, `evidence`, `coverage`, `hit`, `query`, `find`, `overview`, `focus`, `peek`, `context` and `resolve`. The key covers the exact document SHA-256 and format, the SHA-256 of the running executable, the engine version, the IR schema version, the layout profile and the layout font fingerprint. Writes are atomic, entries are validated in full before use, limits are set with `--cache-max-bytes` and `--cache-max-entries`, and output is byte-identical with or without the cache. Under `--sandbox` the parent process owns the cache and validates what the worker returns. `cache` reports, verifies, prunes or clears the directory.
+- Document IR cache: opt-in `--cache-dir` persists canonical semantic IR between invocations for `inspect`, `outline`, `text`, `tables`, `table`, `page`, `images`, `links`, `evidence`, `coverage`, `hit`, `query`, `find`, `overview`, `focus`, `peek`, `context` and `resolve`. The key covers the exact document SHA-256 and format, the SHA-256 of the running executable, the engine version, the IR schema version, the layout profile and the layout font fingerprint. Writes are atomic, entries are validated in full before use, limits are set with `--cache-max-bytes` and `--cache-max-entries`, and output is byte-identical with or without the cache. Under `--sandbox` the parent process owns the cache and validates what the worker returns. `cache` reports, verifies, prunes or clears the directory.
 
 ### Diagnostics and errors
 
@@ -101,7 +101,8 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | A header or footer reference cannot be resolved to an available package part | `DOCX_HEADER_FOOTER_UNRESOLVED` |
 | Unsupported header or footer fields retain their cached source result, which can be stale | `DOCX_HEADER_FOOTER_FIELD_CACHED` |
 | Recognized DrawingML lines are preserved as `Shape` blocks, but their floating position, extent, stroke, and pixels are not projected | `DOCX_SHAPE_VISUAL_OMITTED` |
-| Layout is computed from source formatting and exact font bytes, not validated as identical to an authoring application | `DOCX_LAYOUT_PAGINATED` |
+| Layout is computed from source formatting and normalized bundled fonts, not validated as identical to an authoring application | `DOCX_LAYOUT_PAGINATED` |
+| Source fonts are projected into fixed bundled roles; source names remain in the IR, while appearance, pagination and coordinates belong to the normalized view | `DOCX_FONT_NORMALIZED` |
 | An embedded image is neither a supported PNG nor JPEG, or its bytes fail strict decoding, so rendering fails explicitly without replacement pixels; the diagnostic names the detected format or decoding failure | `DOCX_IMAGE_RASTER_UNAVAILABLE` |
 | An image relationship cannot be resolved | `DOCX_IMAGE_UNRESOLVED` |
 | Numbering definitions or formats cannot be resolved | `DOCX_NUMBERING_UNRESOLVED`, `DOCX_NUMBERING_FORMAT_MISSING` |
@@ -112,7 +113,7 @@ Behaviour in this section works, but is not source-faithful. Each item is report
 | A spacing, indentation, page size or margin length is written as a decimal within 0.001 of a whole number of twentieths of a point and is read as that whole number; a length further from a whole number still rejects the document | `DOCX_MEASURE_ROUNDED` |
 
 
-Fonts are loaded only from bundled Liberation faces and the explicitly configured local font directory. A requested missing family, weight or slant returns `FONT_UNAVAILABLE` with exit `30`, a typed `required_font` and source location; there is no automatic substitution. Font files are never downloaded by the runtime. See README for setup.
+DOCX layout never reads system/user font directories. Its normalized policy is selected before resolution, not after a missing-font error. Characters outside the declared face fail explicitly; no fonts are downloaded and no arbitrary glyphs are substituted. DOCX `text` reads semantic IR independently of layout and can extract unrenderable text. Static header/footer content controls are supported; bound controls fail explicitly without fetching external data.
 
 Advanced table row policies (repeated headers, `cantSplit`, exact row heights and vertical alignment), unequal/balanced columns, complex numbering overrides, theme-only formatting, positioned drawings in headers/cells and general floating objects are not covered by the verified DOCX layout profile. Real Word fidelity requires reviewed reference renders; internal golden agreement alone does not prove it.
 
@@ -134,7 +135,7 @@ Tracked changes are counted, not reconstructed: `tracked_changes` reports insert
 | Negative font sizes extract text but do not reproduce the signed transform | `PDF_NEGATIVE_FONT_SIZE_VISUAL` |
 | Strokes under a non-uniform transform use an area-preserving mean width | `PDF_NON_UNIFORM_STROKE_VISUAL` |
 
-Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators fail closed with exit code `20` rather than guessing. An embedded font program the engine cannot read fails closed only when decoding the text depends on it; when a `ToUnicode` map or an explicit encoding decodes the text, the text is extracted, but painting that page fails closed instead of substituting glyphs, reported as `PDF_FONT_OUTLINE_MISSING`; features that only affect painting reduce visual fidelity and are reported, but never veto text or structure.
+Structure is inferred, never authoritative: PDF paragraphs, headings and tables always carry a confidence value, and tables also carry the detector that produced them. Unsupported content operators fail closed with exit code `20` rather than guessing. Invalid or unsupported embedded programs are rejected instead of silently discarded, even if an independent encoding could decode their text. Type 1 and raw Type1C/CIDFontType0C CFF programs are supported; other FontFile3 representations remain unsupported. Unembedded fonts may still yield text with `PDF_FONT_OUTLINE_MISSING`, but painting fails without source outlines. Features affecting only painting expose their documented diagnostics.
 
 ### Operation-level diagnostics
 

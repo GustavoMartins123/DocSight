@@ -3209,7 +3209,7 @@ fn document_text(
     json_errors: bool,
 ) -> Result<(), DocsightError> {
     let source = loader.open_source(path)?;
-    let document = loader.load(&source)?;
+    let document = loader.load_semantic(&source)?;
     let blocks = text_records(&document);
 
     if ndjson {

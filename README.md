@@ -160,17 +160,19 @@ DocSight is dual-licensed under either of:
 
 at your option.
 
-## Local DOCX fonts
+## Self-contained DOCX visualization
 
-DOCX layout resolves the requested family, bold weight and italic slant exactly. The binary bundles the twelve regular/bold/italic/bold-italic Liberation Sans, Serif and Mono faces under SIL OFL 1.1; this does not authorize substituting them for a different requested family.
+DOCX uses the canonical `docx-normalized-v1` profile. The binary embeds DejaVu Sans for sans-serif text and Liberation Serif/Mono for explicitly classified serif and monospaced families, including regular/bold/italic/bold-italic faces. This policy applies before resolution, regardless of installed source fonts; it is not a missing-font fallback. No system/user font directory is read, and `DOCSIGHT_FONT_DIR` is not a runtime option.
 
-Place licensed TTF/OTF files in a dedicated directory and set `DOCSIGHT_FONT_DIR` to its absolute path. If unset, the dedicated `$HOME/.local/share/fonts/docsight` directory is used when present (`USERPROFILE` on Windows). The directory is flat and bounded to 128 files, 16 MiB per file. Conflicting faces for the same family/style fail explicitly. Missing fonts return `FONT_UNAVAILABLE` (exit 30) with `required_font` and affected object; no artifact is published.
+Original font names and formatting remain in the IR. Rendered resources and traces identify the effective faces by name, style and digest. `DOCX_FONT_NORMALIZED` marks the consequence: line breaks, page counts, geometry and appearance belong to DocSight's normalized view, not Word. The source is never edited. Characters outside a declared face fail explicitly; no font or glyph is silently substituted or downloaded.
 
-Aptos is available separately from Microsoft's official [Aptos font package](https://www.microsoft.com/en-us/download/details.aspx?id=106087), subject to its EULA; DocSight does not redistribute it. Symbol/Courier must likewise be supplied as licensed faces. Font bytes and rendering backend versions participate in reproduction fingerprints. All inspection and rendering remain offline; DocSight never installs or downloads fonts at runtime.
+IR version 1.5 separates semantic ingestion from visual layout. `docsight --agent text file.docx` extracts semantic IR without pagination, shaping or rasterization, even if its text cannot be rendered. Geometry-dependent commands explicitly perform normalized layout; failures never trigger an automatic text-only retry. The cache stores semantic IR, with the normalization profile in its reproduction identity.
 
-The normalized IR is version 1.4 and preserves inline run formatting, cell formatting and continuation geometry, structured header/footer content, contextual/line spacing and section columns/gutters. DOCX pagination remains computed evidence, not a claim of Word-identical rendering.
+PDF uses source encodings, positions, declared widths and embedded TrueType, Type 1 and supported CFF programs. PDF fonts are never replaced by the DOCX font set. Missing or unsupported evidence remains an explicit limitation.
 
-Validation documents contain generic fictional data only, never project specifications, implementation phases, milestone records or internal plans. The long-form regression/benchmark document `fixtures/validation/sample_report.docx` describes a fictional facilities survey with tables, lists, headings and page fields, using only bundled Liberation fonts. It is authored independently of the project specification and needs no proprietary fonts or network access in CI.
+DejaVu uses the Bitstream Vera license with DejaVu changes in the public domain; Liberation uses SIL OFL 1.1. License texts in `crates/docsight-fonts/assets/` are included in generated third-party notices.
+
+Synthetic validation fixtures contain generic fictional data only, never project specifications or internal plans. `fixtures/validation/sample_report.docx` describes a fictional facilities survey. Independently published compatibility inputs and their original failures are recorded in [the public-corpus report](validation/public-corpus/README.md); synthetic test success does not establish real-document fidelity.
 
 ### Safe agent integration
 

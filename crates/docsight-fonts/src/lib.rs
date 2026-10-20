@@ -2,10 +2,12 @@ use docsight_core::DocsightError;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub const DEFAULT_FAMILY: &str = "Liberation Sans";
+pub const NORMALIZED_SANS: &str = "DejaVu Sans";
+pub const NORMALIZED_PROFILE: &str = "docx-normalized-v1";
 pub const MAX_FONT_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_FONT_FILES: usize = 128;
 pub const MAX_SHAPING_CHARACTERS: usize = 1_048_576;
@@ -57,6 +59,7 @@ impl PartialEq for FontFace {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontBook {
     faces: BTreeMap<(String, bool, bool), FontFace>,
+    normalized: bool,
 }
 
 pub struct GlyphBitmap {
@@ -75,6 +78,12 @@ fn font_error(message: impl Into<String>) -> DocsightError {
 }
 
 impl FontFace {
+    pub fn decoded_text(&self, text: &str) -> Result<String, DocsightError> {
+        text.chars()
+            .map(|character| self.decode_character(character))
+            .collect()
+    }
+
     fn decode_character(&self, character: char) -> Result<char, DocsightError> {
         if self.unicode_symbol_encoding && (0xf000..=0xf0ff).contains(&u32::from(character)) {
             decode_symbol_character(character)
@@ -198,8 +207,11 @@ impl FontFace {
             {
                 return Err(DocsightError::UnsupportedFeature {
                     feature: format!(
-                        "font {} has no glyph at UTF-8 offset {}",
-                        self.family, source_offset
+                        "font {} has no glyph for {:?} at UTF-8 offset {}",
+                        self.family,
+                        text.get(source_offset..)
+                            .and_then(|value| value.chars().next()),
+                        source_offset
                     ),
                 });
             }
@@ -271,6 +283,7 @@ impl FontBook {
     pub fn bundled() -> Result<Self, DocsightError> {
         let mut book = Self {
             faces: BTreeMap::new(),
+            normalized: false,
         };
         for bytes in BUNDLED {
             book.insert(Arc::from(*bytes))?;
@@ -278,11 +291,9 @@ impl FontBook {
         Ok(book)
     }
 
-    pub fn load() -> Result<Self, DocsightError> {
+    pub fn normalized() -> Result<Self, DocsightError> {
         let mut book = Self::bundled()?;
-        if let Some(directory) = font_directory() {
-            book.read_directory(&directory)?;
-        }
+        book.normalized = true;
         Ok(book)
     }
 
@@ -364,8 +375,14 @@ impl FontBook {
         bold: bool,
         italic: bool,
     ) -> Result<FontFace, DocsightError> {
-        self.faces
-            .get(&(family.to_lowercase(), bold, italic))
+        let selected = if self.normalized {
+            normalized_family(family)
+        } else {
+            family
+        };
+        let mut face = self
+            .faces
+            .get(&(selected.to_lowercase(), bold, italic))
             .cloned()
             .ok_or_else(|| DocsightError::FontUnavailable {
                 font: docsight_core::FontRequirement {
@@ -374,12 +391,19 @@ impl FontBook {
                     italic,
                 },
                 location: None,
-            })
+            })?;
+        if self.normalized && family.eq_ignore_ascii_case("Symbol") {
+            face.unicode_symbol_encoding = true;
+        }
+        Ok(face)
     }
 
     pub fn fingerprint(&self) -> String {
         let mut digest = Sha256::new();
         digest.update(b"docsight-fonts/rustybuzz-0.20.1/fontdue-0.9.3/v1");
+        if self.normalized {
+            digest.update(NORMALIZED_PROFILE.as_bytes());
+        }
         for (key, face) in &self.faces {
             digest.update(key.0.as_bytes());
             digest.update([u8::from(key.1), u8::from(key.2)]);
@@ -393,48 +417,25 @@ impl FontBook {
     }
 }
 
-pub fn font_directory() -> Option<PathBuf> {
-    match std::env::var_os("DOCSIGHT_FONT_DIR") {
-        Some(path) => Some(PathBuf::from(path)),
-        None => std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(|home| PathBuf::from(home).join(".local/share/fonts/docsight"))
-            .filter(|directory| directory.exists()),
-    }
-}
-
-pub fn font_read_paths() -> Result<Vec<PathBuf>, DocsightError> {
-    let Some(directory) = font_directory() else {
-        return Ok(Vec::new());
-    };
-    let mut paths = vec![directory.clone()];
-    for entry in std::fs::read_dir(&directory).map_err(|source| DocsightError::Io {
-        path: directory.clone(),
-        source,
-    })? {
-        let path = entry
-            .map_err(|source| DocsightError::Io {
-                path: directory.clone(),
-                source,
-            })?
-            .path();
-        if path.extension().is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("ttf") || extension.eq_ignore_ascii_case("otf")
-        }) {
-            paths.push(path);
+pub fn normalized_family(family: &str) -> &'static str {
+    match family.to_ascii_lowercase().as_str() {
+        "liberation mono" | "courier" | "courier new" | "consolas" | "cascadia code"
+        | "cascadia mono" | "menlo" | "monaco" | "dejavu sans mono" | "noto sans mono" => {
+            "Liberation Mono"
         }
-        if paths.len() > MAX_FONT_FILES + 1 {
-            return Err(DocsightError::ResourceLimit {
-                resource: "font files".to_owned(),
-                limit: MAX_FONT_FILES as u64,
-            });
+        "liberation serif" | "times" | "times new roman" | "georgia" | "cambria" | "palatino"
+        | "palatino linotype" | "book antiqua" | "dejavu serif" | "noto serif" => {
+            "Liberation Serif"
         }
+        _ => NORMALIZED_SANS,
     }
-    paths.sort();
-    Ok(paths)
 }
 
 const BUNDLED: &[&[u8]] = &[
+    include_bytes!("../assets/DejaVuSans.ttf"),
+    include_bytes!("../assets/DejaVuSans-Bold.ttf"),
+    include_bytes!("../assets/DejaVuSans-Oblique.ttf"),
+    include_bytes!("../assets/DejaVuSans-BoldOblique.ttf"),
     include_bytes!("../assets/LiberationSans-Regular.ttf"),
     include_bytes!("../assets/LiberationSans-Bold.ttf"),
     include_bytes!("../assets/LiberationSans-Italic.ttf"),
@@ -504,6 +505,7 @@ mod tests {
         std::fs::write(&path, &bytes)?;
         FontBook {
             faces: BTreeMap::new(),
+            normalized: false,
         }
         .read_directory(directory.path())?;
         std::fs::OpenOptions::new()
@@ -603,6 +605,60 @@ mod tests {
                 .shape("\u{10FFFF}", 12.0)
                 .is_err()
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod normalization_tests {
+    use super::*;
+
+    #[test]
+    fn normalization_is_an_upfront_policy_not_missing_font_recovery() -> Result<(), DocsightError> {
+        let normalized = FontBook::normalized()?;
+        let exact = FontBook::bundled()?;
+        for name in [
+            "Arial",
+            "Aptos",
+            "Calibri",
+            "Uninstalled Family",
+            "Liberation Sans",
+        ] {
+            let face = normalized.resolve(name, true, true)?;
+            assert_eq!(face.family, NORMALIZED_SANS);
+            assert_eq!(
+                face.sha256,
+                exact.resolve(NORMALIZED_SANS, true, true)?.sha256
+            );
+        }
+        assert_eq!(
+            normalized.resolve("Courier New", false, false)?.family,
+            "Liberation Mono"
+        );
+        assert_eq!(
+            normalized.resolve("Times New Roman", false, false)?.family,
+            "Liberation Serif"
+        );
+        assert_ne!(normalized.fingerprint(), exact.fingerprint());
+        assert!(matches!(
+            exact.resolve("Uninstalled Family", false, false),
+            Err(DocsightError::FontUnavailable { .. })
+        ));
+        let error = exact
+            .resolve("Uninstalled Family", false, false)
+            .err()
+            .ok_or_else(|| font_error("exact font resolution unexpectedly succeeded"))?;
+        assert!(error.to_string().contains("configured font book"));
+        assert!(!error.to_string().contains("DOCSIGHT_FONT_DIR"));
+        Ok(())
+    }
+
+    #[test]
+    fn normalized_symbol_encoding_is_decoded_before_drawing() -> Result<(), DocsightError> {
+        let face = FontBook::normalized()?.resolve("Symbol", false, false)?;
+        assert_eq!(face.decoded_text("\u{f0b7}")?, "•");
+        assert!(face.shape("\u{f0b7}", 11.0)?.width > 0.0);
+        assert!(face.shape("\u{10ffff}", 11.0).is_err());
         Ok(())
     }
 }

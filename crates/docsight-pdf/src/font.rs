@@ -22,7 +22,86 @@ pub(crate) struct GlyphOutline {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FontProgram {
+pub(crate) enum FontProgram {
+    TrueType(TrueTypeProgram),
+    PostScript(Box<crate::postscript::PostScriptProgram>),
+}
+
+impl FontProgram {
+    pub(crate) fn parse(data: Vec<u8>) -> Result<Self, DocsightError> {
+        TrueTypeProgram::parse(data).map(Self::TrueType)
+    }
+
+    pub(crate) fn postscript(
+        data: Vec<u8>,
+        cff: bool,
+        encoding: Option<&crate::syntax::Value>,
+        widths: Option<[f32; 256]>,
+    ) -> Result<Self, DocsightError> {
+        crate::postscript::PostScriptProgram::parse(data, cff, encoding, widths)
+            .map(|program| Self::PostScript(Box::new(program)))
+    }
+
+    pub(crate) fn unicode_for_glyph(&self, glyph: u16) -> Option<char> {
+        match self {
+            Self::TrueType(program) => program.unicode_for_glyph(glyph),
+            Self::PostScript(_) => None,
+        }
+    }
+
+    pub(crate) fn has_glyph_unicode(&self) -> bool {
+        match self {
+            Self::TrueType(program) => program.has_glyph_unicode(),
+            Self::PostScript(_) => false,
+        }
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        match self {
+            Self::TrueType(program) => program.sha256(),
+            Self::PostScript(program) => program.sha256(),
+        }
+    }
+
+    pub(crate) fn cache_size(&self) -> usize {
+        match self {
+            Self::TrueType(program) => program.cache_size(),
+            Self::PostScript(program) => program.cache_size(),
+        }
+    }
+
+    pub(crate) fn glyphs_for_identity(
+        &self,
+        bytes: &[u8],
+        table: Option<&[u16]>,
+    ) -> Result<Vec<GlyphOutline>, DocsightError> {
+        match self {
+            Self::TrueType(program) => program.glyphs_for_identity(bytes, table),
+            Self::PostScript(program) => program.identity(bytes, table),
+        }
+    }
+
+    pub(crate) fn glyphs_for_simple_text(
+        &self,
+        bytes: &[u8],
+        text: &str,
+    ) -> Result<Vec<GlyphOutline>, DocsightError> {
+        match self {
+            Self::TrueType(program) => program.glyphs_for_simple_text(bytes, text),
+            Self::PostScript(program) => program.simple(bytes),
+        }
+    }
+
+    pub(crate) fn intrinsic_characters(&self) -> Option<[Option<char>; 256]> {
+        match self {
+            Self::TrueType(_) => None,
+            Self::PostScript(program) => Some(program.characters()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TrueTypeProgram {
     data: Vec<u8>,
     sha256: String,
     units_per_em: u16,
@@ -38,7 +117,7 @@ pub(crate) struct FontProgram {
     glyph_cache: RefCell<BTreeMap<u16, GlyphOutline>>,
 }
 
-impl FontProgram {
+impl TrueTypeProgram {
     pub(crate) fn parse(data: Vec<u8>) -> Result<Self, DocsightError> {
         if data.len() > MAX_FONT_BYTES {
             return Err(DocsightError::ResourceLimit {
@@ -886,7 +965,7 @@ fn contour_polygon(points: &[RawPoint]) -> Vec<FontPoint> {
 }
 
 fn composite_contours(
-    font: &FontProgram,
+    font: &TrueTypeProgram,
     data: &[u8],
     depth: usize,
 ) -> Result<Vec<Vec<FontPoint>>, DocsightError> {
@@ -1024,13 +1103,13 @@ fn malformed(message: impl Into<String>) -> DocsightError {
 
 #[cfg(test)]
 mod tests {
-    use super::FontProgram;
+    use super::TrueTypeProgram;
     use docsight_core::DocsightError;
 
     #[test]
     fn rejects_non_truetype_programs() {
         assert!(matches!(
-            FontProgram::parse(Vec::new()),
+            TrueTypeProgram::parse(Vec::new()),
             Err(DocsightError::UnsupportedFeature { feature }) if feature.contains("TrueType")
         ));
     }
@@ -1040,7 +1119,7 @@ mod tests {
         let mut bytes = b"\x00\x01\x00\x00".to_vec();
         bytes.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
         assert!(matches!(
-            FontProgram::parse(bytes),
+            TrueTypeProgram::parse(bytes),
             Err(DocsightError::MalformedDocument { .. })
         ));
     }

@@ -1,0 +1,2477 @@
+{
+  "observed_on": "2026-10-20",
+  "purpose": "Follow-up compatibility measurements, not release approval or fidelity ground truth",
+  "base_revision": "a9b6de2131ae0592c3f777b0d8e2d7ffca7910a6",
+  "uncommitted_implementation_changes": true,
+  "engine_version": "0.1.4",
+  "ir_version": "1.5",
+  "engine_executable": "target/release/docsight",
+  "engine_executable_sha256": "c7816992b3bd489e73047e163848e0ac8c09b781cb198fc18cfd1d430067c092",
+  "cargo_lock_sha256": "63106deef433875b09061c9e5315aef5476a72bf26d310b44c5fe71afb43cd50",
+  "build_command": "cargo build --locked --offline --release -p docsight-cli",
+  "target": "x86_64-unknown-linux-gnu",
+  "docx_layout_profile": "docx-normalized-v1",
+  "pdf_layout_profile": "pdf-native-v2",
+  "raw_evidence_directory": "/tmp/docsight-public-corpus",
+  "raw_transcript_sha256": {
+    "normalized-results.json": "e742b1adb9fcbdcbc41276b3c280d528aaae15848dbc16698f89457f1fd7f965",
+    "mcp-normalized-results.json": "ea2b9d2a22730598015e055a5723c2aa87531ab9832f3eaa19bb71760b396e3a",
+    "mcp-normalized-artifact-results.json": "dcf7d96cc70ec73be3ea85262400fa3e655533795b2aa09b2d9b2e23faf467cd"
+  },
+  "sources": "sources.json",
+  "all_input_digests_unchanged": true,
+  "summary": {
+    "documents": 7,
+    "cli_invocations": 62,
+    "cli_exit_zero": 54,
+    "cli_exit_11": 8,
+    "completed_tested_workflows": 6,
+    "render_attempts": 13,
+    "successful_render_attempts": 12,
+    "all_repeated_inspect_bytes_identical": true,
+    "all_cli_bytes_identical_after_rebuild": true,
+    "all_channel_checks_passed": true,
+    "mcp_inspection_search_calls": 14,
+    "mcp_inspection_search_successful": 12,
+    "mcp_inspection_search_errors": 2,
+    "mcp_ping_after_errors": true,
+    "mcp_artifact_workflow_calls": 10,
+    "mcp_artifact_workflow_successful": 10,
+    "verified_bundles": 2,
+    "byte_identical_repeated_artifacts": [
+      "nist-security-template.dse",
+      "nist-security-template.png",
+      "think-python-2.dse",
+      "think-python-2.png"
+    ]
+  },
+  "schema_checks": {
+    "passed": true,
+    "checked_records": {
+      "agent-envelope.json": 54,
+      "coverage-report.json": 6,
+      "error-envelope.json": 8,
+      "find-result.json": 6,
+      "inspect-result.json": 12,
+      "mcp-tool-error.json": 2,
+      "mcp-tool-result.json": 24,
+      "overview-result.json": 6,
+      "render-result.json": 12,
+      "tables-result.json": 6,
+      "text-result.json": 6
+    }
+  },
+  "observed_page_counts": {
+    "think-python-2": 244,
+    "think-stats-2": 264,
+    "nist-security-template": 22,
+    "nist-action-template": 2,
+    "model-contract-front": 22,
+    "model-contract-core": 100
+  },
+  "rejected_input": {
+    "document": "forallx-calgary",
+    "code": "MALFORMED_DOCUMENT",
+    "reason": "duplicate /ViewerPreferences keys in the same source dictionary",
+    "duplicate_key_zero_based_file_offsets": [
+      1471629,
+      1471733
+    ],
+    "input_repaired_or_rewritten": false,
+    "dictionary_uniqueness_relaxed": false
+  },
+  "cli": [
+    {
+      "document": "think-python-2",
+      "operation": "inspect",
+      "exit_code": 0,
+      "seconds": 1.268,
+      "stdout_bytes": 1470,
+      "stderr_bytes": 0,
+      "stdout_sha256": "cd3e92b7dfd13473010bdc2d6b4dc6689fc9b938f8b9e4ec694be639465e0904",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/inspect"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "inspect-repeat",
+      "exit_code": 0,
+      "seconds": 1.318,
+      "stdout_bytes": 1470,
+      "stderr_bytes": 0,
+      "stdout_sha256": "cd3e92b7dfd13473010bdc2d6b4dc6689fc9b938f8b9e4ec694be639465e0904",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/inspect-repeat"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "overview",
+      "exit_code": 0,
+      "seconds": 1.418,
+      "stdout_bytes": 4473,
+      "stderr_bytes": 0,
+      "stdout_sha256": "13ded80deadff34d28bdf4cbca74580d808fd3160460608ea2f783b729dd03de",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "text_truncated": true,
+        "continuation_token": "6f766572766965773a383a36303333303030626163336639323638",
+        "total_items": 909,
+        "returned_items": 8
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/overview"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "text",
+      "exit_code": 0,
+      "seconds": 1.368,
+      "stdout_bytes": 1613,
+      "stderr_bytes": 0,
+      "stdout_sha256": "a0eb1b8ad8d03710b91a4f2db62f0fb8e32da1e713d6454f93e8e23c26686c1d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a36303333303030626163336639323638",
+        "total_items": 1481,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/text"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "find",
+      "exit_code": 0,
+      "seconds": 1.318,
+      "stdout_bytes": 3186,
+      "stderr_bytes": 0,
+      "stdout_sha256": "5792a3df65b1634632699aec9d0b744f6e09a3788be9393a2df0648d08b20822",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f366138363836336630326232313733633a353a36303333303030626163336639323638",
+        "total_items": 294,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/think-python-2.pdf",
+        "Python",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/find"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "tables",
+      "exit_code": 0,
+      "seconds": 1.568,
+      "stdout_bytes": 2030,
+      "stderr_bytes": 0,
+      "stdout_sha256": "b24e8b9553e6e1ced50f28882b328e23127fade282c057cd40a4e3557a9ce1be",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "7461626c65733a353a36303333303030626163336639323638",
+        "total_items": 805,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/think-python-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/tables"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "coverage",
+      "exit_code": 0,
+      "seconds": 1.467,
+      "stdout_bytes": 1892,
+      "stderr_bytes": 0,
+      "stdout_sha256": "4806ae03ef9a31cee4e1a9a30ca22bc26d5f044c3acc382a506c3513d6ec8173",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/think-python-2.pdf",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {
+        "PDF_TEXT_CODE_UNMAPPED": 3
+      },
+      "raw_output_prefix": "normalized-results/think-python-2/coverage"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "render-first",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 577,
+      "stderr_bytes": 0,
+      "stdout_sha256": "1986a8197c4f3aec81c6ab245eceb19f24fb2127f8be492ff60e31a6f2ed97b8",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-python-2.pdf",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/think-python-2/page-1.png"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/think-python-2/render-first"
+    },
+    {
+      "document": "think-python-2",
+      "operation": "render-middle",
+      "exit_code": 0,
+      "seconds": 0.114,
+      "stdout_bytes": 581,
+      "stderr_bytes": 0,
+      "stdout_sha256": "016637dffe2a9f39b318b1bf5d44278a11ed699382bc83661dbc032740b1ca86",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-python-2.pdf",
+        "--page",
+        "122",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/think-python-2/page-122.png"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/think-python-2/render-middle"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "inspect",
+      "exit_code": 0,
+      "seconds": 5.577,
+      "stdout_bytes": 17263,
+      "stderr_bytes": 0,
+      "stdout_sha256": "ef3506d1c606129ae1a875e002896b6d2c0c1ee23809111f74d57ef3323c4cd5",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/inspect"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "inspect-repeat",
+      "exit_code": 0,
+      "seconds": 5.428,
+      "stdout_bytes": 17263,
+      "stderr_bytes": 0,
+      "stdout_sha256": "ef3506d1c606129ae1a875e002896b6d2c0c1ee23809111f74d57ef3323c4cd5",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/inspect-repeat"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "overview",
+      "exit_code": 0,
+      "seconds": 4.926,
+      "stdout_bytes": 20598,
+      "stderr_bytes": 0,
+      "stdout_sha256": "6868ddd8a6260dedce86e0fe416ef38730fef9a654fc9a53c747ccf87d97089a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "text_truncated": true,
+        "continuation_token": "6f766572766965773a383a35646265613930393466333630363437",
+        "total_items": 652,
+        "returned_items": 8
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/overview"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "text",
+      "exit_code": 0,
+      "seconds": 4.675,
+      "stdout_bytes": 17377,
+      "stderr_bytes": 0,
+      "stdout_sha256": "7f1bc33a7dfba548d32bc07a795de3ff5ffaabfa94d0962f5bfb6c1de75b0486",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a35646265613930393466333630363437",
+        "total_items": 1232,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/text"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "find",
+      "exit_code": 0,
+      "seconds": 4.925,
+      "stdout_bytes": 19207,
+      "stderr_bytes": 0,
+      "stdout_sha256": "e2365f4ac4e9056c49cee4bdd71625fc234692c3b157f7837a55d85a61d8fbc5",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f623036383861623961653562313263633a353a35646265613930393466333630363437",
+        "total_items": 143,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/think-stats-2.pdf",
+        "probability",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/find"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "tables",
+      "exit_code": 0,
+      "seconds": 4.876,
+      "stdout_bytes": 17854,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f3aece14091cb5178117cc00ba8001e26392cb3f4803177b615a107ef3296910",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "7461626c65733a353a35646265613930393466333630363437",
+        "total_items": 616,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/think-stats-2.pdf"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/tables"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "coverage",
+      "exit_code": 0,
+      "seconds": 4.927,
+      "stdout_bytes": 17745,
+      "stderr_bytes": 0,
+      "stdout_sha256": "a5ff7de1d90dde0864ba50b389851e4e8d6c42d573aefe2cf7bab8db49e56400",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/think-stats-2.pdf",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {
+        "PDF_FONT_OUTLINE_MISSING": 52,
+        "PDF_TEXT_CODE_UNMAPPED": 16
+      },
+      "raw_output_prefix": "normalized-results/think-stats-2/coverage"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "render-first",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 576,
+      "stderr_bytes": 0,
+      "stdout_sha256": "434aac4128a17e414f6f810ecbe53b3221f0fb654214f181d20125fde74cd29e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-stats-2.pdf",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/think-stats-2/page-1.png"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/think-stats-2/render-first"
+    },
+    {
+      "document": "think-stats-2",
+      "operation": "render-middle",
+      "exit_code": 0,
+      "seconds": 0.115,
+      "stdout_bytes": 580,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f90d27387fb197556d728bb5585e1cbc827adaca891f31be78f3dfd0606bb4cf",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/think-stats-2.pdf",
+        "--page",
+        "132",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/think-stats-2/page-132.png"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/think-stats-2/render-middle"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "inspect",
+      "exit_code": 11,
+      "seconds": 0.017,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/inspect"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "inspect-repeat",
+      "exit_code": 11,
+      "seconds": 0.017,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/inspect-repeat"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "overview",
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/overview"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "text",
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/text"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "find",
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "logic",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/find"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "tables",
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/forallx-calgary.pdf"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/tables"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "coverage",
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/coverage"
+    },
+    {
+      "document": "forallx-calgary",
+      "operation": "render-first",
+      "exit_code": 11,
+      "seconds": 0.016,
+      "stdout_bytes": 0,
+      "stderr_bytes": 263,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6ce920c47e9d90aefc1850585da064f79e0229a9fd9acb5cec3e9bf92c238958",
+      "valid_envelope": true,
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776",
+        "effect": "the document was rejected during parsing"
+      },
+      "clean_channels": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/forallx-calgary.pdf",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/forallx-calgary/page-1.png"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/forallx-calgary/render-first"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "inspect",
+      "exit_code": 0,
+      "seconds": 0.315,
+      "stdout_bytes": 1415,
+      "stderr_bytes": 0,
+      "stdout_sha256": "d69880b53dbeadff22fde19ea800960f98def79ff2c1b66a604d75e5094da96f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/nist-security-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/inspect"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "inspect-repeat",
+      "exit_code": 0,
+      "seconds": 0.315,
+      "stdout_bytes": 1415,
+      "stderr_bytes": 0,
+      "stdout_sha256": "d69880b53dbeadff22fde19ea800960f98def79ff2c1b66a604d75e5094da96f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/nist-security-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/inspect-repeat"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "overview",
+      "exit_code": 0,
+      "seconds": 0.365,
+      "stdout_bytes": 4170,
+      "stderr_bytes": 0,
+      "stdout_sha256": "ce33bcc61d4cae9fea56cd802b04b53357fe7f85807f1c45de3a79f9cdc4f985",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "6f766572766965773a383a33343161386361643366633236656661",
+        "total_items": 117,
+        "returned_items": 8
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/nist-security-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/overview"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "text",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 964,
+      "stderr_bytes": 0,
+      "stdout_sha256": "62d1d6e219cbe6c4ce1cf0f1f711e6076f67e9709a7810deab3595eddc155dfb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a33343161386361643366633236656661",
+        "total_items": 262,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/nist-security-template.docx"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/nist-security-template/text"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "find",
+      "exit_code": 0,
+      "seconds": 0.315,
+      "stdout_bytes": 3339,
+      "stderr_bytes": 0,
+      "stdout_sha256": "a222d6ef85e0cf4074ba976c3b61773cfdec676bce6eacc8904b16eef05a88ec",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f613961666535323237316263303161333a353a33343161386361643366633236656661",
+        "total_items": 111,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/nist-security-template.docx",
+        "System",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/find"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "tables",
+      "exit_code": 0,
+      "seconds": 0.315,
+      "stdout_bytes": 1863,
+      "stderr_bytes": 0,
+      "stdout_sha256": "6ab67fdbd44b70d71727c203e9c6ed5a22d9330a7a45b0f383ab967f4507e61c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "7461626c65733a353a33343161386361643366633236656661",
+        "total_items": 116,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/nist-security-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/tables"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "coverage",
+      "exit_code": 0,
+      "seconds": 0.566,
+      "stdout_bytes": 1747,
+      "stderr_bytes": 0,
+      "stdout_sha256": "9cbc2123485fd12798f92eff98c5b764d34db28481521b34462092ea3161749b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/nist-security-template.docx",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/coverage"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "render-first",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 1172,
+      "stderr_bytes": 0,
+      "stdout_sha256": "87921fca51dda749d72c3220ef3b961148ef4754f60b61f128289b5a3f6f3541",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/nist-security-template.docx",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/nist-security-template/page-1.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/render-first"
+    },
+    {
+      "document": "nist-security-template",
+      "operation": "render-middle",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 1174,
+      "stderr_bytes": 0,
+      "stdout_sha256": "e4e7a4c4102e044f99a1a60635aaa6373a3114bc3481ac9357bb15ead2dcbeca",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/nist-security-template.docx",
+        "--page",
+        "11",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/nist-security-template/page-11.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-security-template/render-middle"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "inspect",
+      "exit_code": 0,
+      "seconds": 0.115,
+      "stdout_bytes": 1366,
+      "stderr_bytes": 0,
+      "stdout_sha256": "cbab04ef37603105e9d07336a2ce17f4effad63728dc83d3da10f9d9fa4ef241",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/nist-action-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/inspect"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "inspect-repeat",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 1366,
+      "stderr_bytes": 0,
+      "stdout_sha256": "cbab04ef37603105e9d07336a2ce17f4effad63728dc83d3da10f9d9fa4ef241",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/nist-action-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/inspect-repeat"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "overview",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 1597,
+      "stderr_bytes": 0,
+      "stdout_sha256": "193f8275922e086061a42399d4a7aa0270fe1be22537f148d3d0e17615b7efc8",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "text_truncated": true,
+        "continuation_token": null,
+        "total_items": 1,
+        "returned_items": 1
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/nist-action-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/overview"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "text",
+      "exit_code": 0,
+      "seconds": 0.016,
+      "stdout_bytes": 649,
+      "stderr_bytes": 0,
+      "stdout_sha256": "763981f62a6aa93b94ffab5dcd12560f33ae71b4741ed80afab8715cf3d85184",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "text_truncated": true,
+        "continuation_token": null,
+        "total_items": 1,
+        "returned_items": 1
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/nist-action-template.docx"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/nist-action-template/text"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "find",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 1874,
+      "stderr_bytes": 0,
+      "stdout_sha256": "2fb71cb23ac089fb8f13fbbca098144d781e68febbdd72f9c58796e2e31978a3",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null,
+        "total_items": 2,
+        "returned_items": 2
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/nist-action-template.docx",
+        "Action",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/find"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "tables",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 1211,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f61a5cf8520f1bca9432277d21b396d4c6a123e546c63a9400f4bdae981fef24",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null,
+        "total_items": 1,
+        "returned_items": 1
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/nist-action-template.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/tables"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "coverage",
+      "exit_code": 0,
+      "seconds": 0.115,
+      "stdout_bytes": 1747,
+      "stderr_bytes": 0,
+      "stdout_sha256": "ea1f304371c0060b94aab84251259425df34f4b72b51eb6f2cffbe337fe7075f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/nist-action-template.docx",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/coverage"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "render-first",
+      "exit_code": 0,
+      "seconds": 0.165,
+      "stdout_bytes": 1170,
+      "stderr_bytes": 0,
+      "stdout_sha256": "3efaecb396bed9d975517d589ef7db70094df6b5f2978181bf6ab5c55fbaee0c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/nist-action-template.docx",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/nist-action-template/page-1.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/render-first"
+    },
+    {
+      "document": "nist-action-template",
+      "operation": "render-middle",
+      "exit_code": 0,
+      "seconds": 0.165,
+      "stdout_bytes": 1169,
+      "stderr_bytes": 0,
+      "stdout_sha256": "5da2bff97f98b6227f71b91413c2db47d65f3dc37af95c147addecd4ac86d7d7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/nist-action-template.docx",
+        "--page",
+        "2",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/nist-action-template/page-2.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/nist-action-template/render-middle"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "inspect",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 1414,
+      "stderr_bytes": 0,
+      "stdout_sha256": "225b6e1d06aa4753e32b59e9ebcf580258437e348ad34a7660abd22acdff0a41",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/model-contract-front.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/inspect"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "inspect-repeat",
+      "exit_code": 0,
+      "seconds": 0.365,
+      "stdout_bytes": 1414,
+      "stderr_bytes": 0,
+      "stdout_sha256": "225b6e1d06aa4753e32b59e9ebcf580258437e348ad34a7660abd22acdff0a41",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/model-contract-front.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/inspect-repeat"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "overview",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 5251,
+      "stderr_bytes": 0,
+      "stdout_sha256": "2f0622e23281505e91b2e28952537642d343ee78efc7612c02cc68ad9631a7fd",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "text_truncated": true,
+        "continuation_token": "6f766572766965773a383a32373231623236613164653338346532",
+        "total_items": 18,
+        "returned_items": 8
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/model-contract-front.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/overview"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "text",
+      "exit_code": 0,
+      "seconds": 0.065,
+      "stdout_bytes": 806,
+      "stderr_bytes": 0,
+      "stdout_sha256": "9a1c9b90ad77dad360e64b46c4a778636ace1b532f1466a7524a2208daaa5a08",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a32373231623236613164653338346532",
+        "total_items": 98,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/model-contract-front.docx"
+      ],
+      "warning_occurrences": {},
+      "raw_output_prefix": "normalized-results/model-contract-front/text"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "find",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 3489,
+      "stderr_bytes": 0,
+      "stdout_sha256": "a7e2d4138a2bee1100f1bedbc98a679cfc552f582285895450c562956963f117",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f396136346236386534346132373732383a353a32373231623236613164653338346532",
+        "total_items": 121,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/model-contract-front.docx",
+        "Contract",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/find"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "tables",
+      "exit_code": 0,
+      "seconds": 0.365,
+      "stdout_bytes": 1864,
+      "stderr_bytes": 0,
+      "stdout_sha256": "ca06a109de5ffa762cb6748e2e99868a6707f595e9d0e5323f5611916f6fd098",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "7461626c65733a353a32373231623236613164653338346532",
+        "total_items": 17,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/model-contract-front.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/tables"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "coverage",
+      "exit_code": 0,
+      "seconds": 0.716,
+      "stdout_bytes": 1747,
+      "stderr_bytes": 0,
+      "stdout_sha256": "3bac4af23219ad7e64893d8ab6c24b853be57b653a3202392fcd37a030ff3209",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/model-contract-front.docx",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/coverage"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "render-first",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 1194,
+      "stderr_bytes": 0,
+      "stdout_sha256": "e539361b903e5d879f97cefd5e446e8185789154c023ce8e5217cd8d10e08a8f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/model-contract-front.docx",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/model-contract-front/page-1.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/render-first"
+    },
+    {
+      "document": "model-contract-front",
+      "operation": "render-middle",
+      "exit_code": 0,
+      "seconds": 0.415,
+      "stdout_bytes": 1196,
+      "stderr_bytes": 0,
+      "stdout_sha256": "92f7376da9db9a905f242af9310d7c24b68714b0cc9313ca9558e7efaecd1c1f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/model-contract-front.docx",
+        "--page",
+        "11",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/model-contract-front/page-11.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-front/render-middle"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "inspect",
+      "exit_code": 0,
+      "seconds": 1.368,
+      "stdout_bytes": 1906,
+      "stderr_bytes": 0,
+      "stdout_sha256": "2e04e665c55cfa1c12de09c3bdc4e01ad92ac13e75a60ea6b38dbb172a59f782",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "repeat_identical": true,
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/model-contract-core.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/inspect"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "inspect-repeat",
+      "exit_code": 0,
+      "seconds": 1.418,
+      "stdout_bytes": 1906,
+      "stderr_bytes": 0,
+      "stdout_sha256": "2e04e665c55cfa1c12de09c3bdc4e01ad92ac13e75a60ea6b38dbb172a59f782",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "inspect",
+        "<corpus>/documents/model-contract-core.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/inspect-repeat"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "overview",
+      "exit_code": 0,
+      "seconds": 1.468,
+      "stdout_bytes": 4621,
+      "stderr_bytes": 0,
+      "stdout_sha256": "d3a823d546231e287bdfb206e89115884ddb22522ff4d8d9488b85172f9fc6df",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "text_truncated": true,
+        "continuation_token": "6f766572766965773a383a34336337653862373064616632313737",
+        "total_items": 340,
+        "returned_items": 8
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "8",
+        "--text-limit",
+        "160",
+        "overview",
+        "<corpus>/documents/model-contract-core.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/overview"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "text",
+      "exit_code": 0,
+      "seconds": 0.064,
+      "stdout_bytes": 1326,
+      "stderr_bytes": 0,
+      "stdout_sha256": "5e799bd962f3bc161b81b189e9c7dba024614327b09984c8f31468ff86c9bb41",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "746578743a353a34336337653862373064616632313737",
+        "total_items": 1137,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "--text-limit",
+        "240",
+        "text",
+        "<corpus>/documents/model-contract-core.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/text"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "find",
+      "exit_code": 0,
+      "seconds": 1.367,
+      "stdout_bytes": 4365,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f520aaa7dac68a2727fe051e0d7b4713c4ae2c77a5aa273798b857205c12c88a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": true,
+        "continuation_token": "66696e645f326634663464396332303638633339653a353a34336337653862373064616632313737",
+        "total_items": 607,
+        "returned_items": 5
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "find",
+        "<corpus>/documents/model-contract-core.docx",
+        "Supplier",
+        "--ignore-case"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/find"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "tables",
+      "exit_code": 0,
+      "seconds": 1.268,
+      "stdout_bytes": 1969,
+      "stderr_bytes": 0,
+      "stdout_sha256": "395ce38279c7db90564139d697921a9b5477d3bf944871101183b9e37fcebbd9",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null,
+        "total_items": 3,
+        "returned_items": 3
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "--max-items",
+        "5",
+        "tables",
+        "<corpus>/documents/model-contract-core.docx"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/tables"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "coverage",
+      "exit_code": 0,
+      "seconds": 2.921,
+      "stdout_bytes": 2292,
+      "stderr_bytes": 0,
+      "stdout_sha256": "74753d83d11671cafee96ce42008c26a91bce021494f236741efa839ebb761d6",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "coverage",
+        "<corpus>/documents/model-contract-core.docx",
+        "--page",
+        "1"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/coverage"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "render-first",
+      "exit_code": 0,
+      "seconds": 1.618,
+      "stdout_bytes": 1648,
+      "stderr_bytes": 0,
+      "stdout_sha256": "f35984b6b3030fff4920e48c34a992cea14ee116df55803dd0effc5fa49c0df1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/model-contract-core.docx",
+        "--page",
+        "1",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/model-contract-core/page-1.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/render-first"
+    },
+    {
+      "document": "model-contract-core",
+      "operation": "render-middle",
+      "exit_code": 0,
+      "seconds": 1.619,
+      "stdout_bytes": 1650,
+      "stderr_bytes": 0,
+      "stdout_sha256": "14256dd54921712a52bae43514beeabbce7eb379f958175bb481075da823bf8f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "valid_envelope": true,
+      "error": null,
+      "clean_channels": true,
+      "limits": {
+        "truncated": false,
+        "continuation_token": null
+      },
+      "argv": [
+        "<repository>/target/release/docsight",
+        "--agent",
+        "--sandbox",
+        "render",
+        "<corpus>/documents/model-contract-core.docx",
+        "--page",
+        "50",
+        "--dpi",
+        "72",
+        "--out",
+        "<corpus>/normalized-results/model-contract-core/page-50.png"
+      ],
+      "warning_occurrences": {
+        "DOCX_BODY_ELEMENT_UNSUPPORTED": 1,
+        "DOCX_FONT_NORMALIZED": 1,
+        "DOCX_LAYOUT_PAGINATED": 1,
+        "DOCX_NUMBERING_UNRESOLVED": 1
+      },
+      "raw_output_prefix": "normalized-results/model-contract-core/render-middle"
+    }
+  ],
+  "mcp": [
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 2,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/think-python-2.pdf"
+      },
+      "seconds": 1.364,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 3,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/think-python-2.pdf",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 1.515,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 4,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/think-stats-2.pdf"
+      },
+      "seconds": 6.188,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 5,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/think-stats-2.pdf",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 5.933,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 6,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/forallx-calgary.pdf"
+      },
+      "seconds": 0.011,
+      "is_error": true,
+      "trust": "untrusted_document",
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "effect": "the document was rejected during parsing",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776"
+      }
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 7,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/forallx-calgary.pdf",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 0.011,
+      "is_error": true,
+      "trust": "untrusted_document",
+      "error": {
+        "code": "MALFORMED_DOCUMENT",
+        "effect": "the document was rejected during parsing",
+        "exit_code": 11,
+        "message": "malformed document: duplicate PDF dictionary key /ViewerPreferences at parser-buffer byte 1471776"
+      }
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 8,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/nist-security-template.docx"
+      },
+      "seconds": 0.304,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 9,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/nist-security-template.docx",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 0.354,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 10,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/nist-action-template.docx"
+      },
+      "seconds": 0.052,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 11,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/nist-action-template.docx",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 0.062,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 12,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/model-contract-front.docx"
+      },
+      "seconds": 0.395,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 13,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/model-contract-front.docx",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 0.364,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 14,
+      "tool": "inspect_document",
+      "arguments": {
+        "path": "<corpus>/documents/model-contract-core.docx"
+      },
+      "seconds": 1.746,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-results.json",
+      "request_id": 15,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/model-contract-core.docx",
+        "query": "the",
+        "max_items": 3
+      },
+      "seconds": 1.727,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 2,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/nist-security-template.docx",
+        "query": "SYSTEM IDENTIFICATION",
+        "max_items": 1
+      },
+      "seconds": 0.314,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 3,
+      "tool": "get_context",
+      "arguments": {
+        "path": "<corpus>/documents/nist-security-template.docx",
+        "object_id": "li_3d67c4aa4273f2cb7afc0af2ffdaf6f5",
+        "include": [
+          "content",
+          "geometry",
+          "fidelity",
+          "provenance"
+        ]
+      },
+      "seconds": 0.666,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 4,
+      "tool": "render_crop",
+      "arguments": {
+        "path": "<corpus>/documents/nist-security-template.docx",
+        "object_id": "li_3d67c4aa4273f2cb7afc0af2ffdaf6f5",
+        "out": "nist-security-template.png",
+        "dpi": 144
+      },
+      "seconds": 0.317,
+      "is_error": false,
+      "trust": "untrusted_document",
+      "artifact": {
+        "path": "<corpus>/normalized-artifacts-kh8irdq_/nist-security-template.png",
+        "sha256": "3a9241a46b9e8d99f2eca8377bb01420ab55d0b96172587ee619809a43eef394",
+        "bytes": 4147
+      }
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 5,
+      "tool": "create_bundle",
+      "arguments": {
+        "path": "<corpus>/documents/nist-security-template.docx",
+        "object_id": "li_3d67c4aa4273f2cb7afc0af2ffdaf6f5",
+        "out": "nist-security-template.dse",
+        "include_crop": true,
+        "dpi": 144
+      },
+      "seconds": 1.823,
+      "is_error": false,
+      "trust": "untrusted_document",
+      "artifact": {
+        "path": "<corpus>/normalized-artifacts-kh8irdq_/nist-security-template.dse",
+        "sha256": "71279b5e4db872f66060f6693a3c8fef4a3877fdb7e97de25e7933e6f9f85d48",
+        "bytes": 182647
+      }
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 6,
+      "tool": "replay_bundle",
+      "arguments": {
+        "bundle_path": "<corpus>/normalized-artifacts-kh8irdq_/nist-security-template.dse"
+      },
+      "seconds": 1.785,
+      "is_error": false,
+      "trust": "untrusted_document",
+      "verification": {
+        "bundle_sha256": "71279b5e4db872f66060f6693a3c8fef4a3877fdb7e97de25e7933e6f9f85d48",
+        "crop_verified": true,
+        "document_sha256": "341a8cad3fc26efa567ac304097e0cabd8191925ce743169bb2e9bd1b41341a4",
+        "evidence_count": 1,
+        "schema": "docsight.proof-bundle/v2",
+        "trace_verified": true,
+        "valid": true
+      }
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 7,
+      "tool": "search_document",
+      "arguments": {
+        "path": "<corpus>/documents/think-python-2.pdf",
+        "query": "2nd Edition",
+        "max_items": 1
+      },
+      "seconds": 1.758,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 8,
+      "tool": "get_context",
+      "arguments": {
+        "path": "<corpus>/documents/think-python-2.pdf",
+        "object_id": "p_686f59b9ba909caf5a1addbf7cde80b1",
+        "include": [
+          "content",
+          "geometry",
+          "fidelity",
+          "provenance"
+        ]
+      },
+      "seconds": 1.728,
+      "is_error": false,
+      "trust": "untrusted_document"
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 9,
+      "tool": "render_crop",
+      "arguments": {
+        "path": "<corpus>/documents/think-python-2.pdf",
+        "object_id": "p_686f59b9ba909caf5a1addbf7cde80b1",
+        "out": "think-python-2.png",
+        "dpi": 144
+      },
+      "seconds": 1.546,
+      "is_error": false,
+      "trust": "untrusted_document",
+      "artifact": {
+        "path": "<corpus>/normalized-artifacts-kh8irdq_/think-python-2.png",
+        "sha256": "8ac1030f8e11d9867b98ea297d76d83ae5892bdfdc877805e1c1b63958896e52",
+        "bytes": 1899
+      }
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 10,
+      "tool": "create_bundle",
+      "arguments": {
+        "path": "<corpus>/documents/think-python-2.pdf",
+        "object_id": "p_686f59b9ba909caf5a1addbf7cde80b1",
+        "out": "think-python-2.dse",
+        "include_crop": true,
+        "dpi": 144
+      },
+      "seconds": 7.708,
+      "is_error": false,
+      "trust": "untrusted_document",
+      "artifact": {
+        "path": "<corpus>/normalized-artifacts-kh8irdq_/think-python-2.dse",
+        "sha256": "c64a7acf6e1b39a6f83111cb20eea28f7fc40610235419820258af133f447f6c",
+        "bytes": 928749
+      }
+    },
+    {
+      "transcript": "mcp-normalized-artifact-results.json",
+      "request_id": 11,
+      "tool": "replay_bundle",
+      "arguments": {
+        "bundle_path": "<corpus>/normalized-artifacts-kh8irdq_/think-python-2.dse"
+      },
+      "seconds": 6.503,
+      "is_error": false,
+      "trust": "untrusted_document",
+      "verification": {
+        "bundle_sha256": "c64a7acf6e1b39a6f83111cb20eea28f7fc40610235419820258af133f447f6c",
+        "crop_verified": true,
+        "document_sha256": "6033000bac3f9268ad75ee041bf8e5d9a3bc8a33bb156399cbd014918cb59f94",
+        "evidence_count": 1,
+        "schema": "docsight.proof-bundle/v2",
+        "trace_verified": true,
+        "valid": true
+      }
+    }
+  ],
+  "limitations": [
+    "Only first and middle pages were rendered; no full-document visual validation.",
+    "DOCX geometry and page counts describe the explicitly normalized view, not Word fidelity.",
+    "PDF table inference retains a confirmed false positive; table counts are not ground truth.",
+    "Unmapped PDF text codes and missing outlines elsewhere remain diagnosed.",
+    "GOV.UK core terms retains unsupported body and unresolved numbering diagnostics.",
+    "No full-text accuracy score, full pixel comparison, or Windows/macOS execution.",
+    "The globally installed CLI was not replaced; this campaign uses the repository release binary."
+  ]
+}

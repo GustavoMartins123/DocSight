@@ -113,9 +113,7 @@ impl Display for ErrorLocation {
 
 #[derive(Debug, Error)]
 pub enum DocsightError {
-    #[error(
-        "required font {font:?} is unavailable; install the exact OpenType face in DOCSIGHT_FONT_DIR"
-    )]
+    #[error("required font {font:?} is unavailable in the configured font book")]
     FontUnavailable {
         font: FontRequirement,
         location: Option<ErrorLocation>,
@@ -203,9 +201,10 @@ impl DocsightError {
             ),
             Self::EncryptedDocument => ("ENCRYPTED", "the document was rejected before inspection"),
             Self::EncryptedPackage => ("ENCRYPTED", "the document was rejected before inspection"),
-            Self::ResourceLimit { .. } => {
-                ("RESOURCE_LIMIT", "the document was rejected before parsing")
-            }
+            Self::ResourceLimit { .. } => (
+                "RESOURCE_LIMIT",
+                "the operation stopped at a declared resource limit; no complete result was produced",
+            ),
             Self::ObjectNotFound { .. } => ("OBJECT_NOT_FOUND", "no document object was returned"),
             Self::BackendFailure { .. } => (
                 "BACKEND_FAILURE",
