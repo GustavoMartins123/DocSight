@@ -1,5 +1,8 @@
 # Public-document compatibility validation
 
+Latest PDF correction: [table-inference follow-up](PDF_ALIGNMENT_V2.md), with
+unchanged source inputs and separately recorded observations.
+
 This file preserves the original baseline. See [the normalized-profile
 follow-up](NORMALIZED_PROFILE.md) for the subsequent fixes and repeat campaign;
 the baseline failures below are not the current results.

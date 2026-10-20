@@ -157,6 +157,13 @@ pub const INGESTION_LIMITS: &[IngestionLimit] = &[
         effect: "the embedded Type1 or CFF glyph is rejected when its flattened outline, including closure vertices, exceeds the limit",
     },
     IngestionLimit {
+        name: "pdf_inferred_table_cells",
+        applies_to: "pdf",
+        value: docsight_pdf::PDF_MAX_INFERRED_TABLE_CELLS as u64,
+        unit: "grid_cells",
+        effect: "table inference stops before allocating a candidate grid larger than the declared limit",
+    },
+    IngestionLimit {
         name: "raster_pixels",
         applies_to: "docx,pdf",
         value: docsight_pdf::PDF_MAX_RASTER_PIXELS,

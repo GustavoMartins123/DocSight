@@ -32,6 +32,8 @@ use syntax::{ObjectRef, StreamValue, Value, Xref, XrefEntry, malformed, parse_ob
 pub const ENGINE_NAME: &str = "docsight-pdf-native";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const FONT_BACKEND_ID: &str = "truetype-native-v1/hayro-font-0.3.0/ps-outlines-v1";
+pub const RECONSTRUCTION_ID: &str = "pdf-native-v3/alignment-v2";
+pub use docsight_tables::MAX_INFERRED_TABLE_CELLS as PDF_MAX_INFERRED_TABLE_CELLS;
 pub const MAX_PAGES: u32 = 10_000;
 pub const MAX_ANNOTATIONS: u32 = 4_096;
 pub use content::MAX_OPERATIONS as PDF_MAX_CONTENT_OPERATIONS;
